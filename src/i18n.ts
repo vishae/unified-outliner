@@ -213,6 +213,7 @@ const en = {
   "tree.menu.insertChildListItem": "Insert child list item",
   "tree.menu.deleteListSubtree": "Delete list subtree",
   "tree.menu.unavailableSuffix": " — unavailable",
+  "tree.menu.deleteCompositeBlock": "Delete composite block",
 
   // ---- Partial Edit Pane --------------------------------------------------
   "partialEdit.viewName": "Unified Outliner: Partial Edit",
@@ -244,10 +245,18 @@ const en = {
   "modal.insertSectionTitle": "Unified Outliner: insert section",
   "modal.chooseHeadingLevel": "Choose the heading level for the new section.",
 
+  // ---- Composite block delete confirmation modal (ConfirmCompositeDeleteModal.ts,
+  // Phase 5C-1 ticket 3b) --------------------------------------------------
+  "modal.deleteCompositeBlockTitle": "Unified Outliner: delete composite block",
+  "modal.deleteCompositeBlockBody":
+    'This will remove "{label}" ({memberCount} items, lines {startLine}–{endLine}) from the note.',
+  "modal.deleteCompositeBlockUndoNote": "This can be undone with Obsidian's own Undo.",
+
   // ---- Shared button labels ------------------------------------------------
   "common.apply": "Apply",
   "common.discard": "Discard",
   "common.cancel": "Cancel",
+  "common.delete": "Delete",
 
   // ---- No-op reasons (see NOOP_MESSAGES in commands/applyLineEditOutcome.ts
   // for the canonical English source of truth these keys mirror) ---------
@@ -297,6 +306,27 @@ const en = {
   "reason.boundary-unknown":
     "Unified Outliner: could not confidently determine this block's boundary — move skipped for safety.",
   "reason.not-in-section": "Unified Outliner: cursor is not inside any section.",
+
+  // ---- CompositeBlock delete reasons (edit/deleteCompositeBlock.ts's
+  // NoCompositeDeleteReason, Phase 5C-1 tickets 2/3b) ----------------------
+  "reason.nested-in-list":
+    "Unified Outliner: this composite block is nested inside another list item and cannot be deleted in this version.",
+  "reason.member-unsafe-indent":
+    "Unified Outliner: mixed tab/space indentation detected — skipped for safety.",
+  "reason.composite-boundary-changed":
+    "Unified Outliner: the note changed since this composite block was selected — deletion was cancelled to avoid removing the wrong content.",
+  "reason.range-invalid":
+    "Unified Outliner: could not confirm this composite block's boundary — deletion skipped for safety.",
+  "reason.member-resolve-failed":
+    "Unified Outliner: could not resolve this composite block's contents (the note may have changed).",
+  "reason.member-not-supported":
+    "Unified Outliner: part of this composite block is no longer safely recognized — deletion skipped for safety.",
+  "reason.member-has-diagnostic":
+    "Unified Outliner: part of this composite block has an unresolved issue — deletion skipped for safety.",
+  "reason.unsupported-member-kind":
+    "Unified Outliner: this composite block contains a kind that cannot be deleted in this version.",
+  "reason.ambiguous-section":
+    "Unified Outliner: this composite block's members do not agree on a single enclosing section — deletion skipped for safety.",
 } as const;
 
 export type TranslationKey = keyof typeof en;
@@ -446,6 +476,7 @@ const ja: Record<TranslationKey, string> = {
   "tree.menu.insertChildListItem": "子リスト項目を挿入",
   "tree.menu.deleteListSubtree": "リストサブツリーを削除",
   "tree.menu.unavailableSuffix": "（利用不可）",
+  "tree.menu.deleteCompositeBlock": "複合ブロックを削除",
 
   // ---- 部分編集ペイン -------------------------------------------------------
   "partialEdit.viewName": "Unified Outliner: 部分編集",
@@ -477,10 +508,18 @@ const ja: Record<TranslationKey, string> = {
   "modal.insertSectionTitle": "Unified Outliner: セクションを挿入",
   "modal.chooseHeadingLevel": "新しいセクションの見出しレベルを選んでほしい。",
 
+  // ---- 複合ブロック削除確認モーダル（ConfirmCompositeDeleteModal.ts、
+  // Phase 5C-1 チケット3b） --------------------------------------------------
+  "modal.deleteCompositeBlockTitle": "Unified Outliner: 複合ブロックを削除",
+  "modal.deleteCompositeBlockBody":
+    "「{label}」（{memberCount}件、{startLine}〜{endLine}行目）をノートから削除する。",
+  "modal.deleteCompositeBlockUndoNote": "この操作はObsidian本体のUndoで元に戻せる。",
+
   // ---- 共有ボタンラベル -----------------------------------------------------
   "common.apply": "適用",
   "common.discard": "破棄",
   "common.cancel": "キャンセル",
+  "common.delete": "削除",
 
   // ---- 無操作理由（英語版の正本は commands/applyLineEditOutcome.ts の
   // NOOP_MESSAGES を参照） --------------------------------------------------
@@ -526,6 +565,27 @@ const ja: Record<TranslationKey, string> = {
   "reason.boundary-unknown":
     "Unified Outliner: このブロックの境界を確信を持って判定できなかったため、安全のため移動をスキップした。",
   "reason.not-in-section": "Unified Outliner: カーソルがどのセクションの中にもない。",
+
+  // ---- 複合ブロック削除の拒否理由（edit/deleteCompositeBlock.ts の
+  // NoCompositeDeleteReason、Phase 5C-1 チケット2/3b） ------------------------
+  "reason.nested-in-list":
+    "Unified Outliner: この複合ブロックは他のリスト項目にネストされているため、このバージョンでは削除できない。",
+  "reason.member-unsafe-indent":
+    "Unified Outliner: タブとスペースが混在したインデントを検出したため、安全のためスキップした。",
+  "reason.composite-boundary-changed":
+    "Unified Outliner: 選択後にノートが変更されたため、誤った内容を削除しないよう削除を中止した。",
+  "reason.range-invalid":
+    "Unified Outliner: この複合ブロックの範囲を確認できなかったため、安全のため削除をスキップした。",
+  "reason.member-resolve-failed":
+    "Unified Outliner: この複合ブロックの内容を解決できなかった（ノートが変更された可能性がある）。",
+  "reason.member-not-supported":
+    "Unified Outliner: この複合ブロックの一部が安全に認識できなくなったため、安全のため削除をスキップした。",
+  "reason.member-has-diagnostic":
+    "Unified Outliner: この複合ブロックの一部に未解決の問題があるため、安全のため削除をスキップした。",
+  "reason.unsupported-member-kind":
+    "Unified Outliner: この複合ブロックには、このバージョンでは削除できない種別が含まれている。",
+  "reason.ambiguous-section":
+    "Unified Outliner: この複合ブロックのmember間でセクションの所属が一致しないため、安全のため削除をスキップした。",
 };
 
 const DICTIONARIES: Record<SupportedLocale, Record<TranslationKey, string>> = {

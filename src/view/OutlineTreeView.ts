@@ -173,6 +173,7 @@ import {
 } from "../model/block";
 import {
   buildOutlineTree,
+  BuildOutlineTreeOptions,
   collectReadOnlyOutlineNodeIds,
   headingPrefixText,
   isOutlineCompositeNode,
@@ -183,7 +184,14 @@ import {
   OutlineTreeNode,
 } from "../tree/buildOutlineTree";
 import { scanComplexBlocks } from "../parser/complexBlocks";
-import { matchCompositeBlocks } from "../parser/compositeBlocks";
+import { evaluateCompositeBlockDeletability, matchCompositeBlocks } from "../parser/compositeBlocks";
+import { CompositeBlockInfo, CompositeBlockRule } from "../model/compositeBlock";
+import { ComplexBlockScanResult } from "../model/complexBlock";
+import {
+  buildCompositeBlockSnapshot,
+  CompositeBlockSnapshot,
+  deleteCompositeBlock,
+} from "../edit/deleteCompositeBlock";
 import { getEnabledCompositeBlockRules } from "../settingsDefaults";
 import { resolveHighlightedNodeId } from "../tree/resolveHighlightedSectionId";
 import {
@@ -226,6 +234,7 @@ import {
   SectionRenameSnapshot,
 } from "../edit/renameBlock";
 import { HeadingLevelModal } from "./HeadingLevelModal";
+import { ConfirmCompositeDeleteModal } from "./ConfirmCompositeDeleteModal";
 import { applyLineEditOutcome, LineEditOutcome } from "../commands/applyLineEditOutcome";
 import { TranslationKey } from "../i18n";
 
@@ -313,6 +322,21 @@ export class OutlineTreeView extends ItemView {
   // refuses rather than reaching a structural-edit code path for a
   // composite/member node.
   private readOnlyNodeIds: Set<string> = new Set();
+  // Phase 5C-1 ticket 3b: the CompositeBlockInfo[] and ComplexBlockScanResult
+  // this refresh() cycle computed — mirrors this.currentTree's composite rows
+  // one-to-one via id, WITHIN this one refresh cycle only. MENU-BUILD-TIME
+  // REFERENCE ONLY: showCompositeCommandMenu uses these solely to decide
+  // whether to show the "Delete composite block" item and to build the
+  // CompositeBlockSnapshot passed into the confirmation modal's closure. They
+  // are NEVER consulted again once a snapshot exists — dispatchAndApplyCompositeDelete
+  // always re-parses/re-scans/re-matches the editor's CURRENT text via
+  // edit/deleteCompositeBlock.ts#deleteCompositeBlock at the moment of actual
+  // deletion, and never trusts these fields (or the composite-N id they
+  // momentarily carry) as the basis for whether that deletion is safe. See
+  // that function's own doc comment for why a composite-N id cannot be
+  // trusted to survive a re-parse.
+  private currentComposites: CompositeBlockInfo[] = [];
+  private currentComplexScan: ComplexBlockScanResult | null = null;
   // Phase 4E: fold-state persistence. currentFilePath is the vault-
   // relative path of the note this refresh's tree was built from (null
   // when there's no active note) — the key fold state is persisted under
@@ -536,6 +560,8 @@ export class OutlineTreeView extends ItemView {
       this.currentFilePath = null;
       this.nodeIdentityById = new Map();
       this.collapsedIds = new Set();
+      this.currentComposites = [];
+      this.currentComplexScan = null;
       this.renderEmptyState("No active Markdown note.");
       return;
     }
@@ -553,15 +579,21 @@ export class OutlineTreeView extends ItemView {
     // entirely rather than paying their cost on every refresh for users who
     // don't use the feature at all.
     const enabledRules = getEnabledCompositeBlockRules(this.plugin.settings.compositeBlocks);
-    const composites =
-      enabledRules.length > 0
-        ? (() => {
-            const complexScan = scanComplexBlocks(doc);
-            const infos = matchCompositeBlocks(doc, complexScan, enabledRules);
-            const complexBlocksById = new Map(complexScan.blocks.map((b) => [b.id, b]));
-            return { infos, complexBlocksById, rules: enabledRules };
-          })()
-        : undefined;
+    let composites: BuildOutlineTreeOptions["composites"];
+    if (enabledRules.length > 0) {
+      const complexScan = scanComplexBlocks(doc);
+      const infos = matchCompositeBlocks(doc, complexScan, enabledRules);
+      const complexBlocksById = new Map(complexScan.blocks.map((b) => [b.id, b]));
+      composites = { infos, complexBlocksById, rules: enabledRules };
+      // Phase 5C-1 ticket 3b: menu-build-time-only reference — see this
+      // class's own doc comment on currentComposites/currentComplexScan for
+      // why this is never treated as a source of delete-time safety.
+      this.currentComposites = infos;
+      this.currentComplexScan = complexScan;
+    } else {
+      this.currentComposites = [];
+      this.currentComplexScan = null;
+    }
 
     this.currentTree = buildOutlineTree(doc, {
       includeLists,
@@ -1176,6 +1208,19 @@ export class OutlineTreeView extends ItemView {
         evt.preventDefault();
         this.showListCommandMenu(evt, node.id);
       });
+    } else if (isComposite) {
+      // Phase 5C-1 ticket 3b: a NEW, separate menu path for composite rows
+      // — deliberately NOT gated by `!readOnly` (composite rows are always
+      // in readOnlyNodeIds, which is what correctly keeps rename/drag/the
+      // structure+list menus above off of them). This is a delete-only
+      // menu, and showCompositeCommandMenu itself decides — by re-checking
+      // evaluateCompositeBlockDeletability against this refresh's
+      // currentComposites/currentComplexScan — whether to show anything at
+      // all; it shows NO menu (not even an empty one) when not deletable.
+      selfEl.addEventListener("contextmenu", (evt) => {
+        evt.preventDefault();
+        this.showCompositeCommandMenu(evt, node.id);
+      });
     }
 
     // ---- Mobile gesture layer (tier 2 of 3: long press → context menu) --
@@ -1290,6 +1335,63 @@ export class OutlineTreeView extends ItemView {
       // Released, or the gesture was interrupted (an incoming call,
       // switching apps, the OS taking over for its own gesture, etc.)
       // before the duration threshold — either way, no menu should open.
+      selfEl.addEventListener("pointerup", clearLongPressTimer);
+      selfEl.addEventListener("pointercancel", clearLongPressTimer);
+      selfEl.addEventListener("pointerleave", clearLongPressTimer);
+    }
+
+    // Phase 5C-1 ticket 3b: composite rows' own long-press → menu gesture.
+    // A separate block from the `!readOnly && Platform.isMobile` one above
+    // rather than folding composite in there, because that block's timer
+    // callback only ever calls showStructureCommandMenu/showListCommandMenu
+    // — composite rows are always `readOnly` (correctly, for rename/drag/
+    // the structure+list menus), so they're excluded from that block
+    // entirely, and need their own parallel wiring to reach
+    // showCompositeCommandMenu. No dragHandleEl exclusion is needed here:
+    // composite rows are never draggable (Phase 5D-0.3 approval §1), so
+    // there is no drag-handle-origin touch to distinguish from the rest of
+    // the row.
+    if (isComposite && Platform.isMobile) {
+      let longPressTimerId: number | null = null;
+      let longPressStart: { x: number; y: number } | null = null;
+
+      const clearLongPressTimer = (): void => {
+        if (longPressTimerId !== null) {
+          window.clearTimeout(longPressTimerId);
+          longPressTimerId = null;
+        }
+        longPressStart = null;
+      };
+
+      selfEl.addEventListener("pointerdown", (evt) => {
+        if (!evt.isPrimary) return;
+        clearLongPressTimer();
+        longPressStart = { x: evt.clientX, y: evt.clientY };
+        const menuX = evt.clientX;
+        const menuY = evt.clientY;
+        longPressTimerId = window.setTimeout(() => {
+          longPressTimerId = null;
+          longPressStart = null;
+          this.suppressNextTapClick = true;
+          const menuEvt = { clientX: menuX, clientY: menuY } as unknown as MouseEvent;
+          this.showCompositeCommandMenu(menuEvt, node.id);
+        }, LONG_PRESS_DURATION_MS);
+      });
+
+      selfEl.addEventListener("pointermove", (evt) => {
+        if (longPressTimerId === null || !longPressStart) return;
+        if (
+          exceedsLongPressMoveThreshold(
+            longPressStart.x,
+            longPressStart.y,
+            evt.clientX,
+            evt.clientY
+          )
+        ) {
+          clearLongPressTimer();
+        }
+      });
+
       selfEl.addEventListener("pointerup", clearLongPressTimer);
       selfEl.addEventListener("pointercancel", clearLongPressTimer);
       selfEl.addEventListener("pointerleave", clearLongPressTimer);
@@ -2026,6 +2128,62 @@ export class OutlineTreeView extends ItemView {
   }
 
   /**
+   * Phase 5C-1 ticket 3b: composite rows' own right-click/long-press menu —
+   * deliberately a delete-only menu, and deliberately separate from
+   * showStructureCommandMenu/showListCommandMenu rather than folded into
+   * either (composite rows are always in readOnlyNodeIds, which correctly
+   * keeps them out of both of those). Not gated by readOnlyNodeIds itself —
+   * that set is what this menu exists alongside, not what it's conditioned
+   * on.
+   *
+   * MENU-BUILD-TIME ONLY: this.currentComposites/this.currentComplexScan
+   * (this refresh cycle's own scan/match results) are used ONLY to decide
+   * whether to show the delete item and to build the CompositeBlockSnapshot
+   * passed into the confirmation modal. Once that snapshot exists, it is
+   * never re-validated against these fields again — actual delete-time
+   * safety is entirely deleteCompositeBlock's own re-parse/re-scan/re-match/
+   * re-verify job (dispatchAndApplyCompositeDelete below), run against the
+   * editor's content at the moment "Delete" is actually clicked. See this
+   * class's own doc comment on currentComposites/currentComplexScan.
+   *
+   * If the composite cannot currently be resolved, or
+   * evaluateCompositeBlockDeletability says it isn't deletable, NO menu is
+   * shown at all (not even an empty one or a disabled item) — per approval
+   * §3, MVP omits the item entirely rather than showing a disabled one.
+   */
+  private showCompositeCommandMenu(evt: MouseEvent, compositeId: string): void {
+    const node = this.nodeById.get(compositeId);
+    if (!node || !isOutlineCompositeNode(node)) return;
+
+    const doc = this.currentDoc;
+    const complexScan = this.currentComplexScan;
+    const composite = this.currentComposites.find((c) => c.id === compositeId);
+    if (!doc || !complexScan || !composite) return;
+
+    const deletability = evaluateCompositeBlockDeletability(doc, complexScan, composite);
+    if (!deletability.deletable) return;
+
+    const snapshot = buildCompositeBlockSnapshot(composite);
+    const rules = getEnabledCompositeBlockRules(this.plugin.settings.compositeBlocks);
+    const label = node.label;
+
+    const menu = new Menu();
+    menu.addItem((item) =>
+      item
+        .setTitle(this.plugin.t("tree.menu.deleteCompositeBlock"))
+        .setIcon("trash-2")
+        .setWarning(true)
+        .onClick(() => {
+          new ConfirmCompositeDeleteModal(this.app, this.plugin, label, snapshot, (confirmed) => {
+            if (confirmed) this.dispatchAndApplyCompositeDelete(snapshot, rules);
+          }).open();
+        })
+    );
+
+    this.showTrackedMenu(menu, evt);
+  }
+
+  /**
    * Shared menu-item renderer: feasible items show the plain title/icon and
    * run `onClick`; infeasible ones get the same disabled/warning treatment
    * (UNAVAILABLE_SUFFIX/UNAVAILABLE_ICON) every no-op-able item in this view
@@ -2198,6 +2356,65 @@ export class OutlineTreeView extends ItemView {
       { line: node.range.startLine, ch: 0 },
       node.range.startLine,
       doc.lines,
+      outcome,
+      () => this.notify(this.reasonText(outcome.reason))
+    );
+
+    if (changed) {
+      const cur = editor.getCursor();
+      const lineLen = editor.getLine(cur.line)?.length ?? 0;
+      editor.scrollIntoView(
+        { from: { line: cur.line, ch: 0 }, to: { line: cur.line, ch: lineLen } },
+        true
+      );
+      this.refresh();
+    }
+    return changed;
+  }
+
+  /**
+   * Phase 5C-1 ticket 3b: dedicated, thin dispatch for composite-block
+   * delete — deliberately NOT folded into dispatchAndApply above (approval
+   * §1's "既存の dispatchAndApply は変更しないこと" plus a dedicated
+   * function documenting more clearly, in one place, that it does none of
+   * the actual re-parsing/re-matching/safety work itself). Its own
+   * responsibilities stop at: resolve the active editor, reject multiple
+   * cursors (same guard dispatchAndApply uses), read the editor's CURRENT
+   * text, hand it to deleteCompositeBlock along with the snapshot built at
+   * menu-time, apply the result via the SAME applyLineEditOutcome every
+   * other tree command uses, and — success only — scroll + refresh() once.
+   * All Markdown re-parsing, CompositeBlock re-resolution, snapshot
+   * comparison, range computation, and deletability re-verification are
+   * deleteCompositeBlock's/evaluateCompositeBlockDeletability's job (see
+   * edit/deleteCompositeBlock.ts) — nothing here duplicates any of it.
+   *
+   * `snapshot` reaches this function only via a closure captured at
+   * menu-build time (showCompositeCommandMenu → ConfirmCompositeDeleteModal
+   * → here) — never a bare composite-N id, which cannot be trusted to
+   * survive a re-parse (see CompositeBlockSnapshot's own doc comment).
+   */
+  private dispatchAndApplyCompositeDelete(
+    snapshot: CompositeBlockSnapshot,
+    rules: CompositeBlockRule[]
+  ): boolean {
+    const view = this.activeMarkdownView.get();
+    if (!view) return false;
+    const editor: Editor = view.editor;
+
+    if (editor.listSelections().length > 1) {
+      this.notify(this.plugin.t("notice.multipleCursors"));
+      return false;
+    }
+
+    const text = editor.getValue();
+    const outcome = deleteCompositeBlock(text, { snapshot }, rules);
+
+    const cursor = { line: snapshot.range.startLine, ch: 0 };
+    const changed = applyLineEditOutcome(
+      editor,
+      cursor,
+      snapshot.range.startLine,
+      text.split("\n"),
       outcome,
       () => this.notify(this.reasonText(outcome.reason))
     );
