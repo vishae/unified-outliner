@@ -67,13 +67,15 @@
  *      used — enforced by trying rules in array order and stopping at the
  *      first full match.
  */
-import { isListNode, LineRange, ParsedDocument } from "../model/block";
+import { isListNode, LineRange, ListBlockNode, ParsedDocument } from "../model/block";
+import { isBlankLine } from "./parseDocument";
 import { BlockDiagnostic, ComplexBlockScanResult } from "../model/complexBlock";
 import {
   CompositeBlockDeletability,
   CompositeBlockDeleteRejectionReason,
   CompositeBlockInfo,
   CompositeBlockMember,
+  CompositeBlockMovability,
   CompositeBlockRejection,
   CompositeBlockRule,
   CompositeMemberKind,
@@ -405,6 +407,263 @@ export function evaluateCompositeBlockDeletability(
   }
 
   return { deletable: true };
+}
+
+// ---- Phase 5C-1 ticket 4-1 (2026-08-14, revised): CompositeBlock move-
+// eligibility ----------------------------------------------------------
+//
+// DESIGN MEMO (superseding this ticket's original sibling-pointer-based
+// draft — see this ticket's completion report for the full history of why
+// that draft was abandoned before ever shipping):
+//
+// The ORIGINAL design tried to answer "does an adjacent sibling exist in
+// `direction`" by reading `members[0].prevSiblingId`/`nextSiblingId`
+// directly off the anchor ListBlockNode. Empirically verified (via a real
+// parseDocument() call) to be WRONG: parser/parseDocument.ts's own
+// root-item sibling linking (`lastRootItem`, see its pass-2 loop) is reset
+// to null the moment ANY non-blank, non-list, non-heading line is
+// encountered at or above the current indent — and a CompositeBlock's own
+// SECOND member (its callout/blockquote) is EXACTLY such a line. So
+// `members[0].nextSiblingId` is null for essentially every real composite
+// regardless of what follows it, and the PREVIOUS composite's own trailing
+// callout/blockquote equally severs the NEXT composite's
+// `members[0].prevSiblingId`. Two composites sitting back-to-back —
+// arguably the single most common composite-adjacency shape — could never
+// be found eligible under that design. This is a general, pre-existing
+// property of this codebase's list-sibling model (not a composite-specific
+// bug): the existing plain-list-item move/findMoveTarget.ts already has a
+// dedicated NoMoveReason ("blocked-by-paragraph") for the same underlying
+// phenomenon.
+//
+// The REVISED design below never reads BlockNode sibling pointers for this
+// purpose. Instead it scans the raw document, starting just outside
+// `composite.range`, for the next/previous BLOCK BOUNDARY in the requested
+// direction — mirroring move/findMoveTarget.ts's own up/down scanning
+// style (skip blank lines, inspect what's found) but adapted to recognize
+// both plain list items and other CompositeBlocks as valid adjacency
+// targets. Blank lines encountered while scanning are only ever used to
+// decide WHERE the next real content starts — they are never deleted,
+// merged, or otherwise touched; a future move (ticket 4-3, reusing
+// move/moveBlock.ts's existing swapBlocks primitive) preserves whatever
+// blank-line gap sat between the two swapped ranges automatically, purely
+// because swapBlocks already slices out `lines[a.endLine+1 .. b.startLine)`
+// as one unit and re-emits it unchanged between the swapped blocks — no
+// new "separator range" data structure is needed as long as this
+// resolution step correctly reports the two exact LineRanges to swap.
+//
+// `allComposites` (needed for the "up" direction only — see
+// findAdjacentAnchorNode's own doc comment) and `complexScan` (accepted for
+// signature symmetry with evaluateCompositeBlockDeletability but not
+// currently needed by this revised algorithm, since a composite boundary
+// is already fully described by `allComposites` without re-deriving it
+// from complexScan.blocks) are both parameters of this function.
+
+/**
+ * True when `node`'s own `parentId` resolves (in `doc.nodes`) to a node of
+ * type "list" — i.e. `node` sits nested inside another list item's
+ * continuation, rather than directly under its enclosing section (or under
+ * no section at all, top-of-document). Mirrors
+ * evaluateCompositeBlockDeletability's own `ownerNode.type === "list"`
+ * check exactly (see that function's condition 6) — deliberately NOT a
+ * null-check on `parentId`: a ROOT list item's own `parentId` is the
+ * owning SECTION's id (non-null) per ListBlockNode's own doc comment in
+ * model/block.ts, so a null-check alone would misclassify every ordinary,
+ * non-nested composite as "nested".
+ */
+function isNestedInList(doc: ParsedDocument, node: { parentId: string | null }): boolean {
+  if (!node.parentId) return false;
+  const owner = doc.nodes.get(node.parentId);
+  return !!owner && owner.type === "list";
+}
+
+/**
+ * Scans from `boundaryLine` in `direction`, skipping ONLY blank lines
+ * (never interpreting or consuming anything else), and returns the first
+ * non-blank line found — or `null` when the document's own edge (or
+ * frontmatter) is reached first. Deliberately mirrors
+ * move/findMoveTarget.ts's own up/down blank-skipping loops in style, kept
+ * as an independent re-implementation here rather than an import, matching
+ * this module's established "parser/* stays free of any dependency on the
+ * move/* layer" policy (see resolveMemberSectionId's own doc comment,
+ * above).
+ */
+function skipBlankLines(doc: ParsedDocument, boundaryLine: number, direction: "up" | "down"): number | null {
+  const n = doc.lines.length;
+  let k = boundaryLine;
+  if (direction === "down") {
+    while (k < n && isBlankLine(doc.lines[k])) k++;
+    if (k >= n || doc.frontmatterLines[k]) return null;
+  } else {
+    while (k >= 0 && isBlankLine(doc.lines[k])) k--;
+    if (k < 0 || doc.frontmatterLines[k]) return null;
+  }
+  return k;
+}
+
+/**
+ * Resolves the ListBlockNode that anchors whatever real block sits exactly
+ * at `line` — the boundary found by skipBlankLines, above — in `direction`.
+ * Deliberately does NOT consult `doc.lineToOwningNodeId`: that index
+ * answers "which node's CONTENT does this line belong to" (its deepest
+ * owning section/list, walking into nested continuations), a different
+ * question than "which node's own range genuinely STARTS or ENDS exactly
+ * here" — trusting the former could, in principle, resolve a line that
+ * merely happens to fall inside some unrelated multi-line list item's
+ * continuation (which might itself embed unrelated callout/blockquote
+ * content) as if it were a fresh block boundary. This function instead
+ * does an explicit, unambiguous range-boundary scan over `doc.nodes`.
+ *
+ *   - direction "down": returns the ListBlockNode whose OWN
+ *     `range.startLine === line`, if any. A CompositeBlock's own first
+ *     member (`members[0]`) is ALWAYS such a node by construction — its
+ *     `range.startLine` is literally `composite.range.startLine` (see
+ *     model/compositeBlock.ts's CompositeBlockInfo doc comment) — so this
+ *     single check already finds the start of a plain list item OR the
+ *     start of another CompositeBlock, with no separate composite-aware
+ *     branch needed for this direction.
+ *   - direction "up": first tries the same direct check, using
+ *     `range.endLine === line`. This finds a plain list item (or a
+ *     multi-line list subtree) ending exactly at `line`. If that fails,
+ *     falls back to `allComposites`: a CompositeBlock's OWN aggregate
+ *     `range.endLine` is usually its LAST member's endLine (typically a
+ *     callout/blockquote — a ComplexBlockInfo, which owns no line in
+ *     `doc.nodes` at all and therefore can never itself satisfy the direct
+ *     ListBlockNode check above). Without this fallback, "up" could never
+ *     find a CompositeBlock sitting immediately before another one — the
+ *     exact real-pipeline regression this ticket's redesign exists to fix
+ *     (two composites back-to-back; see this ticket's completion report).
+ *     When a matching composite is found this way, its own `members[0]`
+ *     anchor node is returned (never the complex-block member itself),
+ *     keeping this function's return type uniformly a ListBlockNode.
+ */
+function findAdjacentAnchorNode(
+  doc: ParsedDocument,
+  allComposites: CompositeBlockInfo[],
+  line: number,
+  direction: "up" | "down"
+): ListBlockNode | null {
+  for (const node of doc.nodes.values()) {
+    if (!isListNode(node)) continue;
+    if (direction === "down" && node.range.startLine === line) return node;
+    if (direction === "up" && node.range.endLine === line) return node;
+  }
+  if (direction === "up") {
+    const owningComposite = allComposites.find((c) => c.range.endLine === line);
+    if (owningComposite) {
+      const anchorNode = doc.nodes.get(owningComposite.members[0].id);
+      if (anchorNode && isListNode(anchorNode)) return anchorNode;
+    }
+  }
+  return null;
+}
+
+/**
+ * Evaluates whether `composite` may be safely swapped with whatever
+ * adjacent block sits immediately in `direction`, per Phase 5C-1 ticket
+ * 4-1's (revised) approved condition set — checked in the order below; the
+ * first failing condition determines the single reported reason, matching
+ * every other rejection-reporting function in this codebase:
+ *
+ *   1. `composite.members[0]` (the anchor list item — always the first
+ *      member for every rule in DEFAULT_COMPOSITE_BLOCK_RULES) must resolve
+ *      in `doc.nodes` to an actual ListBlockNode, and that node must NOT be
+ *      nested inside another list item (isNestedInList, above). Otherwise:
+ *      "nested-in-list". (An unresolvable member[0] — only possible when
+ *      `composite` is stale relative to `doc`, since matchCompositeBlocks
+ *      itself never emits a member[0] that fails to resolve — is also
+ *      reported as "nested-in-list": no adjacent unit can be safely
+ *      resolved either way once the anchor itself is unknown, and
+ *      CompositeBlockMoveRejectionReason has no dedicated
+ *      "member-resolve-failed" value, unlike
+ *      CompositeBlockDeleteRejectionReason.)
+ *   2. EVERY member that is a "list"/"single-line-list" kind must have
+ *      `unsafeIndent === false`. Otherwise: "unsafe-indent". (Only
+ *      member[0] is ever list-kind under today's
+ *      DEFAULT_COMPOSITE_BLOCK_RULES, but this loops over every member for
+ *      forward-compatibility with a future rule that includes more than one
+ *      list-kind member — mirrors evaluateCompositeBlockDeletability's own
+ *      per-member iteration style.)
+ *   3. A real block boundary must be found in `direction`: scan from just
+ *      outside `composite.range` (skipBlankLines), then resolve it
+ *      (findAdjacentAnchorNode). Reaching the document edge/frontmatter, OR
+ *      landing on a line that resolves to neither a ListBlockNode boundary
+ *      nor a CompositeBlock's own trailing boundary (a section heading, a
+ *      composite-less complex block, a plain paragraph, or a
+ *      boundary-uncertain block never even collected as a match candidate —
+ *      see parser/compositeBlocks.ts's own collectCandidates) — is reported
+ *      as "no-adjacent-compatible-unit". This intentionally does NOT hop
+ *      across a section heading the way plain-list-item
+ *      move/findMoveTarget.ts's cross-section "insert" mode does — composite
+ *      move in this ticket is swap-only, never cross-section.
+ *   4. The resolved adjacent anchor node's `parentId`, `depth`, AND
+ *      `indentColumns` must all equal the moving composite's own anchor's
+ *      corresponding fields. Otherwise: "different-parent-or-depth".
+ *      `parentId` equality alone is not trusted as a proxy for "same visual
+ *      level": a root list item's `depth` is always 0 regardless of its own
+ *      `indentColumns` (see the parser's own pass-2 loop — a root item is
+ *      simply whatever remains on the list stack after closing, independent
+ *      of its exact column), so two root items sharing one section can
+ *      legitimately have DIFFERING `indentColumns` (e.g. one at column 0,
+ *      another at column 2 after an intervening callout closed the first
+ *      list) even though both pass a `parentId`+`depth` check alone —
+ *      `indentColumns` is compared as well specifically to catch this and
+ *      avoid leaving the moved composite at a visually inconsistent
+ *      indentation relative to its new neighbors. (`depth` is, in a
+ *      correctly-parsed real document, always fully determined by
+ *      `parentId` — checked anyway as defense-in-depth against a hand-built
+ *      or otherwise inconsistent ParsedDocument, exactly like
+ *      evaluateCompositeBlockDeletability's own comparable checks.) Once
+ *      `parentId` matches, the adjacent anchor is —by construction—
+ *      guaranteed not itself nested-in-list either (it shares the exact
+ *      same, already-verified-non-list parent as this composite's own
+ *      anchor), so no separate "sibling-is-nested-in-list"-style check is
+ *      needed here.
+ */
+export function evaluateCompositeBlockMovability(
+  doc: ParsedDocument,
+  complexScan: ComplexBlockScanResult,
+  composite: CompositeBlockInfo,
+  direction: "up" | "down",
+  allComposites: CompositeBlockInfo[]
+): CompositeBlockMovability {
+  // Unused by this revised algorithm — kept for signature symmetry with
+  // evaluateCompositeBlockDeletability. See this section's top doc comment.
+  void complexScan;
+
+  const anchor = composite.members[0];
+  const anchorNode = doc.nodes.get(anchor.id);
+  if (!anchorNode || !isListNode(anchorNode) || isNestedInList(doc, anchorNode)) {
+    return { eligible: false, reason: "nested-in-list" };
+  }
+
+  for (const member of composite.members) {
+    if (member.kind !== "list" && member.kind !== "single-line-list") continue;
+    const node = doc.nodes.get(member.id);
+    if (node && isListNode(node) && node.unsafeIndent) {
+      return { eligible: false, reason: "unsafe-indent" };
+    }
+  }
+
+  const boundaryLine = direction === "up" ? composite.range.startLine - 1 : composite.range.endLine + 1;
+  const k = skipBlankLines(doc, boundaryLine, direction);
+  if (k === null) {
+    return { eligible: false, reason: "no-adjacent-compatible-unit" };
+  }
+
+  const candidate = findAdjacentAnchorNode(doc, allComposites, k, direction);
+  if (!candidate) {
+    return { eligible: false, reason: "no-adjacent-compatible-unit" };
+  }
+
+  if (
+    candidate.parentId !== anchorNode.parentId ||
+    candidate.depth !== anchorNode.depth ||
+    candidate.indentColumns !== anchorNode.indentColumns
+  ) {
+    return { eligible: false, reason: "different-parent-or-depth" };
+  }
+
+  return { eligible: true };
 }
 
 /** Human-readable (English) explanation for one CompositeBlockDeleteRejectionReason, used by describeCompositeBlockRejection below. Mirrors parser/complexBlocks.ts's inline reason strings in style (short, developer/Notice-facing, not yet localized — same as every other pre-i18n `reason` string this codebase already carries, e.g. edit/deleteBlock.ts's NoDeleteReason consumers). */

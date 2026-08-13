@@ -191,6 +191,39 @@ export type CompositeBlockRejection =
   | { blocked: false };
 
 /**
+ * Phase 5C-1 ticket 4-1 (2026-08-14, revised): move-eligibility
+ * classification for a CompositeBlockInfo, in a given up/down direction. A
+ * DIFFERENT, narrower question than CompositeBlockDeletability above — it
+ * reuses a subset of the same structural preconditions (top-level/single-
+ * section composite, no unsafe indent) but additionally asks whether a
+ * valid adjacent block exists, at the SAME structural level, in the
+ * requested direction. See parser/compositeBlocks.ts's
+ * evaluateCompositeBlockMovability doc comment for the exact,
+ * independently-re-derived condition list — including why this deliberately
+ * does NOT rely on ListBlockNode's own prevSiblingId/nextSiblingId (a
+ * composite's own second member routinely severs that chain; see that
+ * doc comment's design-memo section for the full, empirically-verified
+ * rationale) and instead resolves adjacency by scanning the raw document
+ * around composite.range. This type and its evaluator do NOT trust
+ * CompositeBlockDeletability's result, matching this whole ticket's "never
+ * guess, always re-verify against current ground truth" policy.
+ *
+ * "eligible: true" means only that a swap partner has been safely
+ * confirmed to exist — it says nothing about what that partner IS; see
+ * move/findCompositeMoveTarget.ts's CompositeMoveTarget for the actual
+ * resolved ranges to swap.
+ */
+export type CompositeBlockMoveRejectionReason =
+  | "nested-in-list"
+  | "unsafe-indent"
+  | "no-adjacent-compatible-unit"
+  | "different-parent-or-depth";
+
+export type CompositeBlockMovability =
+  | { eligible: true }
+  | { eligible: false; reason: CompositeBlockMoveRejectionReason };
+
+/**
  * Built-in default rules (Phase 5D-0.3 approval §3): the "image + OCR
  * transcript" authoring pattern (a one-line list item immediately followed
  * by a callout) and its blockquote variant. Array order doubles as
