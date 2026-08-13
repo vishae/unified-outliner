@@ -562,7 +562,7 @@ export class OutlineTreeView extends ItemView {
       this.collapsedIds = new Set();
       this.currentComposites = [];
       this.currentComplexScan = null;
-      this.renderEmptyState("No active Markdown note.");
+      this.renderEmptyState(this.plugin.t("tree.emptyNoActiveNote"));
       return;
     }
 
