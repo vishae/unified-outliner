@@ -67,9 +67,17 @@
  *      used — enforced by trying rules in array order and stopping at the
  *      first full match.
  */
-import { isListNode, ParsedDocument } from "../model/block";
-import { ComplexBlockScanResult } from "../model/complexBlock";
-import { CompositeBlockInfo, CompositeBlockMember, CompositeBlockRule, CompositeMemberKind } from "../model/compositeBlock";
+import { isListNode, LineRange, ParsedDocument } from "../model/block";
+import { BlockDiagnostic, ComplexBlockScanResult } from "../model/complexBlock";
+import {
+  CompositeBlockDeletability,
+  CompositeBlockDeleteRejectionReason,
+  CompositeBlockInfo,
+  CompositeBlockMember,
+  CompositeBlockRejection,
+  CompositeBlockRule,
+  CompositeMemberKind,
+} from "../model/compositeBlock";
 
 interface Candidate {
   kind: CompositeMemberKind;
@@ -208,4 +216,253 @@ export function matchCompositeBlocks(
   }
 
   return results;
+}
+
+// ---- Phase 5C-1 ticket 1: CompositeBlock delete-eligibility ---------------
+//
+// The functions below answer a DIFFERENT question than everything above
+// this line: matchCompositeBlocks only ever asks "is this a
+// CompositeBlock" (recognition). evaluateCompositeBlockDeletability asks
+// "may this SPECIFIC, already-recognized CompositeBlock be safely deleted
+// as one unit" — a strictly narrower, independently re-checked question.
+// See model/compositeBlock.ts's CompositeBlockDeletability doc comment for
+// why this is a third concern (alongside "recognized" and "renderable",
+// the latter being tree/buildOutlineTree.ts's isCompositeSafelyProjectable)
+// that must not be blurred with either of the other two.
+//
+// This ticket adds NO delete implementation (no edit/deleteCompositeBlock.ts,
+// no doc.lines mutation of any kind) and is not called from
+// view/OutlineTreeView.ts, any context menu, or any command — it exists so
+// a LATER ticket has a single, already-vetted, independently-testable
+// safety gate to consult before ever touching the note's text.
+
+/**
+ * True when any diagnostic in `diagnostics` overlaps `range` AND that
+ * diagnostic is about THIS block's own boundary, not merely a lower-priority
+ * candidate that lost to it. Deliberately EXCLUDES `kind === "overlapping-range"`:
+ * that diagnostic kind is emitted by parser/complexBlocks.ts's own
+ * mergeBlockRangesSafely against the LOSING (lower-priority, downgraded)
+ * candidate's range, not the winning "supported" block's — and because
+ * scanParagraphBlocks is a catch-all that "does NOT exclude quote-prefixed
+ * or pipe-table-row-shaped lines" (see that function's own doc comment), a
+ * perfectly healthy, still-`"supported"` callout/blockquote/table has an
+ * "overlapping-range" diagnostic recorded against its own range EVERY TIME
+ * the paragraph scanner also produced a (losing) candidate over the same
+ * lines — which is the ordinary, expected case for these three kinds, not
+ * an edge case. Treating that diagnostic as disqualifying would reject
+ * nearly every real callout/blockquote/table composite member, which is
+ * not what "diagnosticsを持つblockを拒否する" was asking for.
+ *
+ * Every OTHER diagnostic kind ("unterminated-fence", "unsupported-callout-nesting",
+ * "malformed-table", the boundary-crossing "ambiguous") is, by construction,
+ * always pushed in the exact same branch that also downgrades THAT block's
+ * own `editability` away from `"supported"` (see parser/complexBlocks.ts's
+ * scanners) — so for a block that already passed the `editability ===
+ * "supported"` check above, none of these should ever be found overlapping
+ * it either. This function still checks independently (rather than
+ * skipping the check entirely) as defense-in-depth against a future
+ * scanner change that adds a new diagnostic-producing path without also
+ * downgrading editability in the same step.
+ */
+function hasOverlappingDiagnostic(diagnostics: BlockDiagnostic[], range: LineRange): boolean {
+  return diagnostics.some(
+    (d) => d.kind !== "overlapping-range" && d.fromLine <= range.endLine && range.startLine <= d.toLine
+  );
+}
+
+/**
+ * Evaluates whether `composite` (an already-matched CompositeBlockInfo, as
+ * produced by matchCompositeBlocks over the SAME `doc`/`complexScan`) may
+ * be safely deleted as one unit, per Phase 5C-1 ticket 1's approved
+ * condition set. Every condition below is re-derived independently from
+ * `doc`/`complexScan` — this function does NOT simply trust that
+ * `composite` was produced by matchCompositeBlocks (a future caller could
+ * pass a stale or hand-built CompositeBlockInfo), matching this whole
+ * codebase's "never guess, always re-verify against the current ground
+ * truth" policy (see e.g. tree/buildOutlineTree.ts's
+ * isCompositeSafelyProjectable, edit/partialEdit.ts's re-extract-and-compare
+ * conflict check).
+ *
+ * A composite is deletable only when EVERY member independently satisfies
+ * ALL of the following (checked in the order below; the FIRST failing
+ * member/condition determines the single reported reason — this function
+ * does not attempt to collect every violation at once, matching every
+ * other rejection-reporting function in this codebase, e.g.
+ * parser/complexBlocks.ts's resolveParentId):
+ *
+ *   1. The member itself resolves: a "list"/"single-line-list" member must
+ *      resolve in `doc.nodes` to an actual ListBlockNode; a
+ *      "callout"/"blockquote"/"fenced-code"/"table" member must resolve in
+ *      `complexScan.blocks` to an actual ComplexBlockInfo. Otherwise:
+ *      "member-resolve-failed".
+ *   2. The member's KIND is one Phase 5C-1 ticket 1 supports deleting:
+ *      "list"/"single-line-list" (the anchor list item itself, always
+ *      deleted along with the rest of the composite) or one of "callout" /
+ *      "blockquote" / "fenced-code" (including Mermaid — a fenced-code
+ *      block's `infoString` never changes this evaluation) / "table".
+ *      "paragraph" (always editability "read-only", never a genuine delete
+ *      candidate per docs/mixed-structure-spec.md §6) and any other kind
+ *      (e.g. a future "section"/"thematic-break" composite member) are
+ *      rejected as "unsupported-member-kind" — deliberately explicit here
+ *      rather than merely falling out of the editability check below, so a
+ *      future new ComplexBlockKind is rejected by default until this
+ *      function is revisited, not silently accepted.
+ *   3. For a "list"/"single-line-list" member: `unsafeIndent` must be
+ *      false. Not explicitly requested by this ticket's own condition
+ *      list, but added as defense-in-depth for consistency with every
+ *      other list-mutating module in this codebase (move/relocateListSubtree.ts,
+ *      edit/partialEdit.ts's extractSubtreeText, edit/insertBlock.ts's
+ *      insertChildListItem all refuse mixed tab/space indentation the same
+ *      way) — flagged explicitly in this ticket's completion report as an
+ *      addition beyond the literal request, not a silent scope change.
+ *      Otherwise: "member-unsafe-indent".
+ *   4. For a "callout"/"blockquote"/"fenced-code"/"table" member:
+ *      `editability === "supported"` (excludes nested callout, unterminated
+ *      fence, malformed table, boundary-ambiguous, and overlapping-range
+ *      downgrades in one check — see parser/complexBlocks.ts's own
+ *      editability assignment). Otherwise: "member-not-supported".
+ *   5. For the same complex-kind members: no diagnostic in
+ *      `complexScan.diagnostics` overlaps the member's own range (see
+ *      hasOverlappingDiagnostic's doc comment for why this is checked
+ *      independently of step 4 rather than assumed to be implied by it).
+ *      Otherwise: "member-has-diagnostic".
+ *   6. The member's resolved owner (a "list"/"single-line-list" member's
+ *      BlockNode.parentId; a complex-kind member's ComplexBlockInfo.parentId)
+ *      must NOT itself be a "list"-typed node — i.e. the member must sit
+ *      directly under its enclosing SECTION (or under no section at all,
+ *      top-of-document), never nested inside another list item's
+ *      continuation. This is what "単一 section 内・トップレベル相当" means
+ *      operationally, and is what excludes a CompositeBlock whose anchor
+ *      list item (or a complex-kind member) is itself a nested list child —
+ *      see this ticket's completion report for why this narrower first
+ *      deletable set was chosen over also supporting nested-in-list
+ *      composites immediately. Otherwise: "nested-in-list".
+ *
+ * After every member individually passes 1–6, one FINAL composite-level
+ * check: every member's resolved owner (section id, or null for
+ * top-of-document) must be the SAME across all members — re-deriving
+ * matchCompositeBlocks's own "same enclosing section" requirement
+ * independently, rather than trusting `composite.sectionId` (which was
+ * computed by a different code path, at match time, potentially against a
+ * stale `doc`/`complexScan` if the caller didn't pass the matching pair).
+ * A disagreement here is reported as "ambiguous-section" and — unlike every
+ * per-member reason above — is NOT attributed to any single
+ * `offendingMemberId`, since the fault is the disagreement itself, not any
+ * one member.
+ */
+export function evaluateCompositeBlockDeletability(
+  doc: ParsedDocument,
+  complexScan: ComplexBlockScanResult,
+  composite: CompositeBlockInfo
+): CompositeBlockDeletability {
+  const ownerIds = new Set<string | null>();
+
+  for (const member of composite.members) {
+    let ownerId: string | null;
+
+    if (member.kind === "list" || member.kind === "single-line-list") {
+      const node = doc.nodes.get(member.id);
+      if (!node || !isListNode(node)) {
+        return { deletable: false, reason: "member-resolve-failed", offendingMemberId: member.id };
+      }
+      if (node.unsafeIndent) {
+        return { deletable: false, reason: "member-unsafe-indent", offendingMemberId: member.id };
+      }
+      ownerId = node.parentId;
+    } else if (
+      member.kind === "callout" ||
+      member.kind === "blockquote" ||
+      member.kind === "fenced-code" ||
+      member.kind === "table"
+    ) {
+      const info = complexScan.blocks.find((b) => b.id === member.id);
+      if (!info) {
+        return { deletable: false, reason: "member-resolve-failed", offendingMemberId: member.id };
+      }
+      if (info.editability !== "supported") {
+        return { deletable: false, reason: "member-not-supported", offendingMemberId: member.id };
+      }
+      if (hasOverlappingDiagnostic(complexScan.diagnostics, info.range)) {
+        return { deletable: false, reason: "member-has-diagnostic", offendingMemberId: member.id };
+      }
+      ownerId = info.parentId;
+    } else {
+      // "paragraph", "thematic-break", "section", or any future kind not
+      // explicitly handled above — see condition 2's doc comment.
+      return { deletable: false, reason: "unsupported-member-kind", offendingMemberId: member.id };
+    }
+
+    const ownerNode = ownerId ? doc.nodes.get(ownerId) : null;
+    if (ownerNode && ownerNode.type === "list") {
+      return { deletable: false, reason: "nested-in-list", offendingMemberId: member.id };
+    }
+
+    ownerIds.add(ownerId ?? null);
+  }
+
+  if (ownerIds.size !== 1) {
+    return { deletable: false, reason: "ambiguous-section" };
+  }
+
+  return { deletable: true };
+}
+
+/** Human-readable (English) explanation for one CompositeBlockDeleteRejectionReason, used by describeCompositeBlockRejection below. Mirrors parser/complexBlocks.ts's inline reason strings in style (short, developer/Notice-facing, not yet localized — same as every other pre-i18n `reason` string this codebase already carries, e.g. edit/deleteBlock.ts's NoDeleteReason consumers). */
+function describeDeleteRejectionReason(
+  reason: CompositeBlockDeleteRejectionReason,
+  offendingMemberId: string | undefined
+): string {
+  const member = offendingMemberId ?? "?";
+  switch (reason) {
+    case "member-resolve-failed":
+      return `composite block member ${member} could not be resolved in the current document`;
+    case "member-not-supported":
+      return `composite block member ${member} is not a safely-bounded ("supported") block`;
+    case "member-has-diagnostic":
+      return `composite block member ${member} has an unresolved diagnostic`;
+    case "member-unsafe-indent":
+      return `composite block member ${member} has mixed tab/space indentation`;
+    case "unsupported-member-kind":
+      return `composite block member ${member} is a kind Phase 5C-1 does not support deleting (e.g. paragraph)`;
+    case "nested-in-list":
+      return `composite block member ${member} is nested inside another list item; deletion is limited to top-level/single-section composites in this phase`;
+    case "ambiguous-section":
+      return "composite block members do not agree on a single enclosing section";
+  }
+}
+
+/**
+ * Phase 5C-1 ticket 1 safety helper for a FUTURE caller (e.g. a Tree
+ * context menu that might one day gate a "Delete composite block" item),
+ * mirroring parser/complexBlocks.ts's describeComplexBlockRejection exactly
+ * — same `{blocked:false}` for "this id isn't a recognized CompositeBlock
+ * at all" vs. `{blocked:true, ...}` for "this id IS a recognized
+ * CompositeBlock, but evaluateCompositeBlockDeletability rejects it"
+ * convention. This function adds NO new runtime path into any editing
+ * module (nothing in view/OutlineTreeView.ts or edit/* calls it yet); it
+ * exists purely so a later ticket can distinguish the two cases above
+ * before attempting any deletion.
+ *
+ * `composites` is typically whatever matchCompositeBlocks(doc, complexScan,
+ * enabledRules) already returned for this exact `doc`/`complexScan` pair
+ * (the same value view/OutlineTreeView.ts#refresh() already computes) —
+ * this function does no matching of its own.
+ */
+export function describeCompositeBlockRejection(
+  doc: ParsedDocument,
+  complexScan: ComplexBlockScanResult,
+  composites: CompositeBlockInfo[],
+  compositeId: string
+): CompositeBlockRejection {
+  const composite = composites.find((c) => c.id === compositeId);
+  if (!composite) return { blocked: false };
+
+  const result = evaluateCompositeBlockDeletability(doc, complexScan, composite);
+  if (result.deletable) return { blocked: false };
+
+  return {
+    blocked: true,
+    ruleId: composite.ruleId,
+    reason: describeDeleteRejectionReason(result.reason as CompositeBlockDeleteRejectionReason, result.offendingMemberId),
+  };
 }

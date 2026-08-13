@@ -122,6 +122,75 @@ export interface CompositeBlockInfo {
 }
 
 /**
+ * Phase 5C-1 (ticket 1 — "CompositeBlock 編集可能化" design/model step,
+ * 2026-08-13): delete-eligibility classification for a CompositeBlockInfo.
+ * DELIBERATELY NOT model/complexBlock.ts's `BlockEditability` — that type
+ * answers a narrower question ("can THIS SINGLE callout/blockquote/
+ * fenced-code/table's own boundary be trusted"), which is necessary but not
+ * sufficient here. A CompositeBlockInfo can be simultaneously:
+ *
+ *   - RECOGNIZED (produced by parser/compositeBlocks.ts's
+ *     matchCompositeBlocks — every member already independently
+ *     "supported"/resolvable, see that function's own doc comment), AND
+ *   - RENDERABLE (passes tree/buildOutlineTree.ts's
+ *     isCompositeSafelyProjectable, i.e. safely shown as a read-only Tree
+ *     row today), AND YET
+ *   - NOT DELETABLE — e.g. because one of its members sits nested inside
+ *     another list item (this phase's deletable set is deliberately
+ *     restricted to single-section/top-level-relative composites only; see
+ *     parser/compositeBlocks.ts's evaluateCompositeBlockDeletability doc
+ *     comment for the full condition list).
+ *
+ * These three questions (recognized / renderable / deletable) are
+ * intentionally kept as three separate, non-overlapping concerns — this
+ * ticket must not blur "can be shown" with "can be safely removed as one
+ * unit". `CompositeBlockDeletability` is produced FRESH, on demand, by
+ * evaluateCompositeBlockDeletability; it is NEVER stored as a field on
+ * CompositeBlockInfo itself (CompositeBlockInfo, like ComplexBlockInfo,
+ * stays a read-only recognition value with no baked-in judgment about what
+ * a future editing phase may do with it).
+ *
+ * Phase 5C-1 ticket 1 performs NO deletion of any kind and is not wired
+ * into the Outline Tree, any context menu, or any editor mutation — this
+ * type and its evaluator exist solely so a future edit/deleteCompositeBlock.ts
+ * (a later, separate ticket) has one already-vetted safety gate to consult
+ * before ever touching doc.lines. See parser/compositeBlocks.ts for the
+ * evaluator and describeCompositeBlockRejection (the id-based lookup
+ * wrapper, mirroring parser/complexBlocks.ts's describeComplexBlockRejection).
+ */
+export type CompositeBlockDeleteRejectionReason =
+  | "member-resolve-failed"
+  | "member-not-supported"
+  | "member-has-diagnostic"
+  | "member-unsafe-indent"
+  | "unsupported-member-kind"
+  | "nested-in-list"
+  | "ambiguous-section";
+
+export interface CompositeBlockDeletability {
+  deletable: boolean;
+  /** Present whenever deletable === false. */
+  reason?: CompositeBlockDeleteRejectionReason;
+  /**
+   * Present whenever deletable === false AND the rejection is scoped to one
+   * specific member (member.id) rather than the composite as a whole.
+   * Omitted for "ambiguous-section", which by definition implicates a
+   * disagreement across members rather than any single one of them.
+   */
+  offendingMemberId?: string;
+}
+
+/**
+ * Result of describeCompositeBlockRejection — see parser/compositeBlocks.ts.
+ * Mirrors model/complexBlock.ts's ComplexBlockRejection shape exactly (same
+ * blocked:true/false discriminated union convention), so a future caller
+ * that already knows one can trivially learn the other.
+ */
+export type CompositeBlockRejection =
+  | { blocked: true; ruleId: string; reason: string }
+  | { blocked: false };
+
+/**
  * Built-in default rules (Phase 5D-0.3 approval §3): the "image + OCR
  * transcript" authoring pattern (a one-line list item immediately followed
  * by a callout) and its blockquote variant. Array order doubles as
