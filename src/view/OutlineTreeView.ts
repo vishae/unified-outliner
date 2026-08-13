@@ -326,7 +326,7 @@ export class OutlineTreeView extends ItemView {
   // this refresh() cycle computed — mirrors this.currentTree's composite rows
   // one-to-one via id, WITHIN this one refresh cycle only. MENU-BUILD-TIME
   // REFERENCE ONLY: showCompositeCommandMenu uses these solely to decide
-  // whether to show the "Delete composite block" item and to build the
+  // whether to show the "Delete extended block" item and to build the
   // CompositeBlockSnapshot passed into the confirmation modal's closure. They
   // are NEVER consulted again once a snapshot exists — dispatchAndApplyCompositeDelete
   // always re-parses/re-scans/re-matches the editor's CURRENT text via

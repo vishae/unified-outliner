@@ -433,7 +433,7 @@ function describeDeleteRejectionReason(
 
 /**
  * Phase 5C-1 ticket 1 safety helper for a FUTURE caller (e.g. a Tree
- * context menu that might one day gate a "Delete composite block" item),
+ * context menu that might one day gate a "Delete extended block" item),
  * mirroring parser/complexBlocks.ts's describeComplexBlockRejection exactly
  * — same `{blocked:false}` for "this id isn't a recognized CompositeBlock
  * at all" vs. `{blocked:true, ...}` for "this id IS a recognized

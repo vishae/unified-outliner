@@ -36,7 +36,7 @@
  *
  * The following are NOT exercised here and are called out in this
  * ticket's completion report as requiring manual desktop/iPad
- * verification instead: whether the "Delete composite block" menu item
+ * verification instead: whether the "Delete extended block" menu item
  * actually appears/is absent in a real Obsidian Menu, Cancel vs. Delete
  * button click wiring in ConfirmCompositeDeleteModal, Modal Enter-key/
  * initial-focus behavior, mobile long-press gesture timing on a real
@@ -252,7 +252,7 @@ describe("i18n: menu item and confirmation modal keys, en + ja", () => {
   it("tree.menu.deleteCompositeBlock exists and differs per locale", () => {
     const en = createTranslator("en");
     const ja = createTranslator("ja");
-    expect(en("tree.menu.deleteCompositeBlock")).toBe("Delete composite block");
+    expect(en("tree.menu.deleteCompositeBlock")).toBe("Delete extended block");
     expect(ja("tree.menu.deleteCompositeBlock")).not.toBe(en("tree.menu.deleteCompositeBlock"));
   });
 
