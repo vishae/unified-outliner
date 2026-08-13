@@ -486,8 +486,18 @@ function isNestedInList(doc: ParsedDocument, node: { parentId: string | null }):
  * this module's established "parser/* stays free of any dependency on the
  * move/* layer" policy (see resolveMemberSectionId's own doc comment,
  * above).
+ *
+ * Exported (ticket 4-2, 2026-08-14) SOLELY so
+ * move/findCompositeMoveTarget.ts can perform the exact same composite-
+ * range-relative adjacency scan evaluateCompositeBlockMovability (ticket
+ * 4-1) already performs, with zero risk of the two drifting apart — this is
+ * NOT a general-purpose blank-line utility; it is scoped to the composite
+ * adjacency algorithm the two tickets share. Exporting introduces no
+ * behavior change: every one of ticket 4-1's existing 16
+ * evaluateCompositeBlockMovability test cases continues to pass unchanged
+ * (see tests/compositeBlockMovability.test.ts).
  */
-function skipBlankLines(doc: ParsedDocument, boundaryLine: number, direction: "up" | "down"): number | null {
+export function skipBlankLines(doc: ParsedDocument, boundaryLine: number, direction: "up" | "down"): number | null {
   const n = doc.lines.length;
   let k = boundaryLine;
   if (direction === "down") {
@@ -535,8 +545,16 @@ function skipBlankLines(doc: ParsedDocument, boundaryLine: number, direction: "u
  *     When a matching composite is found this way, its own `members[0]`
  *     anchor node is returned (never the complex-block member itself),
  *     keeping this function's return type uniformly a ListBlockNode.
+ *
+ * Exported (ticket 4-2, 2026-08-14) for the same reason as skipBlankLines,
+ * above — a shared, single-source-of-truth adjacency primitive for ticket
+ * 4-1 (evaluateCompositeBlockMovability) and ticket 4-2
+ * (move/findCompositeMoveTarget.ts), not a general-purpose utility.
+ * Resolving WHICH composite (if any) the returned node anchors is
+ * deliberately left to each caller — this function's own contract stops at
+ * "here is the adjacent list node", exactly as before export.
  */
-function findAdjacentAnchorNode(
+export function findAdjacentAnchorNode(
   doc: ParsedDocument,
   allComposites: CompositeBlockInfo[],
   line: number,
