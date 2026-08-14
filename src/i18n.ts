@@ -123,6 +123,11 @@ const en = {
     "Which sidebar a brand-new Outline Tree View opens into. Only applies when no Outline Tree View is already open anywhere — an existing one (including one you've dragged elsewhere) is always reused as-is and never moved by changing this setting.",
   "settings.outlineTreeSidebarPosition.optionRight": "Right sidebar",
   "settings.outlineTreeSidebarPosition.optionLeft": "Left sidebar",
+  "settings.listPrefixStyle.name": "List marker in Outline Tree",
+  "settings.listPrefixStyle.desc":
+    "Show the Markdown list marker (-, *, +, 1., and so on) before each list item.",
+  "settings.listPrefixStyle.optionNone": "Don't show",
+  "settings.listPrefixStyle.optionMarker": "Markdown marker",
   "settings.previewMoveTarget.name": "Preview move target in Outline Tree",
   "settings.previewMoveTarget.desc":
     "Briefly flash-highlight, in the Outline Tree, the block that Move block / Move section actually operated on.",
@@ -480,6 +485,11 @@ const ja: Record<TranslationKey, string> = {
     "新規にアウトラインツリービューを開く際、どちらのサイドバーに開くかを指定する。すでにどこかにアウトラインツリービューが開いている場合（ユーザーが手動で移動した場合を含む）は、この設定に関わらず既存のものをそのまま再利用し、この設定を変更しただけでは移動しない。",
   "settings.outlineTreeSidebarPosition.optionRight": "右サイドバー",
   "settings.outlineTreeSidebarPosition.optionLeft": "左サイドバー",
+  "settings.listPrefixStyle.name": "アウトラインツリーのリストmarker",
+  "settings.listPrefixStyle.desc":
+    "リスト項目の先頭に、Markdownで使われている marker（-、*、+、1. など）を表示します。",
+  "settings.listPrefixStyle.optionNone": "表示しない",
+  "settings.listPrefixStyle.optionMarker": "Markdown marker",
   "settings.previewMoveTarget.name": "アウトラインツリーで移動先をプレビュー",
   "settings.previewMoveTarget.desc":
     "Move block / Move section が実際に操作したブロックを、アウトラインツリー上で一瞬フラッシュ表示して強調する。",

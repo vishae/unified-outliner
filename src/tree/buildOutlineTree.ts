@@ -40,7 +40,7 @@ import {
   getCompositeBlockRuleById,
 } from "../model/compositeBlock";
 import { defaultTranslator, Translator } from "../i18n";
-import { HeadingPrefixStyle } from "../settingsDefaults";
+import { HeadingPrefixStyle, ListPrefixStyle } from "../settingsDefaults";
 
 export interface OutlineTreeSectionNode {
   kind: "section";
@@ -72,6 +72,27 @@ export interface OutlineTreeListNode {
    * leak into the item's saved body text.
    */
   text: string;
+  /**
+   * UXP-04 (2026-08-15, "Configurable List Marker Prefix Display"): the
+   * item's own actual Markdown list marker (`item.listMarker` — "-", "*",
+   * "+", "1.", "2)", a mid-list restart like "3.", ...), as an independent
+   * prefix rendered BEFORE `text` — the same "separate <span>, resolved
+   * once at build time" architecture OutlineTreeCompositeNode.prefix /
+   * OutlineTreeComplexMemberNode.prefix already use (see
+   * view/OutlineTreeView.ts's renderNode list branch for where this is
+   * rendered). `null` when settings.listPrefixStyle is "none" — see
+   * listPrefixText below, the pure function that produces this value.
+   *
+   * Before this ticket, an ORDERED item's marker was baked directly into
+   * `text` itself (listItemTreeDisplayText's pre-UXP-04 behavior); that is
+   * now moved here instead, so `text` is always the item's pure body label
+   * with no marker of any kind mixed in, for both ordered and unordered
+   * items alike. This field is independent of whether `text` is empty (the
+   * empty-list-item fallback is applied at render time, in
+   * OutlineTreeView.ts) — a marker can be shown even for an otherwise-empty
+   * list item.
+   */
+  prefix: string | null;
   /** List nesting depth (root list item = 0), for indent-based rendering. */
   indentDepth: number;
   /** 0-based line of the item's own first line (jump target). */
@@ -245,6 +266,21 @@ export interface BuildOutlineTreeOptions {
   standaloneComplexBlocks?: {
     blocks: ComplexBlockInfo[];
   };
+  /**
+   * UXP-04 (2026-08-15, "Configurable List Marker Prefix Display"):
+   * settings.listPrefixStyle, threaded through to every buildListNode call
+   * (including nested list items, and a list item reached via a composite
+   * member — see buildMemberNode) so OutlineTreeListNode.prefix is resolved
+   * ONCE at build time, matching how composite/complex-member prefixes are
+   * already resolved here rather than at render time in
+   * view/OutlineTreeView.ts (deliberately UNLIKE headingPrefixStyle, which
+   * IS read at render time — see this ticket's own investigation report for
+   * why list was given the build-time treatment instead: "設定値を直接View
+   * に散在させず、Tree build 層で prefix を確定させる構造を優先してくださ
+   * い"). Omitted (or "none") produces `prefix: null` on every list node,
+   * i.e. the pre-UXP-04 tree shape.
+   */
+  listPrefixStyle?: ListPrefixStyle;
 }
 
 /** Threaded through the recursive build below only when `options.composites` is set — see BuildOutlineTreeOptions.composites's doc comment. */
@@ -295,32 +331,70 @@ export function listItemDisplayText(doc: ParsedDocument, item: ListBlockNode): s
 }
 
 /**
- * 2026-08-12 "数字リストの番号非表示バグ" fix: Tree/breadcrumb display text
- * for a list item, restoring the ORDERED marker (item.listMarker — "1.",
- * "2)", a mid-list restart like "3.", ...) that listItemDisplayText()
- * above always strips. Bullets ("-"/"*"/"+") are intentionally left
- * marker-free here too, unchanged from before this fix — the Tree already
- * distinguishes list rows from sections by indentation/styling, and no
- * bullet character was ever printed even prior to this bug.
+ * 2026-08-12 "数字リストの番号非表示バグ" fix, UPDATED by UXP-04 (2026-08-15,
+ * "Configurable List Marker Prefix Display"): originally this function
+ * restored the ORDERED marker (item.listMarker — "1.", "2)", a mid-list
+ * restart like "3.", ...) as a literal prefix baked directly into the
+ * returned body string. UXP-04 moved that marker display into its own
+ * independent field (OutlineTreeListNode.prefix, produced by
+ * listPrefixText below) — the same "separate <span>, not mixed into the
+ * body" architecture composite/complex-member prefixes already use — so
+ * this function is now a pure pass-through: it returns `body` unchanged
+ * regardless of `item.ordered`. Kept as its own named function (rather
+ * than having callers just use listItemDisplayText's output directly)
+ * purely so both of this function's own call sites (nodeDisplayLabel
+ * below, and buildListNode's own `text` field) keep reading as "the
+ * Tree/breadcrumb display text for a list item" without each needing its
+ * own comment re-explaining that marker display now lives elsewhere.
  *
- * Deliberately a SEPARATE function from listItemDisplayText rather than a
- * change to that one: listItemDisplayText's marker-free output doubles as
- * the rename textarea's initial editable value (OutlineTreeView.ts's
- * beginRenameForNode) and PartialEditView's saved-body source — baking the
- * marker into that shared string would let a user's re-typed "3. " get
- * saved back into the item's actual body text (effectively double-marking
- * it) the next time they rename. Only display call sites (nodeDisplayLabel
- * below, and buildListNode's own `text` field) call this wrapper.
- *
- * item.listMarker is used verbatim (not re-derived from the raw line) so
- * this reflects exactly what parser/parseDocument.ts already recognized as
- * the item's marker — including an intentional mid-list restart ("1.",
- * "2.", "3." resuming after a "1." elsewhere) and the "N)" delimiter
- * variant, neither of which this function needs to re-detect itself.
+ * This DOES mean nodeDisplayLabel's output (also used for the ancestor
+ * breadcrumb and the Partial Edit Pane's title — see that function's own
+ * doc comment) no longer shows an ordered marker either, since breadcrumb/
+ * title text has no independent prefix rendering slot to move it into.
+ * This is a deliberate, in-scope consequence of UXP-04's own explicit
+ * instruction to stop embedding the marker in body text at all — flagged
+ * here, and in this ticket's own completion report, rather than left
+ * silent.
  */
 function listItemTreeDisplayText(item: ListBlockNode, body: string): string {
-  if (!item.ordered) return body;
-  return body.length > 0 ? `${item.listMarker} ${body}` : item.listMarker;
+  void item;
+  return body;
+}
+
+/**
+ * UXP-04 (2026-08-15, "Configurable List Marker Prefix Display"): pure
+ * style -> prefix-string mapping for settings.listPrefixStyle, mirroring
+ * headingPrefixText's own role for settings.headingPrefixStyle just above
+ * it were it not for one deliberate difference — see
+ * BuildOutlineTreeOptions.listPrefixStyle's doc comment for why this one is
+ * resolved at TREE-BUILD time (buildListNode below) rather than at render
+ * time in view/OutlineTreeView.ts.
+ *
+ * "none" returns `null` (not "", unlike headingPrefixText) so
+ * OutlineTreeListNode.prefix's own `string | null` type directly expresses
+ * "no prefix" without a separate empty-string sentinel — renderers skip the
+ * prefix <span> entirely when this is `null` (or an empty/whitespace-only
+ * string, defensively — see below), the same "no prefix -> no element at
+ * all" pattern the composite/complex-member prefix spans already use.
+ *
+ * "marker" returns `item.listMarker` VERBATIM — never re-derived from the
+ * raw source line, never normalized/renumbered, and never replaced with a
+ * synthetic symbol (e.g. a shared "•" for every unordered marker) per this
+ * ticket's own explicit "listMarker をそのまま表示する" /
+ * "新しい共通記号を導入しない" requirements: the whole point is showing
+ * exactly which marker character(s) the Markdown source actually uses. A
+ * defensively-guarded empty/whitespace-only marker (should not occur from
+ * real parsed data — parser/parseDocument.ts's own list-item regex requires
+ * a non-empty marker — but not asserted against here, consistent with this
+ * codebase's "resolve safely rather than throw" policy) falls back to
+ * `null` rather than rendering a blank prefix element.
+ */
+export function listPrefixText(style: ListPrefixStyle, item: ListBlockNode): string | null {
+  if (style !== "marker") return null;
+  // Emptiness is checked against the TRIMMED marker, but the VERBATIM
+  // (untrimmed) item.listMarker is what's returned — see this function's
+  // own doc comment on why the marker is never altered before display.
+  return item.listMarker.trim().length > 0 ? item.listMarker : null;
 }
 
 /**
@@ -759,11 +833,14 @@ function buildMemberNode(
   doc: ParsedDocument,
   member: CompositeBlockMember,
   ctx: CompositeProjectionContext,
-  standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>
+  standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>,
+  listPrefixStyle: ListPrefixStyle = "none"
 ): OutlineTreeNode {
   if (member.kind === "list" || member.kind === "single-line-list") {
     const node = doc.nodes.get(member.id);
-    if (node && isListNode(node)) return buildListNode(doc, node, ctx, standaloneByParentId);
+    if (node && isListNode(node)) {
+      return buildListNode(doc, node, ctx, standaloneByParentId, listPrefixStyle);
+    }
   }
   const info = ctx.complexBlocksById.get(member.id);
   // 2026-08-12 self-review §9 論点5: `info` is falsy only for a member that
@@ -811,7 +888,8 @@ function buildCompositeNode(
   doc: ParsedDocument,
   composite: CompositeBlockInfo,
   ctx: CompositeProjectionContext,
-  standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>
+  standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>,
+  listPrefixStyle: ListPrefixStyle = "none"
 ): OutlineTreeCompositeNode {
   const rule = getCompositeBlockRuleById(ctx.rules, composite.ruleId);
   return {
@@ -821,7 +899,9 @@ function buildCompositeNode(
     label: rule ? compositeBlockDisplayLabel(rule, ctx.t) : composite.ruleId,
     prefix: rule?.prefix ?? "",
     line: composite.range.startLine,
-    children: composite.members.map((m) => buildMemberNode(doc, m, ctx, standaloneByParentId)),
+    children: composite.members.map((m) =>
+      buildMemberNode(doc, m, ctx, standaloneByParentId, listPrefixStyle)
+    ),
   };
 }
 
@@ -847,7 +927,8 @@ function buildListNode(
   doc: ParsedDocument,
   item: ListBlockNode,
   ctx?: CompositeProjectionContext,
-  standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>
+  standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>,
+  listPrefixStyle: ListPrefixStyle = "none"
 ): OutlineTreeListNode {
   const withLine: Array<{ node: OutlineTreeNode; line: number }> = [];
   for (const id of item.childIds) {
@@ -862,8 +943,8 @@ function buildListNode(
     const composite = ctx?.firstMemberIdToComposite.get(child.id);
     withLine.push({
       node: composite
-        ? buildCompositeNode(doc, composite, ctx!, standaloneByParentId)
-        : buildListNode(doc, child, ctx, standaloneByParentId),
+        ? buildCompositeNode(doc, composite, ctx!, standaloneByParentId, listPrefixStyle)
+        : buildListNode(doc, child, ctx, standaloneByParentId, listPrefixStyle),
       line: child.range.startLine,
     });
   }
@@ -875,6 +956,7 @@ function buildListNode(
     kind: "list",
     id: item.id,
     text: listItemTreeDisplayText(item, listItemDisplayText(doc, item)),
+    prefix: listPrefixText(listPrefixStyle, item),
     indentDepth: item.depth,
     line: item.range.startLine,
     children: withLine.map((x) => x.node),
@@ -886,7 +968,8 @@ function buildSectionNode(
   section: SectionBlockNode,
   includeLists: boolean,
   ctx?: CompositeProjectionContext,
-  standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>
+  standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>,
+  listPrefixStyle: ListPrefixStyle = "none"
 ): OutlineTreeSectionNode {
   return {
     kind: "section",
@@ -894,7 +977,15 @@ function buildSectionNode(
     headingText: section.headingText,
     headingLevel: section.headingLevel,
     line: section.range.startLine,
-    children: buildChildren(doc, section.childIds, includeLists, section.id, ctx, standaloneByParentId),
+    children: buildChildren(
+      doc,
+      section.childIds,
+      includeLists,
+      section.id,
+      ctx,
+      standaloneByParentId,
+      listPrefixStyle
+    ),
   };
 }
 
@@ -937,7 +1028,8 @@ function buildChildren(
   includeLists: boolean,
   sectionId: string | null,
   ctx?: CompositeProjectionContext,
-  standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>
+  standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>,
+  listPrefixStyle: ListPrefixStyle = "none"
 ): OutlineTreeNode[] {
   const withLine: Array<{ node: OutlineTreeNode; line: number }> = [];
   for (const id of ids) {
@@ -945,7 +1037,7 @@ function buildChildren(
     if (!child) continue;
     if (isSectionNode(child)) {
       withLine.push({
-        node: buildSectionNode(doc, child, includeLists, ctx, standaloneByParentId),
+        node: buildSectionNode(doc, child, includeLists, ctx, standaloneByParentId, listPrefixStyle),
         line: child.range.startLine,
       });
       continue;
@@ -954,12 +1046,12 @@ function buildChildren(
     const composite = ctx?.firstMemberIdToComposite.get(child.id);
     if (composite) {
       withLine.push({
-        node: buildCompositeNode(doc, composite, ctx!, standaloneByParentId),
+        node: buildCompositeNode(doc, composite, ctx!, standaloneByParentId, listPrefixStyle),
         line: composite.range.startLine,
       });
     } else if (includeLists) {
       withLine.push({
-        node: buildListNode(doc, child, ctx, standaloneByParentId),
+        node: buildListNode(doc, child, ctx, standaloneByParentId, listPrefixStyle),
         line: child.range.startLine,
       });
     }
@@ -1097,7 +1189,16 @@ export function buildOutlineTree(
   const standaloneByParentId = options?.standaloneComplexBlocks
     ? groupStandaloneComplexBlocks(doc, options.standaloneComplexBlocks.blocks, consumedComplexBlockIds, t)
     : undefined;
-  return buildChildren(doc, doc.topLevelIds, options?.includeLists ?? false, null, ctx, standaloneByParentId);
+  const listPrefixStyle = options?.listPrefixStyle ?? "none";
+  return buildChildren(
+    doc,
+    doc.topLevelIds,
+    options?.includeLists ?? false,
+    null,
+    ctx,
+    standaloneByParentId,
+    listPrefixStyle
+  );
 }
 
 /** Flatten a tree back into a list, depth-first, document order. */

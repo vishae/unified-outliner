@@ -647,6 +647,12 @@ export class OutlineTreeView extends ItemView {
       // `complexScan.blocks` list down to callout/blockquote +
       // editability "supported" + not-already-a-composite-member itself.
       standaloneComplexBlocks: { blocks: complexScan.blocks },
+      // UXP-04 (2026-08-15, "Configurable List Marker Prefix Display"):
+      // resolved once here at build time — see
+      // BuildOutlineTreeOptions.listPrefixStyle's own doc comment for why
+      // this, unlike headingPrefixStyle, is NOT read directly by this
+      // view's own rendering code.
+      listPrefixStyle: this.plugin.settings.listPrefixStyle,
       t: (key, vars) => this.plugin.t(key, vars),
     });
     this.nodeById = buildNodeByIdMap(this.currentTree);
@@ -1133,9 +1139,24 @@ export class OutlineTreeView extends ItemView {
       const innerEl = selfEl.createDiv({
         cls: "tree-item-inner unified-outliner-list-text",
       });
+      // UXP-04 (2026-08-15, "Configurable List Marker Prefix Display"):
+      // node.prefix is resolved once at build time (tree/buildOutlineTree.ts's
+      // listPrefixText, gated by settings.listPrefixStyle) — this branch
+      // just renders it, the same "own <span>, skipped entirely when
+      // absent, no separate CSS needed for the label span itself" pattern
+      // the composite/complex-member branches below already use. Uses
+      // createSpan (not setText, which would replace the whole innerEl's
+      // content) for BOTH the prefix and the label so the two can coexist
+      // as sibling spans.
+      if (node.prefix) {
+        innerEl.createSpan({
+          cls: "unified-outliner-list-prefix",
+          text: `${node.prefix} `,
+        });
+      }
       const displayText =
         node.text.length > 0 ? node.text : this.plugin.t("tree.emptyListItem");
-      innerEl.setText(displayText);
+      innerEl.createSpan({ cls: "unified-outliner-list-label", text: displayText });
       // Phase 3C.1: the label itself is CSS-truncated to one line (see
       // styles.css's unified-outliner-list-text), so long items always fit
       // the sidebar's current width without breaking the tree's

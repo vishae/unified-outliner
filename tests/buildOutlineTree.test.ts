@@ -21,6 +21,7 @@ import {
   isOutlineListNode,
   isOutlineSectionNode,
   listItemDisplayText,
+  listPrefixText,
   nodeDisplayLabel,
   OutlineTreeNode,
   standaloneComplexBlockLabel,
@@ -185,80 +186,165 @@ describe("buildOutlineTree (includeLists: true, Phase 3C)", () => {
     ]);
   });
 
-  // 2026-08-12 "数字リストの番号非表示バグ" fix: an ORDERED item's marker
-  // must survive into the Tree's display text (unlike bullets, which stay
-  // marker-free per the test above) — see listItemTreeDisplayText's own
-  // doc comment in tree/buildOutlineTree.ts for why this is a separate
-  // function from listItemDisplayText rather than a shared one.
-  describe("ordered list marker preservation (2026-08-12 fix)", () => {
-    it("keeps a simple '1.' marker in the display text", () => {
+  // UXP-04 (2026-08-15, "Configurable List Marker Prefix Display")
+  // superseded the 2026-08-12 "数字リストの番号非表示バグ" fix's own behavior:
+  // an ordered item's marker used to be baked directly into `node.text`.
+  // It now lives in the independent `node.prefix` field instead (produced
+  // by listPrefixText, resolved from settings.listPrefixStyle at
+  // buildOutlineTree() call time) — `text` is now ALWAYS the item's pure
+  // body label, for both ordered and unordered items alike, regardless of
+  // listPrefixStyle. These tests were rewritten in place (not left
+  // alongside new ones) specifically to keep pinning "the marker is never
+  // lost/duplicated", now against the new field.
+  describe("list marker prefix (UXP-04, supersedes the 2026-08-12 fix)", () => {
+    it("text has no marker, and prefix is null, when listPrefixStyle is omitted (default)", () => {
       const doc = parseDocument(["1. Ordered item"].join("\n"));
       const tree = buildOutlineTree(doc, { includeLists: true });
       const [node] = tree;
       if (!isOutlineListNode(node)) throw new Error("expected list node");
-      expect(node.text).toBe("1. Ordered item");
+      expect(node.text).toBe("Ordered item");
+      expect(node.prefix).toBeNull();
     });
 
-    it("keeps the ')' delimiter variant ('1)')", () => {
-      const doc = parseDocument(["1) Ordered item"].join("\n"));
-      const tree = buildOutlineTree(doc, { includeLists: true });
+    it("text has no marker, and prefix is null, when listPrefixStyle is explicitly \"none\"", () => {
+      const doc = parseDocument(["1. Ordered item"].join("\n"));
+      const tree = buildOutlineTree(doc, { includeLists: true, listPrefixStyle: "none" });
       const [node] = tree;
       if (!isOutlineListNode(node)) throw new Error("expected list node");
-      expect(node.text).toBe("1) Ordered item");
+      expect(node.text).toBe("Ordered item");
+      expect(node.prefix).toBeNull();
     });
 
-    it("keeps a mid-list restart number verbatim (does not renumber)", () => {
+    it("keeps a simple '1.' marker as prefix (not in text) when listPrefixStyle is \"marker\"", () => {
+      const doc = parseDocument(["1. Ordered item"].join("\n"));
+      const tree = buildOutlineTree(doc, { includeLists: true, listPrefixStyle: "marker" });
+      const [node] = tree;
+      if (!isOutlineListNode(node)) throw new Error("expected list node");
+      expect(node.text).toBe("Ordered item");
+      expect(node.prefix).toBe("1.");
+    });
+
+    it("keeps the ')' delimiter variant ('1)') as prefix", () => {
+      const doc = parseDocument(["1) Ordered item"].join("\n"));
+      const tree = buildOutlineTree(doc, { includeLists: true, listPrefixStyle: "marker" });
+      const [node] = tree;
+      if (!isOutlineListNode(node)) throw new Error("expected list node");
+      expect(node.text).toBe("Ordered item");
+      expect(node.prefix).toBe("1)");
+    });
+
+    it("keeps a mid-list restart number verbatim as prefix (does not renumber)", () => {
       // "3." here is NOT list position 3 — it's whatever digits the author
       // typed, exactly as parser/parseDocument.ts recorded in listMarker.
       const doc = parseDocument(["3. Third", "4. Fourth", "9. Ninth (typo, stays 9.)"].join("\n"));
-      const tree = buildOutlineTree(doc, { includeLists: true });
+      const tree = buildOutlineTree(doc, { includeLists: true, listPrefixStyle: "marker" });
       expect(tree.map((n) => (isOutlineListNode(n) ? n.text : ""))).toEqual([
-        "3. Third",
-        "4. Fourth",
-        "9. Ninth (typo, stays 9.)",
+        "Third",
+        "Fourth",
+        "Ninth (typo, stays 9.)",
       ]);
+      expect(tree.map((n) => (isOutlineListNode(n) ? n.prefix : ""))).toEqual(["3.", "4.", "9."]);
     });
 
-    it("preserves ordered markers at every nesting depth", () => {
+    it("resolves ordered-marker prefixes at every nesting depth", () => {
       const doc = parseDocument(
         ["1. Top", "    1. Nested one", "        1. Deeply nested"].join("\n")
       );
-      const tree = buildOutlineTree(doc, { includeLists: true });
+      const tree = buildOutlineTree(doc, { includeLists: true, listPrefixStyle: "marker" });
       const [top] = tree;
       if (!isOutlineListNode(top)) throw new Error("expected list node");
-      expect(top.text).toBe("1. Top");
+      expect(top.text).toBe("Top");
+      expect(top.prefix).toBe("1.");
       const [nested] = top.children;
       if (!isOutlineListNode(nested)) throw new Error("expected list node");
-      expect(nested.text).toBe("1. Nested one");
+      expect(nested.text).toBe("Nested one");
+      expect(nested.prefix).toBe("1.");
       const [deep] = nested.children;
       if (!isOutlineListNode(deep)) throw new Error("expected list node");
-      expect(deep.text).toBe("1. Deeply nested");
+      expect(deep.text).toBe("Deeply nested");
+      expect(deep.prefix).toBe("1.");
     });
 
-    it("mixes ordered and bullet items at the same level correctly", () => {
-      const doc = parseDocument(["1. First", "- a bullet", "2. Second"].join("\n"));
-      const tree = buildOutlineTree(doc, { includeLists: true });
+    it("resolves both ordered and unordered prefixes verbatim at the same level", () => {
+      const doc = parseDocument(["1. First", "- a bullet", "* star bullet", "+ plus bullet", "2. Second"].join("\n"));
+      const tree = buildOutlineTree(doc, { includeLists: true, listPrefixStyle: "marker" });
       expect(tree.map((n) => (isOutlineListNode(n) ? n.text : ""))).toEqual([
-        "1. First",
+        "First",
         "a bullet",
-        "2. Second",
+        "star bullet",
+        "plus bullet",
+        "Second",
+      ]);
+      expect(tree.map((n) => (isOutlineListNode(n) ? n.prefix : ""))).toEqual([
+        "1.",
+        "-",
+        "*",
+        "+",
+        "2.",
       ]);
     });
 
-    it("still shows just the bare marker for an empty ordered item (not the empty-item fallback)", () => {
+    it("an empty ordered item still gets its bare marker as prefix, with an empty (fallback-eligible) text", () => {
       const doc = parseDocument(["1. "].join("\n"));
-      const tree = buildOutlineTree(doc, { includeLists: true });
+      const tree = buildOutlineTree(doc, { includeLists: true, listPrefixStyle: "marker" });
       const [node] = tree;
       if (!isOutlineListNode(node)) throw new Error("expected list node");
-      expect(node.text).toBe("1.");
+      expect(node.text).toBe("");
+      expect(node.prefix).toBe("1.");
     });
 
-    it("an empty BULLET item still falls back to the empty-item placeholder text", () => {
+    it("an empty BULLET item still gets its bare marker as prefix too, with an empty (fallback-eligible) text", () => {
+      const doc = parseDocument(["- "].join("\n"));
+      const tree = buildOutlineTree(doc, { includeLists: true, listPrefixStyle: "marker" });
+      const [node] = tree;
+      if (!isOutlineListNode(node)) throw new Error("expected list node");
+      expect(node.text).toBe("");
+      expect(node.prefix).toBe("-");
+    });
+
+    it("an empty BULLET item still falls back to the empty-item placeholder text, unaffected by listPrefixStyle", () => {
       const doc = parseDocument(["- "].join("\n"));
       const tree = buildOutlineTree(doc, { includeLists: true });
       const [node] = tree;
       if (!isOutlineListNode(node)) throw new Error("expected list node");
       expect(node.text).toBe("");
+    });
+
+    it("a list item's own standalone-complex-member child (Phase 5C-5) is unaffected by listPrefixStyle", () => {
+      const doc = parseDocument(
+        ["- list item A", "  > [!note] list child callout", "  > body."].join("\n")
+      );
+      const complexScan = scanComplexBlocks(doc);
+      const tree = buildOutlineTree(doc, {
+        includeLists: true,
+        standaloneComplexBlocks: { blocks: complexScan.blocks },
+        listPrefixStyle: "marker",
+        t: createTranslator("en"),
+      });
+      const [item] = tree;
+      if (!isOutlineListNode(item)) throw new Error("expected list node");
+      expect(item.prefix).toBe("-");
+      expect(item.children).toHaveLength(1);
+      expect(item.children[0].kind).toBe("complex-member");
+    });
+
+    it("a composite's own decorative prefix is untouched by listPrefixStyle (different field, different concern)", () => {
+      const doc = parseDocument(["- ![[dummy.png]]", "> [!ocr]", "> extracted text."].join("\n"));
+      const complexScan = scanComplexBlocks(doc);
+      const infos = matchCompositeBlocks(doc, complexScan, DEFAULT_COMPOSITE_BLOCK_RULES);
+      const complexBlocksById = new Map(complexScan.blocks.map((b) => [b.id, b]));
+      const tree = buildOutlineTree(doc, {
+        includeLists: true,
+        composites: { infos, complexBlocksById, rules: DEFAULT_COMPOSITE_BLOCK_RULES },
+        listPrefixStyle: "marker",
+        t: createTranslator("en"),
+      });
+      const [node] = tree;
+      if (!isOutlineCompositeNode(node)) throw new Error("expected composite node");
+      // The composite's own `prefix` (a decorative rule-level glyph, e.g.
+      // "◉") is a completely different field from OutlineTreeListNode.prefix
+      // — this just pins that UXP-04 didn't accidentally change it.
+      expect(typeof node.prefix).toBe("string");
     });
   });
 
@@ -314,16 +400,21 @@ describe("nodeDisplayLabel", () => {
     expect(nodeDisplayLabel(doc, empty)).toBe("(Empty list item)");
   });
 
-  // 2026-08-12 fix: nodeDisplayLabel (Tree label / breadcrumb source) keeps
-  // the ordered marker; listItemDisplayText (rename textarea's initial
-  // editable value) must NOT — regression guard for the marker-duplication
-  // risk described on listItemTreeDisplayText's doc comment.
-  it("keeps the ordered marker for a list item, unlike listItemDisplayText", () => {
+  // UXP-04 (2026-08-15, "Configurable List Marker Prefix Display")
+  // superseded the 2026-08-12 fix's behavior here: nodeDisplayLabel no
+  // longer embeds the ordered marker either — it now matches
+  // listItemDisplayText's own marker-free output exactly, since the marker
+  // moved to OutlineTreeListNode.prefix (a field breadcrumb/title labels,
+  // which just consume this plain string, have no equivalent slot for —
+  // see listItemTreeDisplayText's own doc comment for this ticket's
+  // explicit acknowledgment of that consequence).
+  it("no longer embeds the ordered marker for a list item — matches listItemDisplayText", () => {
     const doc = parseDocument("1. one");
     const node = ownerAt(doc, 0);
-    expect(nodeDisplayLabel(doc, node)).toBe("1. one");
+    expect(nodeDisplayLabel(doc, node)).toBe("one");
     if (!isListNode(node)) throw new Error("expected list node");
     expect(listItemDisplayText(doc, node)).toBe("one");
+    expect(nodeDisplayLabel(doc, node)).toBe(listItemDisplayText(doc, node));
   });
 });
 
@@ -590,6 +681,7 @@ describe("collectReadOnlyOutlineNodeIds (Phase 5D-0.3)", () => {
       kind: "list",
       id: "li-nested",
       text: "nested",
+      prefix: null,
       indentDepth: 1,
       line: 2,
       children: [],
@@ -598,6 +690,7 @@ describe("collectReadOnlyOutlineNodeIds (Phase 5D-0.3)", () => {
       kind: "list",
       id: "li-member",
       text: "member",
+      prefix: null,
       indentDepth: 0,
       line: 1,
       children: [nested],
@@ -708,6 +801,69 @@ describe("headingPrefixText (2026-08-12 'Heading prefix 表示設定' ticket)", 
     // confirms the DOWNSTREAM effect: "none" must be indistinguishable from
     // "no prefix rendered at all", not e.g. an empty-but-still-badged state.
     expect(headingPrefixText("none", 4)).toBe("");
+  });
+});
+
+/** Helper for listPrefixText's own tests below: parses a single-line document and returns its one ListBlockNode. */
+function soleListItem(line: string) {
+  const doc = parseDocument(line);
+  const node = ownerAt(doc, 0);
+  if (!isListNode(node)) throw new Error("expected list node");
+  return node;
+}
+
+describe("listPrefixText (UXP-04 'Configurable List Marker Prefix Display' ticket)", () => {
+  it("'none' returns null for an ordered item", () => {
+    expect(listPrefixText("none", soleListItem("1. Ordered item"))).toBeNull();
+  });
+
+  it("'none' returns null for an unordered item", () => {
+    expect(listPrefixText("none", soleListItem("- Bulleted item"))).toBeNull();
+  });
+
+  it("'marker' returns the exact ordered marker '1.' verbatim", () => {
+    expect(listPrefixText("marker", soleListItem("1. Ordered item"))).toBe("1.");
+  });
+
+  it("'marker' returns a mid-list restart ordered marker '3.' verbatim (no renumbering)", () => {
+    expect(listPrefixText("marker", soleListItem("3. Third"))).toBe("3.");
+  });
+
+  it("'marker' returns the ')' delimiter variant '2)' verbatim", () => {
+    expect(listPrefixText("marker", soleListItem("2) Ordered item"))).toBe("2)");
+  });
+
+  it("'marker' returns the exact unordered marker '-' verbatim", () => {
+    expect(listPrefixText("marker", soleListItem("- Bulleted item"))).toBe("-");
+  });
+
+  it("'marker' returns the exact unordered marker '*' verbatim", () => {
+    expect(listPrefixText("marker", soleListItem("* Bulleted item"))).toBe("*");
+  });
+
+  it("'marker' returns the exact unordered marker '+' verbatim", () => {
+    expect(listPrefixText("marker", soleListItem("+ Bulleted item"))).toBe("+");
+  });
+
+  it("'marker' returns the bare marker even for an item with no body text", () => {
+    expect(listPrefixText("marker", soleListItem("1. "))).toBe("1.");
+    expect(listPrefixText("marker", soleListItem("- "))).toBe("-");
+  });
+
+  it("returns null for an empty/whitespace-only marker (defensive — not reachable from real parsed data)", () => {
+    const item = soleListItem("- Bulleted item");
+    expect(listPrefixText("marker", { ...item, listMarker: "" })).toBeNull();
+    expect(listPrefixText("marker", { ...item, listMarker: "   " })).toBeNull();
+  });
+
+  it("does not invent a task-list-specific prefix for body text that merely looks like a checkbox", () => {
+    // task-list checkboxes are not modeled anywhere in parser/model/block.ts
+    // (per this ticket's own investigation) — listMarker is always the
+    // plain list marker itself, never something derived from the body text,
+    // so a body like "[x] done" must not change what this function returns.
+    const item = soleListItem("- [x] done");
+    expect(listPrefixText("marker", item)).toBe("-");
+    expect(listPrefixText("marker", item)).not.toContain("[x]");
   });
 });
 

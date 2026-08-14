@@ -3,6 +3,7 @@ import type UnifiedOutlinerPlugin from "./main";
 import {
   DEFAULT_SETTINGS,
   HeadingPrefixStyle,
+  ListPrefixStyle,
   OutlineTreeSidebarPosition,
   TreeKindHighlightSettings,
   UnifiedOutlinerSettings,
@@ -289,6 +290,28 @@ export class UnifiedOutlinerSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.headingPrefixStyle)
           .onChange(async (v) => {
             this.plugin.settings.headingPrefixStyle = v as HeadingPrefixStyle;
+            await this.plugin.saveSettings();
+            this.plugin.refreshOutlineTreeViews();
+          })
+      );
+
+    // UXP-04 (2026-08-15, "Configurable List Marker Prefix Display"): unlike
+    // headingPrefixStyle just above, node.prefix is resolved at Tree-BUILD
+    // time (buildOutlineTree.ts's listPrefixText), not at render time — but
+    // this control still needs to call refreshOutlineTreeViews() on change,
+    // same as headingPrefixStyle, since that's what re-runs buildOutlineTree
+    // (via refresh()) against the new setting value for every open Outline
+    // Tree View leaf.
+    new Setting(containerEl)
+      .setName(this.plugin.t("settings.listPrefixStyle.name"))
+      .setDesc(this.plugin.t("settings.listPrefixStyle.desc"))
+      .addDropdown((d) =>
+        d
+          .addOption("none", this.plugin.t("settings.listPrefixStyle.optionNone"))
+          .addOption("marker", this.plugin.t("settings.listPrefixStyle.optionMarker"))
+          .setValue(this.plugin.settings.listPrefixStyle)
+          .onChange(async (v) => {
+            this.plugin.settings.listPrefixStyle = v as ListPrefixStyle;
             await this.plugin.saveSettings();
             this.plugin.refreshOutlineTreeViews();
           })

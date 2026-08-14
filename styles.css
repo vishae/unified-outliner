@@ -603,6 +603,29 @@ settings:
   white-space: nowrap;
 }
 
+/* UXP-04 (2026-08-15, docs/uxp-04-list-prefix-display-verification.md):
+ * optional prefix showing a list item's own actual Markdown list marker
+ * ("-", "*", "+", "1.", "2)", ...) verbatim (settings.listPrefixStyle ===
+ * "marker" — see tree/buildOutlineTree.ts's listPrefixText). Deliberately
+ * NOT styled like .unified-outliner-heading-prefix's bordered badge: a
+ * list marker is structural information copied from the Markdown source,
+ * not a classification chip, and this row already sits alongside the fold
+ * arrow / drag handle / (Phase 5C-5) list-child complex-member indicators
+ * — a muted inline prefix, not a second visual weight class, is what the
+ * ticket's own "視覚的な圧迫を増やさない" requirement asks for. Reuses
+ * --uo-list-text-color (already the label's own color) at reduced opacity
+ * rather than introducing a new themeable variable, so the prefix reads as
+ * quieter than the label without needing its own Style Settings entry. No
+ * width/overflow rules of its own: it's the FIRST thing in
+ * .unified-outliner-list-text's flow, so that class's own text-overflow:
+ * ellipsis (which truncates trailing content) can never cut the prefix off
+ * before the label — only a row narrower than the prefix itself could, an
+ * edge case no real list marker is wide enough to hit. */
+.unified-outliner-list-prefix {
+  color: var(--uo-list-text-color);
+  opacity: 0.75;
+}
+
 /* Phase 5D-0.3: CompositeBlock parent row / read-only complex-block member
  * row (view/OutlineTreeView.ts's isOutlineCompositeNode/
  * isOutlineComplexMemberNode branches). Sized/colored like a list row

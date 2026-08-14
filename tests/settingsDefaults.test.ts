@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SETTINGS,
   DEFAULT_TREE_KIND_HIGHLIGHT,
+  isValidListPrefixStyle,
   isValidOutlineTreeSidebarPosition,
   mergeSettings,
 } from "../src/settingsDefaults";
@@ -246,5 +247,47 @@ describe("settingsDefaults: outlineTreeSidebarPosition (UXP-03)", () => {
     expect(isValidOutlineTreeSidebarPosition("top")).toBe(false);
     expect(isValidOutlineTreeSidebarPosition(undefined)).toBe(false);
     expect(isValidOutlineTreeSidebarPosition(null)).toBe(false);
+  });
+});
+
+/**
+ * UXP-04 (2026-08-15, "Configurable List Marker Prefix Display"):
+ * listPrefixStyle is a top-level SCALAR, same shape as `language` /
+ * outlineTreeSidebarPosition above (not nested like treeKindHighlight) —
+ * and, per this ticket's own explicit "不正な永続値が入っていた場合も、安全に
+ * none へ正規化してください" requirement, gets the same explicit
+ * re-validation treatment those two fields get, NOT the looser treatment
+ * headingPrefixStyle relies on (shallow Object.assign alone).
+ */
+describe("settingsDefaults: listPrefixStyle (UXP-04)", () => {
+  it("defaults to \"none\" (matches the pre-UXP-04 Outline Tree look)", () => {
+    expect(DEFAULT_SETTINGS.listPrefixStyle).toBe("none");
+  });
+
+  it("mergeSettings resolves to \"none\" when raw omits the key entirely (pre-UXP-04 data.json)", () => {
+    const merged = mergeSettings({ allowCrossSectionListMove: false });
+    expect(merged.listPrefixStyle).toBe("none");
+  });
+
+  it("mergeSettings preserves an explicit \"marker\"", () => {
+    expect(mergeSettings({ listPrefixStyle: "marker" }).listPrefixStyle).toBe("marker");
+  });
+
+  it("mergeSettings preserves an explicit \"none\"", () => {
+    expect(mergeSettings({ listPrefixStyle: "none" }).listPrefixStyle).toBe("none");
+  });
+
+  it("mergeSettings falls back to \"none\" for an invalid/corrupted value", () => {
+    expect(mergeSettings({ listPrefixStyle: "auto" }).listPrefixStyle).toBe("none");
+    expect(mergeSettings({ listPrefixStyle: 123 }).listPrefixStyle).toBe("none");
+    expect(mergeSettings({ listPrefixStyle: null }).listPrefixStyle).toBe("none");
+  });
+
+  it("isValidListPrefixStyle accepts only \"none\"/\"marker\"", () => {
+    expect(isValidListPrefixStyle("none")).toBe(true);
+    expect(isValidListPrefixStyle("marker")).toBe(true);
+    expect(isValidListPrefixStyle("auto")).toBe(false);
+    expect(isValidListPrefixStyle(undefined)).toBe(false);
+    expect(isValidListPrefixStyle(null)).toBe(false);
   });
 });

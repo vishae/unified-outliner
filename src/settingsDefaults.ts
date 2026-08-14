@@ -130,10 +130,48 @@ export interface UnifiedOutlinerSettings {
    * or touch any existing leaf for the same reason.
    */
   outlineTreeSidebarPosition: OutlineTreeSidebarPosition;
+  /**
+   * UXP-04 (2026-08-15, "Configurable List Marker Prefix Display"): whether
+   * the Outline Tree shows a list item's own actual Markdown list marker
+   * (`item.listMarker` — "-", "*", "+", "1.", "2)", a mid-list restart like
+   * "3.", ...) as an independent prefix before its label text, the same
+   * "separate <span> rendered before the label" architecture
+   * OutlineTreeCompositeNode.prefix / OutlineTreeComplexMemberNode.prefix
+   * already use — see tree/buildOutlineTree.ts's listPrefixText and
+   * OutlineTreeListNode.prefix.
+   *
+   * Deliberately a two-value union, NOT three: a hypothetical "auto" value
+   * (e.g. "show for ordered lists only") was considered and rejected —
+   * task-list checkboxes are not modeled anywhere in parser/model/block.ts
+   * today, so there is no third display mode this setting could usefully
+   * distinguish yet; add one only once task-list support actually exists
+   * and a real need is demonstrated, not speculatively.
+   *
+   * Defaults to "none" so existing installs (pre-ticket data.json, where
+   * this key is absent) keep their current look unchanged — this is a
+   * top-level scalar field, but (unlike headingPrefixStyle) DOES get an
+   * explicit mergeSettings re-validation, same treatment as `language` /
+   * `outlineTreeSidebarPosition`, per this ticket's own explicit "不正な
+   * 永続値が入っていた場合も、安全に none へ正規化してください" requirement.
+   */
+  listPrefixStyle: ListPrefixStyle;
 }
 
 /** See UnifiedOutlinerSettings.headingPrefixStyle's doc comment. */
 export type HeadingPrefixStyle = "none" | "hLevel" | "atx";
+
+/** See UnifiedOutlinerSettings.listPrefixStyle's doc comment. */
+export type ListPrefixStyle = "none" | "marker";
+
+/**
+ * Guards mergeSettings's re-validation of a raw, possibly-corrupted/
+ * hand-edited listPrefixStyle value — same role isValidOutlineTreeSidebarPosition
+ * plays for that field. See UnifiedOutlinerSettings.listPrefixStyle's doc
+ * comment for why this stays a strict two-value union.
+ */
+export function isValidListPrefixStyle(value: unknown): value is ListPrefixStyle {
+  return value === "none" || value === "marker";
+}
 
 /** See UnifiedOutlinerSettings.outlineTreeSidebarPosition's doc comment. */
 export type OutlineTreeSidebarPosition = "right" | "left";
@@ -220,6 +258,7 @@ export const DEFAULT_SETTINGS: UnifiedOutlinerSettings = {
   compositeBlocks: { ...DEFAULT_COMPOSITE_BLOCK_SETTINGS },
   headingPrefixStyle: "none",
   outlineTreeSidebarPosition: "right",
+  listPrefixStyle: "none",
 };
 
 /**
@@ -282,5 +321,14 @@ export function mergeSettings(
   )
     ? raw.outlineTreeSidebarPosition
     : DEFAULT_SETTINGS.outlineTreeSidebarPosition;
+  // listPrefixStyle (UXP-04): same "top-level scalar, explicit
+  // re-validation" treatment as `language`/`outlineTreeSidebarPosition`
+  // above — a raw value other than "none"/"marker" (a corrupted/
+  // hand-edited data.json, or a future value this version doesn't know)
+  // safely normalizes to the "none" default rather than reaching
+  // tree/buildOutlineTree.ts's listPrefixText unchecked.
+  merged.listPrefixStyle = isValidListPrefixStyle(raw.listPrefixStyle)
+    ? raw.listPrefixStyle
+    : DEFAULT_SETTINGS.listPrefixStyle;
   return merged;
 }
