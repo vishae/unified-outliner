@@ -89,6 +89,21 @@
  * breadcrumb and Subtree Navigator (hidden entirely when empty), this row
  * stays visible whenever a node is loaded and disables whichever button has
  * no target, per the spec's §3 UI 仕様.
+ *
+ * Phase 5C-4 (2026-08-14, "Standalone Callout / Blockquote の Partial Edit
+ * Popout 完成と元ノート同一性の安全化"): adds an "Open in new window" menu
+ * item for standalone (non-composite-member) callout/blockquote rows (see
+ * view/OutlineTreeView.ts's showStandaloneComplexBlockMenu) — reusing this
+ * pane's pre-existing, unchanged Phase 5A popout support
+ * (activatePartialEditView's `openInNewWindow` option) rather than adding
+ * any new window-management code here. This ticket also adds `sourcePath`
+ * — the file path of the note this pane's currently-loaded node was
+ * actually read from, recorded once per loadNodeInternal call — as an
+ * ADDITIONAL, path-based safety valve checked by applyEdit before its
+ * existing content-based conflict check, never a replacement for it. See
+ * view/partialEditSourceNoteCheck.ts's own doc comment for the full
+ * rationale (popout makes "switch notes in the other window, then Apply"
+ * an easier mistake to make than it was while the pane was always docked).
  */
 import { App, ItemView, Menu, Modal, Notice, WorkspaceLeaf, setIcon, setTooltip } from "obsidian";
 import type UnifiedOutlinerPlugin from "../main";
@@ -100,6 +115,7 @@ import { AncestorPathEntry, findAncestorPath } from "../tree/ancestorPath";
 import { DescendantNavigationEntry, findDirectChildren } from "../tree/descendantPath";
 import { SiblingNavigationState, getSiblingNavigationState } from "../tree/siblingNavigation";
 import { applyLineEditOutcome } from "../commands/applyLineEditOutcome";
+import { checkPartialEditSourceNote } from "./partialEditSourceNoteCheck";
 import { TranslationKey } from "../i18n";
 
 export const PARTIAL_EDIT_VIEW_TYPE = "unified-outliner-partial-edit";
@@ -123,6 +139,16 @@ export class PartialEditView extends ItemView {
   private label = "";
   /** The pane's "before editing" snapshot — see edit/partialEdit.ts's applySubtreeEdit doc comment. */
   private originalText = "";
+  /**
+   * Phase 5C-4: the file path of the note `nodeId` was actually loaded
+   * from, recorded once per loadNodeInternal call (never recomputed
+   * mid-edit, same "static until the next load" policy as `ancestors`/
+   * `directChildren`/`siblingState` below). `null` only before any node has
+   * ever been loaded, or if the resolved MarkdownView had no file (see
+   * loadNodeInternal). Read by applyEdit as the ADDITIONAL, path-based
+   * safety check — see view/partialEditSourceNoteCheck.ts.
+   */
+  private sourcePath: string | null = null;
   /** Phase 5B: root-first ancestors of the currently loaded node, computed once at load time — see renderBreadcrumb's doc comment for why this is never recomputed mid-edit. */
   private ancestors: AncestorPathEntry[] = [];
   /** Subtree Navigator: the loaded node's own direct children, computed once at load time alongside `ancestors` — see renderSubtreeNavigator's doc comment. */
@@ -463,6 +489,11 @@ export class PartialEditView extends ItemView {
     this.nodeKind = extracted.kind;
     this.originalText = extracted.text;
     this.label = label;
+    // Phase 5C-4: recorded fresh on every load, from the SAME `view` this
+    // method already resolved `doc` from above — see the class field's own
+    // doc comment and view/partialEditSourceNoteCheck.ts for why this
+    // exists and how applyEdit uses it.
+    this.sourcePath = view.file?.path ?? null;
     // Phase 5C-2: breadcrumb / sibling nav / Subtree Navigator stay at
     // their empty state for a callout/blockquote — this ticket's own
     // approved scope explicitly leaves those three unextended
@@ -491,6 +522,9 @@ export class PartialEditView extends ItemView {
     this.ancestors = [];
     this.directChildren = [];
     this.siblingState = { previous: null, next: null };
+    // Phase 5C-4: reset alongside the other per-load fields above — see
+    // the class field's own doc comment.
+    this.sourcePath = null;
     this.renderBreadcrumb();
     this.renderSiblingNav();
     this.renderSubtreeNavigator();
@@ -829,6 +863,27 @@ export class PartialEditView extends ItemView {
     const editor = view.editor;
     if (editor.listSelections().length > 1) {
       new Notice(this.plugin.t("notice.multipleCursors"));
+      return false;
+    }
+
+    // Phase 5C-4: an ADDITIONAL, path-based safety valve, checked BEFORE
+    // the existing content-based conflict check below — never a
+    // replacement for it (that check, in applySubtreeEdit, is completely
+    // unchanged by this ticket). `view` here may already be a DIFFERENT
+    // note than the one `this.sourcePath` was recorded from, if the active
+    // note changed elsewhere (in another window, when this pane is popped
+    // out) since this pane last loaded — see
+    // view/partialEditSourceNoteCheck.ts's own doc comment for the full
+    // rationale. Both "note changed" and "path unavailable" fail safe:
+    // Apply is refused and the editor is left byte-for-byte untouched,
+    // exactly like every other refusal reason in this method.
+    const sourceNoteCheck = checkPartialEditSourceNote(this.sourcePath, view.file?.path ?? null);
+    if (sourceNoteCheck !== "ok") {
+      const reasonKey: TranslationKey =
+        sourceNoteCheck === "changed"
+          ? "reason.partialEditSourceNoteChanged"
+          : "reason.partialEditSourceNoteUnknown";
+      new Notice(this.plugin.t(reasonKey));
       return false;
     }
 

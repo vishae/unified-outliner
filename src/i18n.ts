@@ -404,6 +404,17 @@ const en = {
     "Unified Outliner: could not confirm this block's boundary — the move was skipped for safety.",
   "reason.standaloneMoveNoTarget":
     "Unified Outliner: could not determine a safe move target.",
+
+  // ---- Partial Edit Pane source-note safety valve (Phase 5C-4,
+  // view/partialEditSourceNoteCheck.ts). An ADDITIONAL, path-based check —
+  // never a replacement for edit/partialEdit.ts's own content-based
+  // conflict detection (applySubtreeEdit's current.text !== originalText
+  // compare, which stays completely unchanged). Both reasons fail safe:
+  // Apply is refused and the note is left untouched either way.
+  "reason.partialEditSourceNoteChanged":
+    "Unified Outliner: the active note is different from the one this edit was loaded from — apply was cancelled to avoid changing the wrong note.",
+  "reason.partialEditSourceNoteUnknown":
+    "Unified Outliner: could not confirm which note this edit belongs to — apply was cancelled for safety.",
 } as const;
 
 export type TranslationKey = keyof typeof en;
@@ -730,6 +741,16 @@ const ja: Record<TranslationKey, string> = {
     "Unified Outliner: このブロックの範囲を確認できなかったため、安全のため移動をスキップした。",
   "reason.standaloneMoveNoTarget":
     "Unified Outliner: 安全な移動先を特定できなかった。",
+
+  // ---- 部分編集ペインの元ノート同一性チェック（Phase 5C-4、
+  // view/partialEditSourceNoteCheck.ts）。追加の、パスに基づく安全弁 —
+  // edit/partialEdit.ts 自身の内容比較による競合検知（applySubtreeEditの
+  // current.text !== originalText 比較）は変更せずそのまま残す。いずれの
+  // 理由でもApplyは拒否され、ノートは変更されない。
+  "reason.partialEditSourceNoteChanged":
+    "Unified Outliner: この編集を読み込んだノートと現在アクティブなノートが異なるため、誤ったノートを変更しないようApplyを中止した。",
+  "reason.partialEditSourceNoteUnknown":
+    "Unified Outliner: この編集がどのノートに属するか確認できなかったため、安全のためApplyを中止した。",
 };
 
 const DICTIONARIES: Record<SupportedLocale, Record<TranslationKey, string>> = {

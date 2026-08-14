@@ -2347,6 +2347,20 @@ export class OutlineTreeView extends ItemView {
    * unconditionally in that set (see collectReadOnlyOutlineNodeIds), so
    * this menu exists alongside that gate, not conditioned on it — same
    * relationship showCompositeCommandMenu has with the set.
+   *
+   * Phase 5C-4 ("Standalone Callout / Blockquote の Partial Edit Popout 完成
+   * と元ノート同一性の安全化"): adds a second, also-unconditional item,
+   * "Open in new window" — the exact same popout shortcut
+   * showStructureCommandMenu's/showListCommandMenu's own
+   * tree.menu.openPartialEditPaneNewWindow items already provide for
+   * section/list, reusing that same i18n key (deliberately not a new
+   * standalone-specific key — the wording is kind-neutral) and the exact
+   * same, unchanged activatePartialEditView(nodeId, { openInNewWindow:
+   * true }) entry point. No new eligibility gate: like "Open in Partial
+   * Edit" above, this has no movability/deletability concept of its own,
+   * so it is always shown whenever this menu is reached at all — the same
+   * "never suppress the whole menu" asymmetry with showCompositeCommandMenu
+   * this class doc comment above already establishes for this method.
    */
   private showStandaloneComplexBlockMenu(evt: MouseEvent, nodeId: string): void {
     const menu = new Menu();
@@ -2360,6 +2374,15 @@ export class OutlineTreeView extends ItemView {
         // in main.ts, and showStructureCommandMenu's identical item
         // above for the same pattern.
         .onClick(() => void this.plugin.activatePartialEditView(nodeId))
+    );
+    // Phase 5C-4: see this method's own doc comment above.
+    menu.addItem((item) =>
+      item
+        .setTitle(this.plugin.t("tree.menu.openPartialEditPaneNewWindow"))
+        .setIcon("picture-in-picture-2")
+        .onClick(() =>
+          void this.plugin.activatePartialEditView(nodeId, { openInNewWindow: true })
+        )
     );
 
     const doc = this.currentDoc;
