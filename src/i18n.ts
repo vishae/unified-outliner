@@ -145,6 +145,8 @@ const en = {
   "command.moveSectionDown": "Move section down (whole enclosing section)",
   "command.moveNodeOnlyUp": "Move heading label up (current line only)",
   "command.moveNodeOnlyDown": "Move heading label down (current line only)",
+  "command.moveCompositeBlockUp": "Move extended block up (at cursor)",
+  "command.moveCompositeBlockDown": "Move extended block down (at cursor)",
   "command.indentBlock": "Indent block (list subtree / safe-scope heading)",
   "command.outdentBlock": "Outdent block (list subtree / safe-scope heading)",
   "command.indentNodeOnly": "Indent heading level (current line only)",
@@ -357,6 +359,17 @@ const en = {
     "Unified Outliner: the note changed since this extended block was selected — the move was cancelled to avoid affecting the wrong content.",
   "reason.compositeMoveRangeInvalid":
     "Unified Outliner: could not confirm this extended block's boundary — the move was skipped for safety.",
+
+  // ---- CompositeBlock cursor/selection-driven move reasons
+  // (move/resolveCompositeSelectionTarget.ts's CompositeSelectionRejectionReason,
+  // Phase 5C-1 ticket 4-5). "multiple-selections" deliberately reuses the
+  // existing notice.multipleCursors key above (see
+  // edit/moveCompositeBlock.ts#compositeMoveReasonText's own doc comment) —
+  // not duplicated here.
+  "reason.compositeMoveNoTargetAtCursor":
+    "Unified Outliner: no extended block was found at the cursor position.",
+  "reason.compositeMoveSelectionOutOfBounds":
+    "Unified Outliner: the current selection extends beyond this extended block — the move was cancelled.",
 } as const;
 
 export type TranslationKey = keyof typeof en;
@@ -438,6 +451,8 @@ const ja: Record<TranslationKey, string> = {
   "command.moveSectionDown": "セクションを下へ移動（囲むセクション全体）",
   "command.moveNodeOnlyUp": "見出しラベルを上へ移動（現在行のみ）",
   "command.moveNodeOnlyDown": "見出しラベルを下へ移動（現在行のみ）",
+  "command.moveCompositeBlockUp": "拡張ブロックを上へ移動（カーソル位置）",
+  "command.moveCompositeBlockDown": "拡張ブロックを下へ移動（カーソル位置）",
   "command.indentBlock": "ブロックをインデント（リストサブツリー／安全範囲の見出し）",
   "command.outdentBlock": "ブロックをアウトデント（リストサブツリー／安全範囲の見出し）",
   "command.indentNodeOnly": "見出しレベルをインデント（現在行のみ）",
@@ -644,6 +659,16 @@ const ja: Record<TranslationKey, string> = {
     "Unified Outliner: この拡張ブロックを選択した後にノートが変更されたため、誤った内容に影響しないよう移動をキャンセルした。",
   "reason.compositeMoveRangeInvalid":
     "Unified Outliner: この拡張ブロックの範囲を確認できなかったため、安全のため移動をスキップした。",
+
+  // ---- カーソル／選択範囲起点の拡張ブロックmove理由
+  // (move/resolveCompositeSelectionTarget.ts の CompositeSelectionRejectionReason、
+  // Phase 5C-1 チケット4-5)。"multiple-selections" は上記の
+  // notice.multipleCursors を意図的に再利用する（edit/moveCompositeBlock.ts
+  // の compositeMoveReasonText 自身のコメント参照）— ここには複製しない。
+  "reason.compositeMoveNoTargetAtCursor":
+    "Unified Outliner: カーソル位置に拡張ブロックが見つからなかった。",
+  "reason.compositeMoveSelectionOutOfBounds":
+    "Unified Outliner: 現在の選択範囲がこの拡張ブロックの外へはみ出しているため、移動をキャンセルした。",
 };
 
 const DICTIONARIES: Record<SupportedLocale, Record<TranslationKey, string>> = {

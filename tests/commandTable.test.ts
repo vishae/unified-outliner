@@ -76,7 +76,7 @@ describe("main.ts command table (static source check)", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("command ids match the exact, unchanged set this refactor started from (id changes would silently orphan existing hotkeys)", () => {
+  it("command ids match the exact, known set (id changes would silently orphan existing hotkeys) — updated for Phase 5C-1 ticket 4-5's move-composite-block-up/down addition", () => {
     const body = getCommandSpecsBody();
     const ids = [...body.matchAll(/\bid:\s*"([^"]+)"/g)].map((m) => m[1]);
 
@@ -87,6 +87,8 @@ describe("main.ts command table (static source check)", () => {
       "move-section-down",
       "move-node-only-up",
       "move-node-only-down",
+      "move-composite-block-up",
+      "move-composite-block-down",
       "indent-block",
       "outdent-block",
       "indent-node-only",

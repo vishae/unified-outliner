@@ -6,6 +6,12 @@ import { MoveDirection } from "./move/findMoveTarget";
 import { moveBlock } from "./move/moveBlock";
 import { moveNodeOnly } from "./move/moveNodeOnly";
 import { indentBlock } from "./move/indentBlock";
+import { scanComplexBlocks } from "./parser/complexBlocks";
+import { matchCompositeBlocks } from "./parser/compositeBlocks";
+import { buildCompositeBlockSnapshot } from "./edit/deleteCompositeBlock";
+import { compositeMoveReasonText, moveCompositeBlock } from "./edit/moveCompositeBlock";
+import { CompositeMoveDirection } from "./move/findCompositeMoveTarget";
+import { resolveCompositeSelectionTarget } from "./move/resolveCompositeSelectionTarget";
 import {
   MoveComplexBlockOutcome,
   ResolvedMoveUnit,
@@ -38,7 +44,7 @@ import {
   UnifiedOutlinerSettings,
   UnifiedOutlinerSettingTab,
 } from "./settings";
-import { mergeSettings } from "./settingsDefaults";
+import { getEnabledCompositeBlockRules, mergeSettings } from "./settingsDefaults";
 import {
   createTranslator,
   SupportedLocale,
@@ -289,6 +295,28 @@ export default class UnifiedOutlinerPlugin extends Plugin {
         id: "move-node-only-down",
         translationKey: "command.moveNodeOnlyDown",
         editorCallback: (editor) => this.moveCurrentNodeOnly(editor, "down"),
+      },
+      // Phase 5C-1 ticket 4-5 (2026-08-14): composite-block-aware move,
+      // reached from the body editor's own cursor/selection rather than the
+      // Outline Tree row context menu (ticket 4-4's own entry point,
+      // unchanged and untouched by this ticket). Resolves to a
+      // CompositeBlock ONLY when the cursor sits inside one and any
+      // non-collapsed selection stays entirely within that composite's own
+      // range — see move/resolveCompositeSelectionTarget.ts's own doc
+      // comment for the exact contract and this ticket's explicit non-goal
+      // ("this does not move the selection itself"). Deliberately separate
+      // from move-block-up/down above: never touches
+      // resolveMoveUnit/moveBlock/moveComplexBlock, so that command's own
+      // resolution, behavior, and tests are entirely unaffected.
+      {
+        id: "move-composite-block-up",
+        translationKey: "command.moveCompositeBlockUp",
+        editorCallback: (editor) => this.moveCurrentCompositeBlock(editor, "up"),
+      },
+      {
+        id: "move-composite-block-down",
+        translationKey: "command.moveCompositeBlockDown",
+        editorCallback: (editor) => this.moveCurrentCompositeBlock(editor, "down"),
       },
       // Block-scoped: reindents/reparents a whole list subtree, or changes
       // a heading's level under the section-safety checks in
@@ -980,6 +1008,91 @@ export default class UnifiedOutlinerPlugin extends Plugin {
       doc.lines,
       outcome,
       () => this.notice(this.reasonText(outcome.reason))
+    );
+  }
+
+  /**
+   * Phase 5C-1 ticket 4-5 (2026-08-14): move-composite-block-up/down's thin
+   * dispatch. Deliberately a THIN connector only — every real decision is
+   * made by pure functions this method just calls in sequence and reacts
+   * to:
+   *
+   *   1. Read `editor.listSelections()`/`editor.getCursor()` — the only
+   *      Obsidian-Editor-API reads this method performs.
+   *   2. `parseDocument` -> `scanComplexBlocks` -> `matchCompositeBlocks`
+   *      (this plugin's own currently-enabled composite rules — same
+   *      pipeline view/OutlineTreeView.ts's Tree projection and
+   *      edit/moveCompositeBlock.ts both already use; rule PRIORITY order
+   *      — callout ("image-ocr") before blockquote ("image-quote") — is
+   *      whatever DEFAULT_COMPOSITE_BLOCK_RULES/getEnabledCompositeBlockRules
+   *      already establish, unchanged here).
+   *   3. `resolveCompositeSelectionTarget` (this ticket's own new pure
+   *      function) — decides whether the cursor/selection names exactly one
+   *      CompositeBlock. `allowed: false` -> Notice via
+   *      compositeMoveReasonText, text untouched, return.
+   *   4. `buildCompositeBlockSnapshot` -> `moveCompositeBlock` (tickets
+   *      2/4-3, UNCHANGED) — re-verifies boundary identity and movability
+   *      against the current text all over again before ever swapping
+   *      anything, exactly like Tree-driven
+   *      dispatchAndApplyCompositeMove (ticket 4-4) already does.
+   *   5. `applyLineEditOutcome` (UNCHANGED, same helper every move/delete
+   *      command in this codebase uses) applies the swap or, on any
+   *      rejection, leaves the editor buffer byte-for-byte unchanged and
+   *      reports `outcome.reason` via the same compositeMoveReasonText
+   *      mapping.
+   *
+   * Never touches resolveMoveUnit, moveBlock, or moveComplexBlock — a
+   * cursor sitting inside a CompositeBlock's own list-item/callout/
+   * blockquote member is NEVER passed to those (this command is reached via
+   * its own separate keybinding/command-palette entry, never as a fallback
+   * inside moveCurrentBlock), so move-block-up/down's own resolution and
+   * behavior for non-composite content are completely unaffected by this
+   * ticket.
+   *
+   * No Outline Tree refresh call here (unlike
+   * dispatchAndApplyCompositeMove, which owns a single Tree instance
+   * directly): applyLineEditOutcome's editor.replaceRange() call already
+   * fires Obsidian's own "editor-change" workspace event, which every open
+   * Outline Tree View leaf already listens to independently (see
+   * OutlineTreeView.ts's scheduleRefresh) — exactly how moveCurrentBlock/
+   * moveCurrentSection/moveCurrentNodeOnly above already behave without any
+   * manual refresh() call of their own.
+   */
+  private moveCurrentCompositeBlock(editor: Editor, direction: CompositeMoveDirection): void {
+    const selections = editor.listSelections();
+    const cursorLine = editor.getCursor().line;
+    const primary = selections[0];
+    const anchorLine = primary ? primary.anchor.line : cursorLine;
+    const headLine = primary ? primary.head.line : cursorLine;
+
+    const text = editor.getValue();
+    const doc = parseDocument(text);
+    const complexScan = scanComplexBlocks(doc);
+    const rules = getEnabledCompositeBlockRules(this.settings.compositeBlocks);
+    const composites = matchCompositeBlocks(doc, complexScan, rules);
+
+    const resolution = resolveCompositeSelectionTarget(composites, {
+      selectionCount: selections.length,
+      anchorLine,
+      headLine,
+      cursorLine,
+    });
+
+    if (!resolution.allowed) {
+      this.notice(compositeMoveReasonText((k) => this.t(k), resolution.reason));
+      return;
+    }
+
+    const snapshot = buildCompositeBlockSnapshot(resolution.composite);
+    const outcome = moveCompositeBlock(text, { snapshot, direction }, rules);
+
+    applyLineEditOutcome(
+      editor,
+      { line: snapshot.range.startLine, ch: 0 },
+      snapshot.range.startLine,
+      text.split("\n"),
+      outcome,
+      () => this.notice(compositeMoveReasonText((k) => this.t(k), outcome.reason))
     );
   }
 

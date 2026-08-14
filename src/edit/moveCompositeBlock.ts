@@ -76,8 +76,10 @@ import { scanComplexBlocks } from "../parser/complexBlocks";
 import { evaluateCompositeBlockMovability, matchCompositeBlocks } from "../parser/compositeBlocks";
 import { CompositeMoveDirection, findCompositeMoveTarget } from "../move/findCompositeMoveTarget";
 import { swapBlocks } from "../move/moveBlock";
+import { CompositeSelectionRejectionReason } from "../move/resolveCompositeSelectionTarget";
 import { CompositeBlockSnapshot } from "./deleteCompositeBlock";
 import { LineEditOutcome } from "../commands/applyLineEditOutcome";
+import { TranslationKey } from "../i18n";
 
 export interface CompositeMoveRequest {
   snapshot: CompositeBlockSnapshot;
@@ -286,4 +288,71 @@ export function moveCompositeBlock(
   const { lines: outLines, newStartOfA } = swapBlocks(lines, sourceRange, target.range);
 
   return { changed: true, lines: outLines, newStartLine: newStartOfA };
+}
+
+/**
+ * Translates a composite-move rejection reason into the current locale —
+ * the single, shared mapping every caller of moveCompositeBlock (or of
+ * move/resolveCompositeSelectionTarget.ts's resolveCompositeSelectionTarget,
+ * ticket 4-5) uses, so "one path" for composite-move reason text stays
+ * literally true rather than just documented intent.
+ *
+ * Originally a private method on view/OutlineTreeView.ts (ticket 4-4),
+ * extracted here (ticket 4-5, unchanged behavior for every
+ * NoCompositeMoveReason value) once main.ts needed the exact same mapping
+ * for its own new cursor/selection-driven move commands and duplicating the
+ * switch would have reintroduced the very "two paths could disagree" risk
+ * ticket 4-4's own design memo warned against. `t` is passed in rather than
+ * a Plugin/View instance so this stays Obsidian-independent — a caller
+ * supplies `(key) => this.plugin.t(key)` or `(key) => this.t(key)`.
+ *
+ * NOT a plain "reason." + reason lookup for every value:
+ *   - "nested-in-list", "composite-boundary-changed", "range-invalid" are
+ *     ALSO NoCompositeDeleteReason values whose existing reason.* keys are
+ *     worded specifically for delete ("...cannot be deleted...",
+ *     "...deletion was cancelled...", "...deletion skipped..." — see
+ *     i18n.ts's own CompositeBlock delete reasons section); reusing them
+ *     here would show a misleading "deleted" message for a move rejection,
+ *     and both ticket 4-4's and this ticket's own constraints rule out
+ *     editing delete's existing wording/tests. Distinct reason.compositeMove*
+ *     keys cover exactly those three.
+ *   - "no-composite-at-cursor" and "selection-outside-composite" (ticket
+ *     4-5's own CompositeSelectionRejectionReason values) have no delete-side
+ *     equivalent at all, but still get their own dedicated keys rather than
+ *     falling through to "reason." + reason, since neither string is itself
+ *     a valid TranslationKey suffix pattern match with useful wording without
+ *     one (unlike e.g. "no-target", whose "reason.no-target" reads fine
+ *     unadorned).
+ *   - "multiple-selections" (also ticket 4-5) reuses the EXISTING
+ *     "notice.multipleCursors" key rather than a new "reason." key — it is
+ *     the exact same guard, and exact same message, every other move/delete
+ *     command in this codebase already shows for a multi-cursor/
+ *     discontiguous selection (see main.ts's moveCurrentBlock,
+ *     view/OutlineTreeView.ts's dispatchAndApplyCompositeMove) — introducing
+ *     a second key with the same meaning would only invite future drift.
+ *   - Every other value ("unsafe-indent", "no-adjacent-compatible-unit",
+ *     "different-parent-or-depth", "no-target") has no such collision and
+ *     falls through to the ordinary "reason." + reason pattern.
+ */
+export function compositeMoveReasonText(
+  t: (key: TranslationKey) => string,
+  reason: NoCompositeMoveReason | CompositeSelectionRejectionReason | undefined
+): string | undefined {
+  if (!reason) return undefined;
+  switch (reason) {
+    case "nested-in-list":
+      return t("reason.compositeMoveNestedInList");
+    case "composite-boundary-changed":
+      return t("reason.compositeMoveBoundaryChanged");
+    case "range-invalid":
+      return t("reason.compositeMoveRangeInvalid");
+    case "no-composite-at-cursor":
+      return t("reason.compositeMoveNoTargetAtCursor");
+    case "selection-outside-composite":
+      return t("reason.compositeMoveSelectionOutOfBounds");
+    case "multiple-selections":
+      return t("notice.multipleCursors");
+    default:
+      return t(("reason." + reason) as TranslationKey);
+  }
 }

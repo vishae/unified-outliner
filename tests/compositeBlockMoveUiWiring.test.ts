@@ -38,7 +38,7 @@ import { scanComplexBlocks } from "../src/parser/complexBlocks";
 import { evaluateCompositeBlockMovability, matchCompositeBlocks } from "../src/parser/compositeBlocks";
 import { CompositeBlockRule, DEFAULT_COMPOSITE_BLOCK_RULES } from "../src/model/compositeBlock";
 import { buildCompositeBlockSnapshot } from "../src/edit/deleteCompositeBlock";
-import { moveCompositeBlock, NoCompositeMoveReason } from "../src/edit/moveCompositeBlock";
+import { compositeMoveReasonText, moveCompositeBlock, NoCompositeMoveReason } from "../src/edit/moveCompositeBlock";
 import { CompositeMoveDirection } from "../src/move/findCompositeMoveTarget";
 import { createTranslator } from "../src/i18n";
 
@@ -62,19 +62,17 @@ function wouldShowMoveMenuItem(
   return evaluateCompositeBlockMovability(doc, complexScan, composite, direction, composites).eligible;
 }
 
-/** Reproduces compositeMoveReasonText's exact mapping, without instantiating OutlineTreeView. */
-function compositeMoveReasonKey(reason: NoCompositeMoveReason): string {
-  switch (reason) {
-    case "nested-in-list":
-      return "reason.compositeMoveNestedInList";
-    case "composite-boundary-changed":
-      return "reason.compositeMoveBoundaryChanged";
-    case "range-invalid":
-      return "reason.compositeMoveRangeInvalid";
-    default:
-      return "reason." + reason;
-  }
-}
+/**
+ * ticket 4-5 (2026-08-14): compositeMoveReasonText moved out of
+ * OutlineTreeView.ts into an exported, Obsidian-independent pure function
+ * (src/edit/moveCompositeBlock.ts) once main.ts needed the exact same
+ * mapping for its own new cursor/selection-driven move commands. The tests
+ * below now call that real function directly (via a locale's own
+ * translator, e.g. `en`/`ja` from createTranslator) instead of reproducing
+ * its switch statement as a local copy — removing the last place this
+ * mapping's logic could drift from what OutlineTreeView.ts and main.ts
+ * actually call.
+ */
 
 describe("showCompositeCommandMenu's move-item gate: eligible composites", () => {
   it("two composites directly adjacent: move-down (first) and move-up (second) both gate true", () => {
@@ -175,16 +173,24 @@ describe("dispatchAndApplyCompositeMove's dispatch: mid-flow text change is safe
 
 describe("compositeMoveReasonText: avoids delete-worded reason.* keys for the three colliding reasons", () => {
   it("nested-in-list, composite-boundary-changed, and range-invalid map to distinct compositeMove* keys, not the shared delete-worded ones", () => {
-    expect(compositeMoveReasonKey("nested-in-list")).toBe("reason.compositeMoveNestedInList");
-    expect(compositeMoveReasonKey("composite-boundary-changed")).toBe("reason.compositeMoveBoundaryChanged");
-    expect(compositeMoveReasonKey("range-invalid")).toBe("reason.compositeMoveRangeInvalid");
+    const en = createTranslator("en");
+    expect(compositeMoveReasonText(en, "nested-in-list")).toBe(en("reason.compositeMoveNestedInList"));
+    expect(compositeMoveReasonText(en, "composite-boundary-changed")).toBe(
+      en("reason.compositeMoveBoundaryChanged")
+    );
+    expect(compositeMoveReasonText(en, "range-invalid")).toBe(en("reason.compositeMoveRangeInvalid"));
   });
 
   it("every other NoCompositeMoveReason value falls through to the ordinary reason.<value> pattern", () => {
-    expect(compositeMoveReasonKey("unsafe-indent")).toBe("reason.unsafe-indent");
-    expect(compositeMoveReasonKey("no-adjacent-compatible-unit")).toBe("reason.no-adjacent-compatible-unit");
-    expect(compositeMoveReasonKey("different-parent-or-depth")).toBe("reason.different-parent-or-depth");
-    expect(compositeMoveReasonKey("no-target")).toBe("reason.no-target");
+    const en = createTranslator("en");
+    expect(compositeMoveReasonText(en, "unsafe-indent")).toBe(en("reason.unsafe-indent"));
+    expect(compositeMoveReasonText(en, "no-adjacent-compatible-unit")).toBe(
+      en("reason.no-adjacent-compatible-unit")
+    );
+    expect(compositeMoveReasonText(en, "different-parent-or-depth")).toBe(
+      en("reason.different-parent-or-depth")
+    );
+    expect(compositeMoveReasonText(en, "no-target")).toBe(en("reason.no-target"));
   });
 
   it("the delete-worded reason.nested-in-list / reason.composite-boundary-changed / reason.range-invalid keys are untouched (still say 'deleted'/'deletion')", () => {
@@ -213,14 +219,11 @@ describe("i18n: reason.<key> mapping for every NoCompositeMoveReason, en + ja", 
     const en = createTranslator("en");
     const ja = createTranslator("ja");
     for (const reason of allReasons) {
-      const key = compositeMoveReasonKey(reason) as Parameters<typeof en>[0];
-      const enText = en(key);
-      const jaText = ja(key);
-      expect(enText.length).toBeGreaterThan(0);
-      expect(jaText.length).toBeGreaterThan(0);
+      const enText = compositeMoveReasonText(en, reason);
+      const jaText = compositeMoveReasonText(ja, reason);
+      expect(enText?.length ?? 0).toBeGreaterThan(0);
+      expect(jaText?.length ?? 0).toBeGreaterThan(0);
       expect(enText).not.toBe(jaText);
-      expect(enText).not.toBe(key);
-      expect(jaText).not.toBe(key);
     }
   });
 

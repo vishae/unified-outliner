@@ -197,7 +197,7 @@ import {
   deleteCompositeBlock,
 } from "../edit/deleteCompositeBlock";
 import { CompositeMoveDirection } from "../move/findCompositeMoveTarget";
-import { moveCompositeBlock, NoCompositeMoveReason } from "../edit/moveCompositeBlock";
+import { compositeMoveReasonText, moveCompositeBlock } from "../edit/moveCompositeBlock";
 import { getEnabledCompositeBlockRules } from "../settingsDefaults";
 import { resolveHighlightedNodeId } from "../tree/resolveHighlightedSectionId";
 import {
@@ -2494,11 +2494,15 @@ export class OutlineTreeView extends ItemView {
    * ticket's approved design: (1) no confirmation modal — a move is
    * non-destructive and undoable the exact same way every other Tree move
    * already is (Obsidian's own Undo), unlike delete which removes content;
-   * (2) reason -> Notice text goes through this class's own
-   * compositeMoveReasonText, not the shared reasonText — see that method's
-   * own doc comment for why three of NoCompositeMoveReason's values need
-   * move-specific wording rather than the ordinary "reason." + reason
-   * lookup every other outcome in this view shares.
+   * (2) reason -> Notice text goes through edit/moveCompositeBlock.ts's
+   * exported compositeMoveReasonText, not this view's own reasonText — see
+   * that function's own doc comment for why several of NoCompositeMoveReason's
+   * values need move-specific wording rather than the ordinary "reason." +
+   * reason lookup every other outcome in this view shares. Ticket 4-5
+   * (2026-08-14) extracted that mapping out of this class (it was originally
+   * a private method here) into a shared, Obsidian-independent function so
+   * main.ts's own new cursor/selection-driven composite move commands could
+   * reuse the exact same mapping instead of duplicating it.
    *
    * `snapshot` reaches this function only via a closure captured at
    * menu-build time (showCompositeCommandMenu → here) — never a bare
@@ -2529,7 +2533,7 @@ export class OutlineTreeView extends ItemView {
       snapshot.range.startLine,
       text.split("\n"),
       outcome,
-      () => this.notify(this.compositeMoveReasonText(outcome.reason))
+      () => this.notify(compositeMoveReasonText((k) => this.plugin.t(k), outcome.reason))
     );
 
     if (changed) {
@@ -2542,37 +2546,6 @@ export class OutlineTreeView extends ItemView {
       this.refresh();
     }
     return changed;
-  }
-
-  /**
-   * Translate a NoCompositeMoveReason into the current locale — like
-   * reasonText, below, but NOT a plain "reason." + reason lookup for every
-   * value. "nested-in-list", "composite-boundary-changed", and
-   * "range-invalid" are ALSO NoCompositeDeleteReason values whose existing
-   * reason.* keys are worded specifically for delete ("...cannot be
-   * deleted...", "...deletion was cancelled...", "...deletion skipped..."
-   * — see i18n.ts's own CompositeBlock delete reasons section); reusing
-   * them here would show a misleading "deleted" message for a move
-   * rejection, and this ticket's own constraints rule out editing delete's
-   * existing wording/tests. Distinct reason.compositeMove* keys (i18n.ts)
-   * cover exactly those three cases; every other NoCompositeMoveReason
-   * value ("unsafe-indent", "no-adjacent-compatible-unit",
-   * "different-parent-or-depth", "no-target") has no such collision and
-   * falls through to the ordinary "reason." + reason pattern, exactly like
-   * reasonText.
-   */
-  private compositeMoveReasonText(reason: NoCompositeMoveReason | undefined): string | undefined {
-    if (!reason) return undefined;
-    switch (reason) {
-      case "nested-in-list":
-        return this.plugin.t("reason.compositeMoveNestedInList");
-      case "composite-boundary-changed":
-        return this.plugin.t("reason.compositeMoveBoundaryChanged");
-      case "range-invalid":
-        return this.plugin.t("reason.compositeMoveRangeInvalid");
-      default:
-        return this.plugin.t(("reason." + reason) as TranslationKey);
-    }
   }
 
   private notify(message: string | undefined): void {
