@@ -35,6 +35,7 @@ import {
   OutlineTreeView,
 } from "./view/OutlineTreeView";
 import { PARTIAL_EDIT_VIEW_TYPE, PartialEditView } from "./view/PartialEditView";
+import { hasOutlineTreeLeafInLeftSidebar } from "./view/outlineTreeLeafPlacement";
 import { HeadingLevelModal } from "./view/HeadingLevelModal";
 import { ActiveMarkdownViewTracker } from "./view/activeMarkdownViewTracker";
 import { FoldStateManager } from "./persistence/foldStateManager";
@@ -674,11 +675,22 @@ export default class UnifiedOutlinerPlugin extends Plugin {
    *    pane would open into its permanent empty state, since it would
    *    have no cached view to fall back on either.
    * 2. `getRightLeaf(true)` (split) rather than `getRightLeaf(false)`
-   *    (tab), so the pane opens as a genuine, independently resizable
-   *    split stacked under whatever else is already in the right
-   *    sidebar (typically the Outline Tree View), not as another tab in
-   *    the same leaf — per explicit feedback that a shared tab made it
-   *    impossible to see the tree and the edit pane at the same time.
+   *    (tab) BY DEFAULT, so the pane opens as a genuine, independently
+   *    resizable split stacked under whatever else is already in the
+   *    right sidebar (typically the Outline Tree View), not as another
+   *    tab in the same leaf — per explicit feedback that a shared tab
+   *    made it impossible to see the tree and the edit pane at the same
+   *    time. UXP-03b (2026-08-15, "Partial Edit Pane Placement
+   *    Follow-up"): this split-by-default only holds when no Outline
+   *    Tree View leaf is currently in the LEFT sidebar. Once UXP-03
+   *    made a left-sidebar Outline Tree possible, the right sidebar is
+   *    typically empty in that configuration, so forcing a split there
+   *    produced an unwanted empty-split-then-pane-below effect
+   *    real-device feedback flagged — see
+   *    hasOutlineTreeLeafInLeftSidebar's own doc comment
+   *    (view/outlineTreeLeafPlacement.ts) for why this checks the
+   *    Outline Tree's ACTUAL current leaf position rather than
+   *    `settings.outlineTreeSidebarPosition`.
    *
    * Like activateOutlineTreeView above, both `setViewState` (new-leaf path
    * only) and `workspace.revealLeaf` (also `Promise<void>` per Obsidian's
@@ -736,7 +748,20 @@ export default class UnifiedOutlinerPlugin extends Plugin {
     } else if (existing.length > 0) {
       leaf = existing[0];
     } else {
-      const newLeaf = workspace.getRightLeaf(true);
+      // UXP-03b: split ONLY when no Outline Tree View leaf is currently
+      // in the left sidebar — checked against the leaf's ACTUAL current
+      // root (workspace.leftSplit), never against the Outline Tree
+      // default-placement SETTING (see hasOutlineTreeLeafInLeftSidebar's
+      // own doc comment, view/outlineTreeLeafPlacement.ts, for why).
+      // Every other case — no Outline Tree leaf at all, one in the right
+      // sidebar, one in the main area, one in a popout, or an unrecognized
+      // root — falls through to the existing, unchanged split-by-default
+      // behavior.
+      const openWithoutSplit = hasOutlineTreeLeafInLeftSidebar(
+        workspace.getLeavesOfType(OUTLINE_TREE_VIEW_TYPE),
+        workspace.leftSplit
+      );
+      const newLeaf = openWithoutSplit ? workspace.getRightLeaf(false) : workspace.getRightLeaf(true);
       if (!newLeaf) {
         new Notice(this.t("notice.couldNotOpenRightSidebar"));
         return;
