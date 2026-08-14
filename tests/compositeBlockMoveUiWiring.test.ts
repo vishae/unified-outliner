@@ -5,6 +5,18 @@
  * snapshot-based dispatch, compositeMoveReasonText's reason -> i18n key
  * mapping, and the reason.* / tree.menu.* i18n keys this ticket added.
  *
+ * Ticket 4-6 (2026-08-14) investigated whether any of its own "UI仕様"
+ * requirements were still unimplemented and found showCompositeCommandMenu/
+ * dispatchAndApplyCompositeMove (both from ticket 4-4, untouched by 4-5)
+ * already satisfy every one of them — see this ticket's own completion
+ * report for the full investigation. The one genuine gap found was in TEST
+ * COVERAGE, not production code: no existing test reproduced
+ * showCompositeCommandMenu's own three-way compound early-return (menu
+ * doesn't open at all unless delete OR either move direction is eligible)
+ * — ticket 4-4's own tests only ever exercised the move gate in isolation.
+ * wouldShowCompositeMenuAtAll, below, closes that gap; no production code
+ * changed.
+ *
  * ---- Scope / what this file deliberately does NOT test -----------------
  *
  * Same testing-boundary rationale as tests/compositeBlockDeleteUiWiring
@@ -35,7 +47,11 @@
 import { describe, expect, it } from "vitest";
 import { parseDocument } from "../src/parser/parseDocument";
 import { scanComplexBlocks } from "../src/parser/complexBlocks";
-import { evaluateCompositeBlockMovability, matchCompositeBlocks } from "../src/parser/compositeBlocks";
+import {
+  evaluateCompositeBlockDeletability,
+  evaluateCompositeBlockMovability,
+  matchCompositeBlocks,
+} from "../src/parser/compositeBlocks";
 import { CompositeBlockRule, DEFAULT_COMPOSITE_BLOCK_RULES } from "../src/model/compositeBlock";
 import { buildCompositeBlockSnapshot } from "../src/edit/deleteCompositeBlock";
 import { compositeMoveReasonText, moveCompositeBlock, NoCompositeMoveReason } from "../src/edit/moveCompositeBlock";
@@ -60,6 +76,32 @@ function wouldShowMoveMenuItem(
   const composite = composites.find((c) => c.id === compositeId);
   if (!composite) return false;
   return evaluateCompositeBlockMovability(doc, complexScan, composite, direction, composites).eligible;
+}
+
+/**
+ * Phase 5C-1 ticket 4-6 (2026-08-14): reproduces showCompositeCommandMenu's
+ * own COMPOUND early-return exactly —
+ * `if (!deletability.deletable && !movabilityUp.eligible &&
+ * !movabilityDown.eligible) return;` — i.e. whether the CompositeBlock
+ * context menu opens AT ALL. Ticket 4-4's own tests only ever exercised the
+ * move gate and delete gate in isolation (wouldShowMoveMenuItem above /
+ * compositeBlockDeleteUiWiring.test.ts's own equivalent); neither combined
+ * all three into this exact three-way AND this ticket's own UI-仕様 item 5
+ * asks for. No new production logic — showCompositeCommandMenu itself is
+ * unchanged by this ticket — only this test-coverage gap is new.
+ */
+function wouldShowCompositeMenuAtAll(
+  text: string,
+  compositeId: string,
+  rules: CompositeBlockRule[] = DEFAULT_COMPOSITE_BLOCK_RULES
+): boolean {
+  const { doc, complexScan, composites } = pipeline(text, rules);
+  const composite = composites.find((c) => c.id === compositeId);
+  if (!composite) return false;
+  const deletability = evaluateCompositeBlockDeletability(doc, complexScan, composite);
+  const movabilityUp = evaluateCompositeBlockMovability(doc, complexScan, composite, "up", composites);
+  const movabilityDown = evaluateCompositeBlockMovability(doc, complexScan, composite, "down", composites);
+  return deletability.deletable || movabilityUp.eligible || movabilityDown.eligible;
 }
 
 /**
@@ -88,6 +130,36 @@ describe("showCompositeCommandMenu's move-item gate: eligible composites", () =>
     const { composites } = pipeline(text);
     expect(composites).toHaveLength(1);
     expect(wouldShowMoveMenuItem(text, composites[0].id, "down")).toBe(true);
+  });
+});
+
+describe("showCompositeCommandMenu's own compound gate (ticket 4-6): does the menu open at all?", () => {
+  it("nested-in-list blocks delete AND both move directions simultaneously: the menu does not open", () => {
+    const text = ["- outer", "  - inner", "> [!note]", "> body"].join("\n");
+    const { composites } = pipeline(text);
+    expect(composites).toHaveLength(1);
+    expect(wouldShowCompositeMenuAtAll(text, composites[0].id)).toBe(false);
+  });
+
+  it("deletable but not movable in either direction: the menu still opens (for delete alone)", () => {
+    const text = ["- one", "> [!note]", "> body"].join("\n");
+    const { composites } = pipeline(text);
+    expect(composites).toHaveLength(1);
+    // Confirms the premise: both move directions are false here (doc has
+    // no adjacent compatible unit either side) — see the ineligible-gate
+    // describe block below for the same fixture — while delete is not
+    // blocked by anything move-specific.
+    expect(wouldShowMoveMenuItem(text, composites[0].id, "up")).toBe(false);
+    expect(wouldShowMoveMenuItem(text, composites[0].id, "down")).toBe(false);
+    expect(wouldShowCompositeMenuAtAll(text, composites[0].id)).toBe(true);
+  });
+
+  it("movable in at least one direction: the menu opens even if this fixture happens to also be deletable", () => {
+    const text = ["- one", "> [!note]", "> body a", "- two"].join("\n");
+    const { composites } = pipeline(text);
+    expect(composites).toHaveLength(1);
+    expect(wouldShowMoveMenuItem(text, composites[0].id, "down")).toBe(true);
+    expect(wouldShowCompositeMenuAtAll(text, composites[0].id)).toBe(true);
   });
 });
 
