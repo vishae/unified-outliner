@@ -118,6 +118,11 @@ const en = {
   "settings.headingPrefixStyle.optionNone": "Don't show",
   "settings.headingPrefixStyle.optionHLevel": "H1–H6",
   "settings.headingPrefixStyle.optionAtx": "#–######",
+  "settings.outlineTreeSidebarPosition.name": "Outline Tree default sidebar",
+  "settings.outlineTreeSidebarPosition.desc":
+    "Which sidebar a brand-new Outline Tree View opens into. Only applies when no Outline Tree View is already open anywhere — an existing one (including one you've dragged elsewhere) is always reused as-is and never moved by changing this setting.",
+  "settings.outlineTreeSidebarPosition.optionRight": "Right sidebar",
+  "settings.outlineTreeSidebarPosition.optionLeft": "Left sidebar",
   "settings.previewMoveTarget.name": "Preview move target in Outline Tree",
   "settings.previewMoveTarget.desc":
     "Briefly flash-highlight, in the Outline Tree, the block that Move block / Move section actually operated on.",
@@ -161,6 +166,7 @@ const en = {
   // ---- Notices (main.ts, non-reason) ------------------------------------
   "notice.couldNotOpenOutlineTreeView": "Unified Outliner: could not open the outline tree view.",
   "notice.couldNotOpenRightSidebar": "Unified Outliner: could not open the right sidebar.",
+  "notice.couldNotOpenLeftSidebar": "Unified Outliner: could not open the left sidebar.",
   "notice.couldNotOpenPartialEditPaneNewWindow":
     "Unified Outliner: could not open the partial edit pane in a new window.",
   "notice.couldNotOpenPartialEditPane": "Unified Outliner: could not open the partial edit pane.",
@@ -469,6 +475,11 @@ const ja: Record<TranslationKey, string> = {
   "settings.headingPrefixStyle.optionNone": "表示しない",
   "settings.headingPrefixStyle.optionHLevel": "H1〜H6",
   "settings.headingPrefixStyle.optionAtx": "#〜######",
+  "settings.outlineTreeSidebarPosition.name": "アウトラインツリーの既定のサイドバー位置",
+  "settings.outlineTreeSidebarPosition.desc":
+    "新規にアウトラインツリービューを開く際、どちらのサイドバーに開くかを指定する。すでにどこかにアウトラインツリービューが開いている場合（ユーザーが手動で移動した場合を含む）は、この設定に関わらず既存のものをそのまま再利用し、この設定を変更しただけでは移動しない。",
+  "settings.outlineTreeSidebarPosition.optionRight": "右サイドバー",
+  "settings.outlineTreeSidebarPosition.optionLeft": "左サイドバー",
   "settings.previewMoveTarget.name": "アウトラインツリーで移動先をプレビュー",
   "settings.previewMoveTarget.desc":
     "Move block / Move section が実際に操作したブロックを、アウトラインツリー上で一瞬フラッシュ表示して強調する。",
@@ -512,6 +523,7 @@ const ja: Record<TranslationKey, string> = {
   // ---- 通知（main.ts、reason に基づかないもの） -------------------------
   "notice.couldNotOpenOutlineTreeView": "Unified Outliner: アウトラインツリービューを開けなかった。",
   "notice.couldNotOpenRightSidebar": "Unified Outliner: 右サイドバーを開けなかった。",
+  "notice.couldNotOpenLeftSidebar": "Unified Outliner: 左サイドバーを開けなかった。",
   "notice.couldNotOpenPartialEditPaneNewWindow":
     "Unified Outliner: 部分編集ペインを新しいウィンドウで開けなかった。",
   "notice.couldNotOpenPartialEditPane": "Unified Outliner: 部分編集ペインを開けなかった。",

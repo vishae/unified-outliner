@@ -106,10 +106,53 @@ export interface UnifiedOutlinerSettings {
    * extra migration code needed.
    */
   headingPrefixStyle: HeadingPrefixStyle;
+  /**
+   * UXP-03 (2026-08-15, "Configurable Outline Tree Sidebar Placement"):
+   * which sidebar `main.ts`'s activateOutlineTreeView opens a NEW Outline
+   * Tree View leaf into, when no leaf of that type exists yet anywhere in
+   * the workspace. Defaults to "right", matching this plugin's pre-UXP-03
+   * behavior exactly (activateOutlineTreeView previously called
+   * `workspace.getRightLeaf(false)` unconditionally). Deliberately a
+   * narrow two-value union (not a boolean like the reference
+   * implementation this ticket was modeled on, obsidian-2hop-links-plus's
+   * `panePositionIsRight`) so a future third placement (e.g. "main area")
+   * can be added later without a breaking rename.
+   *
+   * This setting affects ONLY where a brand-new leaf is created. It is
+   * deliberately NOT read anywhere else: activateOutlineTreeView's
+   * existing "reuse any already-open Outline Tree View leaf, wherever it
+   * is" path (workspace.getLeavesOfType + revealLeaf) always takes
+   * priority and ignores this setting entirely — per the ticket's own
+   * explicit requirement, changing this setting must never detach, move,
+   * or duplicate a leaf the user (or an earlier default) has already
+   * placed somewhere. See settings.ts's corresponding dropdown control,
+   * whose onChange intentionally does NOT call refreshOutlineTreeViews()
+   * or touch any existing leaf for the same reason.
+   */
+  outlineTreeSidebarPosition: OutlineTreeSidebarPosition;
 }
 
 /** See UnifiedOutlinerSettings.headingPrefixStyle's doc comment. */
 export type HeadingPrefixStyle = "none" | "hLevel" | "atx";
+
+/** See UnifiedOutlinerSettings.outlineTreeSidebarPosition's doc comment. */
+export type OutlineTreeSidebarPosition = "right" | "left";
+
+/**
+ * Guards mergeSettings's re-validation of a raw, possibly-corrupted/
+ * hand-edited outlineTreeSidebarPosition value — same role
+ * isValidPluginLanguage plays for `language` in i18n.ts. Unlike
+ * headingPrefixStyle (whose merge relies on the shallow Object.assign's
+ * "missing key falls back to default" behavior alone, with no re-
+ * validation of an explicitly-present-but-invalid value), this field gets
+ * an explicit validator per this ticket's own "left/right 以外の値を安全に
+ * right へ正規化" requirement.
+ */
+export function isValidOutlineTreeSidebarPosition(
+  value: unknown
+): value is OutlineTreeSidebarPosition {
+  return value === "right" || value === "left";
+}
 
 /** One flag per model/compositeBlock.ts DEFAULT_COMPOSITE_BLOCK_RULES entry, by rule id. */
 export interface CompositeBlockSettings {
@@ -176,6 +219,7 @@ export const DEFAULT_SETTINGS: UnifiedOutlinerSettings = {
   treeKindHighlight: { ...DEFAULT_TREE_KIND_HIGHLIGHT },
   compositeBlocks: { ...DEFAULT_COMPOSITE_BLOCK_SETTINGS },
   headingPrefixStyle: "none",
+  outlineTreeSidebarPosition: "right",
 };
 
 /**
@@ -227,5 +271,16 @@ export function mergeSettings(
   // resolveLocale()/createTranslator(), per this ticket's own explicit
   // "不明な値は安全に auto へフォールバックする" requirement.
   merged.language = isValidPluginLanguage(raw.language) ? raw.language : DEFAULT_SETTINGS.language;
+  // outlineTreeSidebarPosition (UXP-03): same "top-level scalar, explicit
+  // re-validation" treatment as `language` just above — a raw value of
+  // anything other than "right"/"left" (a corrupted/hand-edited data.json,
+  // or a future value this version doesn't know) safely normalizes to the
+  // "right" default rather than reaching main.ts's activateOutlineTreeView
+  // unchecked.
+  merged.outlineTreeSidebarPosition = isValidOutlineTreeSidebarPosition(
+    raw.outlineTreeSidebarPosition
+  )
+    ? raw.outlineTreeSidebarPosition
+    : DEFAULT_SETTINGS.outlineTreeSidebarPosition;
   return merged;
 }

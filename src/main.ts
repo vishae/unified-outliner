@@ -588,10 +588,21 @@ export default class UnifiedOutlinerPlugin extends Plugin {
   }
 
   /**
-   * Open the Outline Tree View in the right sidebar, reusing an existing
-   * leaf of this view type if one is already open anywhere (per-workspace,
-   * not per-window) rather than creating a duplicate. Creates a new leaf
-   * in the right sidebar (`getRightLeaf(false)`) only when none exists.
+   * Open the Outline Tree View, reusing an existing leaf of this view type
+   * if one is already open anywhere (per-workspace, not per-window) rather
+   * than creating a duplicate. Creates a new leaf only when none exists —
+   * UXP-03 (2026-08-15, "Configurable Outline Tree Sidebar Placement")
+   * added which SIDE that new leaf is created in
+   * (settings.outlineTreeSidebarPosition, default "right" — matching this
+   * method's pre-UXP-03 behavior exactly), modeled on
+   * obsidian-2hop-links-plus's `panePositionIsRight` /
+   * `getLeftLeaf(false)`/`getRightLeaf(false)` split. Everything about the
+   * "reuse an existing leaf" branch above it is deliberately UNCHANGED by
+   * UXP-03: it always wins regardless of the current setting value, so
+   * changing this setting never detaches, moves, or duplicates a leaf that
+   * is already open somewhere (including one the user dragged to a
+   * location of their own choosing) — see settingsDefaults.ts's
+   * outlineTreeSidebarPosition doc comment for the full rationale.
    *
    * Both `setViewState` AND `workspace.revealLeaf` (also `Promise<void>`
    * per Obsidian's type definitions) are awaited inside try/catch, on
@@ -602,7 +613,7 @@ export default class UnifiedOutlinerPlugin extends Plugin {
    * from — leaving either call un-awaited would risk an unhandled
    * rejection even though the caller never sees it via this method's own
    * return value. Reporting it via Notice (plus console.error for the
-   * stack trace) matches how the "no right sidebar" case just above is
+   * stack trace) matches how the "no sidebar available" case just above is
    * already surfaced to the user.
    */
   async activateOutlineTreeView(): Promise<void> {
@@ -619,9 +630,14 @@ export default class UnifiedOutlinerPlugin extends Plugin {
       return;
     }
 
-    const leaf: WorkspaceLeaf | null = workspace.getRightLeaf(false);
+    const openOnLeft = this.settings.outlineTreeSidebarPosition === "left";
+    const leaf: WorkspaceLeaf | null = openOnLeft
+      ? workspace.getLeftLeaf(false)
+      : workspace.getRightLeaf(false);
     if (!leaf) {
-      new Notice(this.t("notice.couldNotOpenRightSidebar"));
+      new Notice(
+        this.t(openOnLeft ? "notice.couldNotOpenLeftSidebar" : "notice.couldNotOpenRightSidebar")
+      );
       return;
     }
     try {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SETTINGS,
   DEFAULT_TREE_KIND_HIGHLIGHT,
+  isValidOutlineTreeSidebarPosition,
   mergeSettings,
 } from "../src/settingsDefaults";
 
@@ -192,5 +193,58 @@ describe("settingsDefaults: headingPrefixStyle", () => {
 
   it("mergeSettings preserves an explicit \"atx\"", () => {
     expect(mergeSettings({ headingPrefixStyle: "atx" }).headingPrefixStyle).toBe("atx");
+  });
+});
+
+/**
+ * UXP-03 (2026-08-15, "Configurable Outline Tree Sidebar Placement"):
+ * outlineTreeSidebarPosition is a top-level SCALAR, same shape as
+ * `language` above (not nested like treeKindHighlight) — but per the
+ * ticket's own explicit "left/right 以外の値を安全に right へ正規化"
+ * requirement, it gets the same explicit re-validation treatment as
+ * `language` (isValidPluginLanguage), not the "shallow Object.assign alone
+ * is enough" treatment headingPrefixStyle above relies on. These tests
+ * mirror the "language (i18n)" describe block's own shape for that reason.
+ */
+describe("settingsDefaults: outlineTreeSidebarPosition (UXP-03)", () => {
+  it("defaults to \"right\" (matches this plugin's pre-UXP-03 activateOutlineTreeView behavior)", () => {
+    expect(DEFAULT_SETTINGS.outlineTreeSidebarPosition).toBe("right");
+  });
+
+  it("mergeSettings resolves to \"right\" when raw omits the key entirely (pre-UXP-03 data.json)", () => {
+    const merged = mergeSettings({ allowCrossSectionListMove: false });
+    expect(merged.outlineTreeSidebarPosition).toBe("right");
+  });
+
+  it("mergeSettings preserves an explicit \"left\"", () => {
+    expect(mergeSettings({ outlineTreeSidebarPosition: "left" }).outlineTreeSidebarPosition).toBe(
+      "left"
+    );
+  });
+
+  it("mergeSettings preserves an explicit \"right\"", () => {
+    expect(mergeSettings({ outlineTreeSidebarPosition: "right" }).outlineTreeSidebarPosition).toBe(
+      "right"
+    );
+  });
+
+  it("mergeSettings falls back to \"right\" for an invalid/corrupted value", () => {
+    expect(mergeSettings({ outlineTreeSidebarPosition: "top" }).outlineTreeSidebarPosition).toBe(
+      "right"
+    );
+    expect(mergeSettings({ outlineTreeSidebarPosition: 123 }).outlineTreeSidebarPosition).toBe(
+      "right"
+    );
+    expect(mergeSettings({ outlineTreeSidebarPosition: null }).outlineTreeSidebarPosition).toBe(
+      "right"
+    );
+  });
+
+  it("isValidOutlineTreeSidebarPosition accepts only \"right\"/\"left\"", () => {
+    expect(isValidOutlineTreeSidebarPosition("right")).toBe(true);
+    expect(isValidOutlineTreeSidebarPosition("left")).toBe(true);
+    expect(isValidOutlineTreeSidebarPosition("top")).toBe(false);
+    expect(isValidOutlineTreeSidebarPosition(undefined)).toBe(false);
+    expect(isValidOutlineTreeSidebarPosition(null)).toBe(false);
   });
 });

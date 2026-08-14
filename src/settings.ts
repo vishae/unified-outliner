@@ -3,6 +3,7 @@ import type UnifiedOutlinerPlugin from "./main";
 import {
   DEFAULT_SETTINGS,
   HeadingPrefixStyle,
+  OutlineTreeSidebarPosition,
   TreeKindHighlightSettings,
   UnifiedOutlinerSettings,
 } from "./settingsDefaults";
@@ -213,6 +214,30 @@ export class UnifiedOutlinerSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.syncOutlineTreeFoldingToEditor)
           .onChange(async (v) => {
             this.plugin.settings.syncOutlineTreeFoldingToEditor = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    // UXP-03 (2026-08-15, "Configurable Outline Tree Sidebar Placement"):
+    // deliberately does NOT call refreshOutlineTreeViews() (unlike, e.g.,
+    // showListItemsInOutline's onChange above) — this setting only decides
+    // where a brand-new Outline Tree View leaf is created the NEXT time
+    // activateOutlineTreeView opens one from scratch. Any Outline Tree
+    // leaf already open (in either sidebar, or dragged elsewhere by the
+    // user) is left exactly where it is; see
+    // settingsDefaults.ts's outlineTreeSidebarPosition doc comment for the
+    // full rationale and main.ts's activateOutlineTreeView for the read
+    // site.
+    new Setting(containerEl)
+      .setName(this.plugin.t("settings.outlineTreeSidebarPosition.name"))
+      .setDesc(this.plugin.t("settings.outlineTreeSidebarPosition.desc"))
+      .addDropdown((d) =>
+        d
+          .addOption("right", this.plugin.t("settings.outlineTreeSidebarPosition.optionRight"))
+          .addOption("left", this.plugin.t("settings.outlineTreeSidebarPosition.optionLeft"))
+          .setValue(this.plugin.settings.outlineTreeSidebarPosition)
+          .onChange(async (v) => {
+            this.plugin.settings.outlineTreeSidebarPosition = v as OutlineTreeSidebarPosition;
             await this.plugin.saveSettings();
           })
       );
