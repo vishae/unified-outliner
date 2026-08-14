@@ -227,6 +227,8 @@ const en = {
   "partialEdit.editingTitle": "Editing ({kind}): {label}",
   "partialEdit.kindList": "List",
   "partialEdit.kindSection": "Section",
+  "partialEdit.kindCallout": "Callout",
+  "partialEdit.kindBlockquote": "Quote",
   "partialEdit.close": "Close",
   "partialEdit.emptyPlaceholder":
     "Right-click a node in the Outline Tree View and choose “Open partial edit pane” / “Edit list subtree in pane” to load something here.",
@@ -533,6 +535,8 @@ const ja: Record<TranslationKey, string> = {
   "partialEdit.editingTitle": "編集中（{kind}）: {label}",
   "partialEdit.kindList": "リスト",
   "partialEdit.kindSection": "セクション",
+  "partialEdit.kindCallout": "コールアウト",
+  "partialEdit.kindBlockquote": "引用",
   "partialEdit.close": "閉じる",
   "partialEdit.emptyPlaceholder":
     "アウトラインツリービューでノードを右クリックし、「部分編集ペインを開く」／「リストサブツリーをペインで編集」を選ぶとここに読み込まれる。",

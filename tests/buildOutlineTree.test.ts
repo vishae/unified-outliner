@@ -8,6 +8,7 @@ import {
   CompositeBlockRule,
   DEFAULT_COMPOSITE_BLOCK_RULES,
 } from "../src/model/compositeBlock";
+import { ComplexBlockInfo } from "../src/model/complexBlock";
 import { createTranslator } from "../src/i18n";
 import {
   buildOutlineTree,
@@ -22,6 +23,9 @@ import {
   listItemDisplayText,
   nodeDisplayLabel,
   OutlineTreeNode,
+  standaloneComplexBlockLabel,
+  STANDALONE_BLOCKQUOTE_PREFIX,
+  STANDALONE_CALLOUT_PREFIX,
 } from "../src/tree/buildOutlineTree";
 import { FIX_BASIC, ownerAt } from "./fixtures";
 
@@ -704,5 +708,206 @@ describe("headingPrefixText (2026-08-12 'Heading prefix 表示設定' ticket)", 
     // confirms the DOWNSTREAM effect: "none" must be indistinguishable from
     // "no prefix rendered at all", not e.g. an empty-but-still-badged state.
     expect(headingPrefixText("none", 4)).toBe("");
+  });
+});
+
+/** Builds a tree WITH standalone callout/blockquote projection, using the real scan pipeline (same call sequence view/OutlineTreeView.ts's refresh() uses, minus composite matching). */
+function treeWithStandalone(text: string, includeLists = false) {
+  const doc = parseDocument(text);
+  const complexScan = scanComplexBlocks(doc);
+  const tree = buildOutlineTree(doc, {
+    includeLists,
+    standaloneComplexBlocks: { blocks: complexScan.blocks },
+    t: createTranslator("en"),
+  });
+  return { doc, complexScan, tree };
+}
+
+describe("buildOutlineTree (Phase 5C-2: standalone callout/blockquote projection, Tree構築)", () => {
+  it("projects a supported standalone callout as a section-level sibling row, with its own STANDALONE prefix", () => {
+    const text = ["# H", "> [!note] My Note", "> body"].join("\n");
+    const { tree } = treeWithStandalone(text);
+    const section = tree[0];
+    if (!isOutlineSectionNode(section)) throw new Error("expected section");
+    expect(section.children).toHaveLength(1);
+    const [row] = section.children;
+    if (!isOutlineComplexMemberNode(row)) throw new Error("expected complex-member");
+    expect(row.isStandalone).toBe(true);
+    expect(row.complexKind).toBe("callout");
+    expect(row.label).toBe("My Note");
+    expect(row.prefix).toBe(STANDALONE_CALLOUT_PREFIX);
+    expect(row.line).toBe(1);
+  });
+
+  it("projects a supported standalone blockquote similarly, with its own prefix", () => {
+    const text = ["# H", "> quoted line"].join("\n");
+    const { tree } = treeWithStandalone(text);
+    const section = tree[0];
+    if (!isOutlineSectionNode(section)) throw new Error("expected section");
+    const [row] = section.children;
+    if (!isOutlineComplexMemberNode(row)) throw new Error("expected complex-member");
+    expect(row.isStandalone).toBe(true);
+    expect(row.complexKind).toBe("blockquote");
+    expect(row.label).toBe("quoted line");
+    expect(row.prefix).toBe(STANDALONE_BLOCKQUOTE_PREFIX);
+  });
+
+  it("projects a standalone callout with no enclosing section as a top-level row", () => {
+    const text = ["> [!tip] Top Tip", "> body"].join("\n");
+    const { tree } = treeWithStandalone(text);
+    expect(tree).toHaveLength(1);
+    const [row] = tree;
+    if (!isOutlineComplexMemberNode(row)) throw new Error("expected complex-member");
+    expect(row.label).toBe("Top Tip");
+  });
+
+  it("does not duplicate a callout that is already a matched composite's own member (no double-projection)", () => {
+    const text = ["- ![[scan.png]]", "> [!ocr]", "> body"].join("\n");
+    const doc = parseDocument(text);
+    const complexScan = scanComplexBlocks(doc);
+    const infos = matchCompositeBlocks(doc, complexScan, DEFAULT_COMPOSITE_BLOCK_RULES);
+    const complexBlocksById = new Map(complexScan.blocks.map((b) => [b.id, b]));
+    const tree = buildOutlineTree(doc, {
+      includeLists: true,
+      composites: { infos, complexBlocksById, rules: DEFAULT_COMPOSITE_BLOCK_RULES },
+      standaloneComplexBlocks: { blocks: complexScan.blocks },
+      t: createTranslator("en"),
+    });
+    // Just the composite — no extra standalone sibling row for the same callout.
+    expect(tree).toHaveLength(1);
+    expect(isOutlineCompositeNode(tree[0])).toBe(true);
+    const calloutOccurrences = flattenOutlineTree(tree)
+      .filter(isOutlineComplexMemberNode)
+      .filter((n) => n.complexKind === "callout");
+    expect(calloutOccurrences).toHaveLength(1);
+    expect(calloutOccurrences[0].isStandalone).toBe(false);
+  });
+
+  it("excludes unsupported/ambiguous/read-only complex blocks from standalone projection entirely (never shown, not even disabled)", () => {
+    const text = ["# H", "some paragraph line"].join("\n");
+    const doc = parseDocument(text);
+    const sectionId = doc.topLevelIds[0];
+    const unsupported: ComplexBlockInfo = {
+      id: "callout-unsupported",
+      kind: "callout",
+      range: { startLine: 1, endLine: 1 },
+      parentId: sectionId,
+      childIds: [],
+      editability: "unsupported",
+      reason: "x",
+    };
+    const ambiguous: ComplexBlockInfo = {
+      id: "blockquote-ambiguous",
+      kind: "blockquote",
+      range: { startLine: 1, endLine: 1 },
+      parentId: sectionId,
+      childIds: [],
+      editability: "ambiguous",
+      reason: "x",
+    };
+    const readOnly: ComplexBlockInfo = {
+      id: "callout-readonly",
+      kind: "callout",
+      range: { startLine: 1, endLine: 1 },
+      parentId: sectionId,
+      childIds: [],
+      editability: "read-only",
+      reason: "x",
+    };
+    const tree = buildOutlineTree(doc, {
+      standaloneComplexBlocks: { blocks: [unsupported, ambiguous, readOnly] },
+      t: createTranslator("en"),
+    });
+    const section = tree[0];
+    if (!isOutlineSectionNode(section)) throw new Error("expected section");
+    expect(section.children).toHaveLength(0);
+  });
+
+  it("delegates a standalone callout nested inside a list item's continuation to its enclosing SECTION, not the list item ('list itemの子としての表示は今回見送る')", () => {
+    const text = ["# H", "- item text", "  > [!note] callout in list", "  > body line"].join("\n");
+    const { tree } = treeWithStandalone(text, true);
+    const section = tree[0];
+    if (!isOutlineSectionNode(section)) throw new Error("expected section");
+    // Both the list item AND the callout are section H's own direct
+    // children — the callout is NOT nested under the list item's children.
+    expect(section.children.map((n) => n.kind)).toEqual(["list", "complex-member"]);
+    const [listNode, calloutNode] = section.children;
+    if (!isOutlineListNode(listNode)) throw new Error("expected list node");
+    expect(listNode.children).toHaveLength(0);
+    if (!isOutlineComplexMemberNode(calloutNode)) throw new Error("expected complex-member");
+    expect(calloutNode.isStandalone).toBe(true);
+    expect(calloutNode.label).toBe("callout in list");
+  });
+
+  it("appends a '#N' suffix to duplicate fallback labels within the same section, in document order (種別＋通番)", () => {
+    const text = ["# H", "> [!!!!]", ">", "not quoted", "> [!????]", ">"].join("\n");
+    const { tree } = treeWithStandalone(text);
+    const section = tree[0];
+    if (!isOutlineSectionNode(section)) throw new Error("expected section");
+    const labels = section.children.filter(isOutlineComplexMemberNode).map((n) => n.label);
+    expect(labels).toEqual(["Callout #1", "Callout #2"]);
+  });
+});
+
+describe("standaloneComplexBlockLabel (Phase 5C-2, ラベル生成)", () => {
+  it("prefers a callout's own title text", () => {
+    const doc = parseDocument(["> [!note] My Title", "> body"].join("\n"));
+    const info = scanComplexBlocks(doc).blocks[0];
+    expect(standaloneComplexBlockLabel(doc, info)).toBe("My Title");
+  });
+
+  it("prefers the formatted type display name over a body summary when a callout has no title", () => {
+    const doc = parseDocument(["> [!info-box]", "> some body content"].join("\n"));
+    const info = scanComplexBlocks(doc).blocks[0];
+    expect(standaloneComplexBlockLabel(doc, info)).toBe("Info Box");
+  });
+
+  it("falls through to the first body line when the type string has no usable characters after stripping", () => {
+    const doc = parseDocument(["> [!!!!]", "> body content here"].join("\n"));
+    const info = scanComplexBlocks(doc).blocks[0];
+    expect(standaloneComplexBlockLabel(doc, info)).toBe("body content here");
+  });
+
+  it("falls back to the existing kind-fallback text when a callout has no title, no usable type, and no body content", () => {
+    const doc = parseDocument(["> [!!!!]", ">"].join("\n"));
+    const info = scanComplexBlocks(doc).blocks[0];
+    expect(standaloneComplexBlockLabel(doc, info, createTranslator("en"))).toBe("Callout");
+    expect(standaloneComplexBlockLabel(doc, info, createTranslator("ja"))).toBe("コールアウト");
+  });
+
+  it("uses the first non-empty body line for a blockquote (no title/type concept)", () => {
+    const doc = parseDocument(["> quoted first line"].join("\n"));
+    const info = scanComplexBlocks(doc).blocks[0];
+    expect(standaloneComplexBlockLabel(doc, info)).toBe("quoted first line");
+  });
+
+  it("falls back to the existing kind-fallback text for an entirely empty blockquote", () => {
+    const doc = parseDocument(["> ", ">"].join("\n"));
+    const info = scanComplexBlocks(doc).blocks[0];
+    expect(standaloneComplexBlockLabel(doc, info, createTranslator("en"))).toBe("Quote");
+    expect(standaloneComplexBlockLabel(doc, info, createTranslator("ja"))).toBe("引用");
+  });
+
+  it("truncates an overly long label to 80 characters with a trailing ellipsis", () => {
+    const longTitle = "x".repeat(120);
+    const doc = parseDocument([`> [!note] ${longTitle}`].join("\n"));
+    const info = scanComplexBlocks(doc).blocks[0];
+    const label = standaloneComplexBlockLabel(doc, info);
+    expect(label.length).toBe(80);
+    expect(label.endsWith("…")).toBe(true);
+    expect(label.startsWith("x".repeat(79))).toBe(true);
+  });
+
+  it("never leaks the raw '>' quote marker or a '[!type]' bracket into a body-derived label", () => {
+    const doc = parseDocument(["> [!!!!]", "> body content here"].join("\n"));
+    const info = scanComplexBlocks(doc).blocks[0];
+    const label = standaloneComplexBlockLabel(doc, info);
+    expect(label).not.toContain(">");
+    expect(label).not.toContain("[!");
+  });
+
+  it("STANDALONE_CALLOUT_PREFIX / STANDALONE_BLOCKQUOTE_PREFIX are fixed display constants, not i18n keys", () => {
+    expect(STANDALONE_CALLOUT_PREFIX).toBe("▣ ");
+    expect(STANDALONE_BLOCKQUOTE_PREFIX).toBe("❝ ");
   });
 });

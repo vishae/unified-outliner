@@ -94,7 +94,8 @@ import { App, ItemView, Menu, Modal, Notice, WorkspaceLeaf, setIcon, setTooltip 
 import type UnifiedOutlinerPlugin from "../main";
 import { parseDocument } from "../parser/parseDocument";
 import { applySubtreeEdit, extractSubtreeText, SubtreeKind } from "../edit/partialEdit";
-import { nodeDisplayLabel } from "../tree/buildOutlineTree";
+import { nodeDisplayLabel, standaloneComplexBlockLabel } from "../tree/buildOutlineTree";
+import { scanComplexBlocks } from "../parser/complexBlocks";
 import { AncestorPathEntry, findAncestorPath } from "../tree/ancestorPath";
 import { DescendantNavigationEntry, findDirectChildren } from "../tree/descendantPath";
 import { SiblingNavigationState, getSiblingNavigationState } from "../tree/siblingNavigation";
@@ -442,17 +443,41 @@ export class PartialEditView extends ItemView {
       return;
     }
 
-    const node = doc.nodes.get(nodeId);
     const t = this.plugin.t.bind(this.plugin);
-    const label = node ? nodeDisplayLabel(doc, node, t) : "";
+    const node = doc.nodes.get(nodeId);
+    let label: string;
+    if (node) {
+      label = nodeDisplayLabel(doc, node, t);
+    } else {
+      // Phase 5C-2: extracted.ok is true and node is undefined only for
+      // the new standalone callout/blockquote path (see
+      // extractSubtreeText's own doc comment). A fresh scanComplexBlocks()
+      // re-lookup (rather than trusting extracted fields as an id-free
+      // proxy) keeps this resolution independently re-verified, same
+      // policy as every other CompositeBlock-adjacent module.
+      const complexBlock = scanComplexBlocks(doc).blocks.find((b) => b.id === nodeId);
+      label = complexBlock ? standaloneComplexBlockLabel(doc, complexBlock, t) : "";
+    }
 
     this.nodeId = nodeId;
     this.nodeKind = extracted.kind;
     this.originalText = extracted.text;
     this.label = label;
-    this.ancestors = findAncestorPath(doc, nodeId, t);
-    this.directChildren = findDirectChildren(doc, nodeId, t);
-    this.siblingState = getSiblingNavigationState(doc, nodeId, t);
+    // Phase 5C-2: breadcrumb / sibling nav / Subtree Navigator stay at
+    // their empty state for a callout/blockquote — this ticket's own
+    // approved scope explicitly leaves those three unextended
+    // ("complex 対応は今回実装しない"). findAncestorPath/findDirectChildren/
+    // getSiblingNavigationState are all doc.nodes-based (BlockNode-only)
+    // and are simply not called for a node that isn't one.
+    if (node) {
+      this.ancestors = findAncestorPath(doc, nodeId, t);
+      this.directChildren = findDirectChildren(doc, nodeId, t);
+      this.siblingState = getSiblingNavigationState(doc, nodeId, t);
+    } else {
+      this.ancestors = [];
+      this.directChildren = [];
+      this.siblingState = { previous: null, next: null };
+    }
     this.renderLoadedState();
   }
 
@@ -478,8 +503,23 @@ export class PartialEditView extends ItemView {
    * otherwise treating the two kinds differently — see class doc comment.
    */
   private renderLoadedState(): void {
-    const kindLabel =
-      this.nodeKind === "list" ? this.plugin.t("partialEdit.kindList") : this.plugin.t("partialEdit.kindSection");
+    // Phase 5C-2: extended from a binary list/section ternary to cover the
+    // two new standalone-complex-block kinds. kind display is otherwise
+    // unified with section/list (same title template, same textarea/Apply/
+    // Cancel wiring below) — see class doc comment.
+    const kindLabel = ((): string => {
+      switch (this.nodeKind) {
+        case "list":
+          return this.plugin.t("partialEdit.kindList");
+        case "callout":
+          return this.plugin.t("partialEdit.kindCallout");
+        case "blockquote":
+          return this.plugin.t("partialEdit.kindBlockquote");
+        case "section":
+        default:
+          return this.plugin.t("partialEdit.kindSection");
+      }
+    })();
     this.titleEl.setText(this.plugin.t("partialEdit.editingTitle", { kind: kindLabel, label: this.label }));
     this.textareaEl.disabled = false;
     this.applyButtonEl.disabled = false;

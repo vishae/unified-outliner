@@ -16,21 +16,20 @@
  * that range. This mirrors move/relocateSection.ts's "resolve safely,
  * touch nothing else" philosophy, just for content instead of position.
  *
- * Node resolution is entirely delegated to the existing
- * `doc.nodes.get(nodeId)` + `isSectionNode`/`isListNode` primitives already
- * used by every other tree/* and move/* module — no Markdown
- * re-interpretation happens here.
+ * Node resolution is primarily `doc.nodes.get(nodeId)` +
+ * `isSectionNode`/`isListNode` — the primitives every other tree/* and
+ * move/* module already uses — for a section or list id.
  *
- * Phase 5C note (no behavior change): parser/complexBlocks.ts's
- * ComplexBlockInfo ids (callout/fenced-code/table/paragraph) are never
- * inserted into ParsedDocument.nodes, so passing one to extractSubtreeText
- * or applySubtreeEdit below already resolves safely to reason
- * "resolve-failed" with zero code change here. A caller that wants a more
- * specific reason ("this id is a recognized-but-unsupported complex
- * block", rather than "this id doesn't exist") should consult
- * parser/complexBlocks.ts's describeComplexBlockRejection() BEFORE calling
- * either function below — see that function's own doc comment.
+ * Phase 5C-2 (2026-08-14, behavior change from the Phase 5C note this
+ * replaces): a callout/blockquote id (parser/complexBlocks.ts's
+ * ComplexBlockInfo, never inserted into ParsedDocument.nodes) is now ALSO
+ * resolvable here — see extractSubtreeText's own doc comment for the exact
+ * fresh-scanComplexBlocks fallback and its `editability === "supported"`
+ * gate. fenced-code/table/paragraph/thematic-break ComplexBlockInfo ids
+ * are deliberately NOT resolvable (out of scope for this ticket) and still
+ * resolve to "resolve-failed", unchanged from before.
  *
+
  * Phase 4C (list subtrees): extractSubtreeText/applySubtreeEdit below are
  * the generalized core — they accept EITHER a section id or a list id,
  * since both ListBlockNode and SectionBlockNode carry the same `.range`
@@ -77,6 +76,8 @@
  * regression test pinning this separation down.
  */
 import { isListNode, isSectionNode, ParsedDocument } from "../model/block";
+import { ComplexBlockInfo } from "../model/complexBlock";
+import { scanComplexBlocks } from "../parser/complexBlocks";
 
 export type NoExtractReason = "resolve-failed" | "not-a-heading";
 
@@ -117,7 +118,7 @@ export function extractSectionText(
   return { ok: false, text: "", startLine: -1, endLine: -1, reason: "not-a-heading" };
 }
 
-export type SubtreeKind = "section" | "list";
+export type SubtreeKind = "section" | "list" | "callout" | "blockquote";
 
 export type NoExtractSubtreeReason = "resolve-failed" | "not-editable" | "unsafe-indent";
 
@@ -145,11 +146,38 @@ export interface ExtractSubtreeOutcome {
  * the Partial Edit Pane shouldn't offer to round-trip text whose
  * indentation the rest of this plugin already treats as unsafe to
  * interpret. Sections have no equivalent concept.
+ *
+ * Phase 5C-2 (2026-08-14): when `nodeId` does not resolve in `doc.nodes`
+ * (this module's Phase 5C note above already documented this as the
+ * pre-existing behavior for ANY ComplexBlockInfo id), this now makes ONE
+ * additional attempt before giving up: a fresh `scanComplexBlocks(doc)`
+ * pass, looking for a callout/blockquote whose own id matches AND whose
+ * `editability === "supported"` — the exact same eligibility gate
+ * tree/buildOutlineTree.ts's isStandaloneComplexBlockEligible uses for
+ * deciding whether to project a Tree row for it in the first place, kept
+ * independently re-implemented here (not imported) for the same
+ * "each layer re-verifies against current ground truth, never trusts a
+ * caller's earlier judgment" reason edit/deleteCompositeBlock.ts's own top
+ * doc comment gives for its own re-parse/re-scan/re-match design. A
+ * complex block whose id doesn't resolve at all, or resolves but is no
+ * longer "supported" (e.g. the note changed between Tree render and
+ * Apply), still reports plain "resolve-failed" — this module intentionally
+ * does not grow a THIRD failure-reason tier for that distinction; the
+ * Partial Edit Pane has no different Notice text for "never existed" vs.
+ * "existed but is no longer eligible" and treating both the same is
+ * exactly the safe, no-guessing behavior every other boundary check in
+ * this codebase already prefers. `scanComplexBlocks` takes only `doc` (no
+ * settings/rules involved, unlike CompositeBlock matching), so running it
+ * here has no dependency on the Outline Tree's own composite-rule
+ * settings and is cheap enough to run per extract/apply call, matching how
+ * every other edit/*CompositeBlock.ts module already re-derives its own
+ * scan fresh rather than accepting one from the caller.
  */
 export function extractSubtreeText(doc: ParsedDocument, nodeId: string): ExtractSubtreeOutcome {
   const node = doc.nodes.get(nodeId);
   if (!node) {
-    return { ok: false, kind: null, text: "", startLine: -1, endLine: -1, reason: "resolve-failed" };
+    const complexBlock = scanComplexBlocks(doc).blocks.find((b) => b.id === nodeId);
+    return extractComplexBlockText(doc, complexBlock);
   }
   if (isListNode(node)) {
     if (node.unsafeIndent) {
@@ -179,6 +207,35 @@ export function extractSubtreeText(doc: ParsedDocument, nodeId: string): Extract
   // only so this function has a total, type-checked return for every
   // path.
   return { ok: false, kind: null, text: "", startLine: -1, endLine: -1, reason: "not-editable" };
+}
+
+/**
+ * Phase 5C-2: the callout/blockquote counterpart of extractSubtreeText's
+ * section/list branches above — only ever reached from there, when `nodeId`
+ * is not a BlockNode id at all. `complexBlock` is `undefined` for a
+ * completely unresolvable id; `editability !== "supported"` is refused
+ * identically (both collapse to "resolve-failed" — see extractSubtreeText's
+ * own doc comment for why this module does not distinguish the two).
+ */
+function extractComplexBlockText(
+  doc: ParsedDocument,
+  complexBlock: ComplexBlockInfo | undefined
+): ExtractSubtreeOutcome {
+  if (
+    !complexBlock ||
+    (complexBlock.kind !== "callout" && complexBlock.kind !== "blockquote") ||
+    complexBlock.editability !== "supported"
+  ) {
+    return { ok: false, kind: null, text: "", startLine: -1, endLine: -1, reason: "resolve-failed" };
+  }
+  const text = doc.lines.slice(complexBlock.range.startLine, complexBlock.range.endLine + 1).join("\n");
+  return {
+    ok: true,
+    kind: complexBlock.kind,
+    text,
+    startLine: complexBlock.range.startLine,
+    endLine: complexBlock.range.endLine,
+  };
 }
 
 export type NoApplySectionEditReason = NoExtractReason | "conflict";

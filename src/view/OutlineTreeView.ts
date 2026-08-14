@@ -577,17 +577,29 @@ export class OutlineTreeView extends ItemView {
     const doc: ParsedDocument = parseDocument(text);
     this.currentDoc = doc;
 
+    // Phase 5C-2 (2026-08-14): scanComplexBlocks(doc) now always runs, not
+    // just when a composite rule is enabled — standalone callout/blockquote
+    // Tree projection (buildOutlineTree.ts's standaloneComplexBlocks option,
+    // below) is independent of settings.compositeBlocks entirely, and needs
+    // this scan regardless. This is a deliberate removal of the previous
+    // "skip scanComplexBlocks/matchCompositeBlocks entirely when every
+    // composite rule is disabled" optimization's scan half — a single
+    // scanComplexBlocks pass is the same order of cost as parseDocument
+    // itself (both single-pass line scans), and every command dispatch in
+    // this plugin already re-runs it per click/keystroke, so paying it once
+    // more per refresh() is not a new category of cost.
+    const complexScan = scanComplexBlocks(doc);
+
     // Phase 5D-0.3: CompositeBlock projection (see buildOutlineTree.ts's
     // BuildOutlineTreeOptions.composites doc comment). Each rule's own
     // `enabled` flag is the ONLY switch for composite projection (approval
     // §4 — no separate showCompositeBlocksInOutline toggle), so when every
-    // rule is disabled this skips scanComplexBlocks/matchCompositeBlocks
-    // entirely rather than paying their cost on every refresh for users who
-    // don't use the feature at all.
+    // rule is disabled this still skips matchCompositeBlocks itself (the
+    // pattern-matching step, more work than the scan above) rather than
+    // paying its cost for users who don't use the feature at all.
     const enabledRules = getEnabledCompositeBlockRules(this.plugin.settings.compositeBlocks);
     let composites: BuildOutlineTreeOptions["composites"];
     if (enabledRules.length > 0) {
-      const complexScan = scanComplexBlocks(doc);
       const infos = matchCompositeBlocks(doc, complexScan, enabledRules);
       const complexBlocksById = new Map(complexScan.blocks.map((b) => [b.id, b]));
       composites = { infos, complexBlocksById, rules: enabledRules };
@@ -604,6 +616,13 @@ export class OutlineTreeView extends ItemView {
     this.currentTree = buildOutlineTree(doc, {
       includeLists,
       composites,
+      // Phase 5C-2: independent of `composites` above — a standalone
+      // callout/blockquote is projected regardless of whether any
+      // composite rule is enabled. buildOutlineTree.ts's own
+      // groupStandaloneComplexBlocks filters this full, unfiltered
+      // `complexScan.blocks` list down to callout/blockquote +
+      // editability "supported" + not-already-a-composite-member itself.
+      standaloneComplexBlocks: { blocks: complexScan.blocks },
       t: (key, vars) => this.plugin.t(key, vars),
     });
     this.nodeById = buildNodeByIdMap(this.currentTree);
@@ -1140,10 +1159,22 @@ export class OutlineTreeView extends ItemView {
       }
       innerEl.createSpan({ cls: "unified-outliner-composite-label", text: node.label });
     } else if (isComplexMember) {
+      // Phase 5C-2: same "prefix as its own semantic <span>, skipped
+      // entirely when absent" pattern as the composite branch above —
+      // node.prefix is undefined for a composite-member row (unchanged
+      // look) and already includes its own trailing separator space
+      // (STANDALONE_CALLOUT_PREFIX/STANDALONE_BLOCKQUOTE_PREFIX) for a
+      // standalone row, so no extra space is added here either.
       const innerEl = selfEl.createDiv({
         cls: "tree-item-inner unified-outliner-complex-member-text",
       });
-      innerEl.setText(node.label);
+      if (node.prefix) {
+        innerEl.createSpan({
+          cls: "unified-outliner-complex-member-prefix",
+          text: node.prefix,
+        });
+      }
+      innerEl.createSpan({ cls: "unified-outliner-complex-member-label", text: node.label });
     }
 
     selfEl.addEventListener("click", () => {
@@ -1226,6 +1257,24 @@ export class OutlineTreeView extends ItemView {
       selfEl.addEventListener("contextmenu", (evt) => {
         evt.preventDefault();
         this.showCompositeCommandMenu(evt, node.id);
+      });
+    } else if (isComplexMember && node.isStandalone) {
+      // Phase 5C-2: a THIRD, separate menu path — for a STANDALONE
+      // callout/blockquote row only (node.isStandalone === true). A
+      // composite-member complex-member row (isStandalone === false) still
+      // gets NO context menu at all, exactly as before this ticket — this
+      // branch is only ever reached for the new row kind. Deliberately
+      // NOT gated by `!readOnly` either, same reasoning as the composite
+      // branch above (complex-member rows are always in readOnlyNodeIds).
+      // Unlike showCompositeCommandMenu, this menu is never empty and
+      // never re-checks eligibility at menu-build time — its one item
+      // ("Open in Partial Edit") re-verifies its own target fresh at
+      // click time anyway (activatePartialEditView -> PartialEditView's
+      // own extractSubtreeText re-parse), matching how the section/list
+      // "Open partial edit pane" items already work.
+      selfEl.addEventListener("contextmenu", (evt) => {
+        evt.preventDefault();
+        this.showStandaloneComplexBlockMenu(evt, node.id);
       });
     }
 
@@ -2227,6 +2276,49 @@ export class OutlineTreeView extends ItemView {
       );
     }
 
+    this.showTrackedMenu(menu, evt);
+  }
+
+  /**
+   * Phase 5C-2: a standalone (non-composite-member) callout/blockquote
+   * row's own right-click/long-press menu — deliberately a single-item
+   * menu ("Open in Partial Edit" only), per the approved spec's explicit
+   * "以下は出さないでください: Move up/down, Delete, Insert before/after/
+   * child, Duplicate, Any composite-specific command" instruction. Kept
+   * entirely separate from showCompositeCommandMenu (composite-member
+   * rows) rather than folded into it, since node.isStandalone is what
+   * distinguishes the two at the call site (see renderNode's
+   * `isComplexMember && node.isStandalone` branch) and their allowed
+   * actions are deliberately disjoint.
+   *
+   * Reuses the exact tree.menu.openPartialEditPane i18n key and
+   * activatePartialEditView entry point that showStructureCommandMenu/
+   * showListCommandMenu's own "Open in Partial Edit" items already use —
+   * no new i18n key needed. activatePartialEditView's own re-parse (via
+   * extractSubtreeText, which Phase 5C-2 taught to fall back to a fresh
+   * scanComplexBlocks(doc) lookup when doc.nodes.get(nodeId) fails) is
+   * what re-verifies this id still resolves to a supported standalone
+   * callout/blockquote at click time — no extra re-check is needed here,
+   * matching how the section/list variants of this same item work.
+   *
+   * No readOnlyNodeIds gate here: standalone complex-member rows are
+   * unconditionally in that set (see collectReadOnlyOutlineNodeIds), so
+   * this menu exists alongside that gate, not conditioned on it — same
+   * relationship showCompositeCommandMenu has with the set.
+   */
+  private showStandaloneComplexBlockMenu(evt: MouseEvent, nodeId: string): void {
+    const menu = new Menu();
+    menu.addItem((item) =>
+      item
+        .setTitle(this.plugin.t("tree.menu.openPartialEditPane"))
+        .setIcon("edit-3")
+        // void: onClick doesn't await its callback's return value, and
+        // activatePartialEditView already catches its own failures
+        // internally and reports them via Notice — see its doc comment
+        // in main.ts, and showStructureCommandMenu's identical item
+        // above for the same pattern.
+        .onClick(() => void this.plugin.activatePartialEditView(nodeId))
+    );
     this.showTrackedMenu(menu, evt);
   }
 

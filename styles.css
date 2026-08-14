@@ -622,7 +622,8 @@ settings:
   white-space: nowrap;
 }
 
-.unified-outliner-composite-prefix {
+.unified-outliner-composite-prefix,
+.unified-outliner-complex-member-prefix {
   color: var(--uo-current-color);
 }
 

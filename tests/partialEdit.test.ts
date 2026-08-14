@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseDocument } from "../src/parser/parseDocument";
+import { scanComplexBlocks } from "../src/parser/complexBlocks";
 import {
   buildOutlineTree,
   flattenOutlineTree,
@@ -32,6 +33,26 @@ function listIdOf(doc: ReturnType<typeof parseDocument>, needle: string): string
     if (n.type === "list" && doc.lines[n.range.startLine].includes(needle)) return n.id;
   }
   throw new Error(`no list item matching "${needle}"`);
+}
+
+/** Phase 5C-2: finds the id of the standalone callout whose own header line contains `needle`. */
+function calloutIdOf(doc: ReturnType<typeof parseDocument>, needle: string): string {
+  const b = scanComplexBlocks(doc).blocks.find(
+    (x) => x.kind === "callout" && doc.lines[x.range.startLine].includes(needle)
+  );
+  if (!b) throw new Error(`no callout matching "${needle}"`);
+  return b.id;
+}
+
+/** Phase 5C-2: finds the id of the standalone blockquote whose body contains `needle` anywhere in its range. */
+function blockquoteIdOf(doc: ReturnType<typeof parseDocument>, needle: string): string {
+  const b = scanComplexBlocks(doc).blocks.find(
+    (x) =>
+      x.kind === "blockquote" &&
+      doc.lines.slice(x.range.startLine, x.range.endLine + 1).some((l) => l.includes(needle))
+  );
+  if (!b) throw new Error(`no blockquote matching "${needle}"`);
+  return b.id;
 }
 
 /** This file only ever builds section-only trees (buildOutlineTree(doc), no options), so every node is a section — this narrows the type accordingly. */
@@ -336,5 +357,126 @@ describe("applySubtreeEdit", () => {
     const highlighted = resolveHighlightedNodeId(newDoc, outcome.newStartLine, { includeLists: true });
     const highlightedNode = flat.find((n) => n.id === highlighted);
     expect(highlightedNode && isOutlineListNode(highlightedNode) && highlightedNode.text).toBe("two");
+  });
+});
+
+// Phase 5C-2: standalone callout/blockquote Partial Edit resolution.
+// extractSubtreeText/applySubtreeEdit now ALSO resolve a ComplexBlockInfo id
+// (a callout/blockquote that is not a BlockNode at all — see this module's
+// own top doc comment) via a fresh scanComplexBlocks(doc) fallback, gated on
+// editability === "supported". Section/list behavior above is entirely
+// unchanged by this addition (that fallback path is only ever reached when
+// doc.nodes.get(nodeId) itself fails).
+
+describe("extractSubtreeText (Phase 5C-2: standalone callout/blockquote resolution)", () => {
+  it("resolves a supported standalone callout id to its own full range text (kind: 'callout')", () => {
+    const text = ["# H", "> [!note] Title", "> body line"].join("\n");
+    const doc = parseDocument(text);
+    const id = calloutIdOf(doc, "Title");
+
+    const outcome = extractSubtreeText(doc, id);
+    expect(outcome.ok).toBe(true);
+    expect(outcome.kind).toBe("callout");
+    expect(outcome.text).toBe(["> [!note] Title", "> body line"].join("\n"));
+  });
+
+  it("resolves a supported standalone blockquote id similarly (kind: 'blockquote')", () => {
+    const text = ["# H", "> quoted line one", "> quoted line two"].join("\n");
+    const doc = parseDocument(text);
+    const id = blockquoteIdOf(doc, "quoted line one");
+
+    const outcome = extractSubtreeText(doc, id);
+    expect(outcome.ok).toBe(true);
+    expect(outcome.kind).toBe("blockquote");
+    expect(outcome.text).toBe(["> quoted line one", "> quoted line two"].join("\n"));
+  });
+
+  it("still reports resolve-failed for a completely unknown id (unchanged pre-5C-2 behavior)", () => {
+    const doc = parseDocument(["# H", "body"].join("\n"));
+    const outcome = extractSubtreeText(doc, "callout-not-real");
+    expect(outcome.ok).toBe(false);
+    expect(outcome.kind).toBe(null);
+    expect(outcome.reason).toBe("resolve-failed");
+  });
+
+  it("reports resolve-failed (never a partial extraction) for a complex-block id whose editability is not 'supported'", () => {
+    // A callout containing an embedded callout marker downgrades to
+    // editability "unsupported" (parser/complexBlocks.ts's own
+    // hasEmbeddedCalloutMarker path) — extractSubtreeText must refuse it
+    // exactly like a nonexistent id.
+    const text = ["# H", "> [!note]", "> > [!warning] nested"].join("\n");
+    const doc = parseDocument(text);
+    const info = scanComplexBlocks(doc).blocks.find((b) => b.editability === "unsupported");
+    expect(info).toBeDefined();
+
+    const outcome = extractSubtreeText(doc, info!.id);
+    expect(outcome.ok).toBe(false);
+    expect(outcome.reason).toBe("resolve-failed");
+  });
+
+  it("still resolves a fenced-code complex-block id as resolve-failed (out of scope for Partial Edit in this revision)", () => {
+    const text = ["# H", "```", "code", "```"].join("\n");
+    const doc = parseDocument(text);
+    const info = scanComplexBlocks(doc).blocks.find((b) => b.kind === "fenced-code");
+    expect(info).toBeDefined();
+
+    const outcome = extractSubtreeText(doc, info!.id);
+    expect(outcome.ok).toBe(false);
+    expect(outcome.reason).toBe("resolve-failed");
+  });
+});
+
+describe("applySubtreeEdit (Phase 5C-2: standalone callout/blockquote)", () => {
+  it("replaces a standalone callout's own range, leaving everything else in the note untouched", () => {
+    const text = ["# A", "> [!note] Title", "> old body", "# B"].join("\n");
+    const doc = parseDocument(text);
+    const id = calloutIdOf(doc, "Title");
+    const original = extractSubtreeText(doc, id);
+    expect(original.ok).toBe(true);
+
+    const newText = ["> [!note] Title", "> new body", "> extra line"].join("\n");
+    const outcome = applySubtreeEdit(doc, id, original.text, newText);
+
+    expect(outcome.changed).toBe(true);
+    expect(outcome.lines).toEqual([
+      "# A",
+      "> [!note] Title",
+      "> new body",
+      "> extra line",
+      "# B",
+    ]);
+    expect(outcome.newStartLine).toBe(1);
+  });
+
+  it("refuses to apply (conflict) when the note's callout content changed since the pane loaded it, leaving lines unchanged", () => {
+    const originalText = ["> [!note] Title", "> original body"].join("\n");
+    // Simulate: pane opened, captured `originalText`, then the underlying
+    // note was edited elsewhere before the pane's Apply was clicked.
+    const laterText = ["# A", "> [!note] Title", "> body changed by someone else"].join("\n");
+    const doc = parseDocument(laterText);
+    const id = calloutIdOf(doc, "Title");
+
+    const outcome = applySubtreeEdit(doc, id, originalText, "> [!note] Title\n> my pane's edit");
+    expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("conflict");
+    expect(outcome.lines).toEqual(doc.lines);
+  });
+
+  it("no-ops with resolve-failed, leaving lines unchanged, when the callout id no longer resolves (e.g. deleted from the note before Apply)", () => {
+    const doc = parseDocument(["# A", "body only, no callout"].join("\n"));
+    const outcome = applySubtreeEdit(doc, "callout-0", "> [!note] gone", "> [!note] edited");
+    expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("resolve-failed");
+    expect(outcome.lines).toEqual(doc.lines);
+  });
+
+  it("does not falsely flag a conflict when the callout/blockquote is genuinely unchanged", () => {
+    const text = ["# A", "> quoted text"].join("\n");
+    const doc = parseDocument(text);
+    const id = blockquoteIdOf(doc, "quoted text");
+    const original = extractSubtreeText(doc, id);
+
+    const outcome = applySubtreeEdit(doc, id, original.text, "> quoted text edited");
+    expect(outcome.changed).toBe(true);
   });
 });

@@ -104,15 +104,26 @@ export interface OutlineTreeCompositeNode {
 }
 
 /**
- * Phase 5D-0.3: a read-only Tree row for a composite member that has no
- * OTHER representation in the Outline Tree today — a callout or blockquote
- * (model/complexBlock.ts's ComplexBlockInfo), which (unlike a list item)
- * is never itself a BlockNode and so has no existing node kind of its own.
- * This node kind exists ONLY as a CompositeBlock's child; nothing in this
- * module ever creates one outside of buildMemberNode. It carries no
- * structural-edit capability of any kind (see the Phase 5D-0.3 design memo
- * §4/approval §1) — the Tree view must not attach rename/drag-drop/context-
- * menu handling to it.
+ * Phase 5D-0.3: a read-only Tree row for a callout or blockquote
+ * (model/complexBlock.ts's ComplexBlockInfo), which (unlike a list item) is
+ * never itself a BlockNode and so has no existing node kind of its own.
+ *
+ * Phase 5C-2 (2026-08-14) widened this node kind's role: it was originally
+ * documented as existing ONLY as a CompositeBlock's child (produced solely
+ * by buildMemberNode below) — that is still true for a composite's own
+ * members, but this same node kind is now ALSO used, independently, for a
+ * STANDALONE callout/blockquote (one that is NOT part of any matched
+ * CompositeBlock) shown as a section-level sibling row — see
+ * `isStandalone`/`buildStandaloneComplexNode` below. Both uses share this
+ * one type and the exact same read-only treatment (readOnlyNodeIds,
+ * renderNode's isComplexMember branch, foldIdentity's "complex-member"
+ * pool) — see `isStandalone`'s own doc comment for the one behavioral
+ * difference the Tree view is allowed to make between the two (a
+ * standalone row gets its own "Open in Partial Edit" context menu; a
+ * composite-member row still gets none, unchanged from before Phase 5C-2).
+ * It carries no structural-edit capability of any kind either way (see the
+ * Phase 5D-0.3 design memo §4/approval §1) — the Tree view must not attach
+ * rename/drag-drop/move/delete handling to it regardless of `isStandalone`.
  */
 export interface OutlineTreeComplexMemberNode {
   kind: "complex-member";
@@ -120,6 +131,30 @@ export interface OutlineTreeComplexMemberNode {
   id: string;
   complexKind: ComplexBlockKind;
   label: string;
+  /**
+   * Phase 5C-2: an optional decorative prefix (e.g. "▣ "), analogous to
+   * OutlineTreeCompositeNode.prefix — rendered as its own <span> (see
+   * OutlineTreeView.ts's renderNode isComplexMember branch) so it stays
+   * part of the row's semantic textContent, exactly like the composite
+   * prefix already does. Undefined for a composite member (buildMemberNode
+   * never sets this — composite-member rows keep their pre-5C-2 look,
+   * unchanged); set for a standalone row (buildStandaloneComplexNode,
+   * always paired with isStandalone: true) via STANDALONE_CALLOUT_PREFIX /
+   * STANDALONE_BLOCKQUOTE_PREFIX below.
+   */
+  prefix?: string;
+  /**
+   * Phase 5C-2: true for a STANDALONE callout/blockquote row (not part of
+   * any matched CompositeBlock) — the one signal view/OutlineTreeView.ts's
+   * renderNode needs to decide whether this row gets its own "Open in
+   * Partial Edit" context menu. A composite-member row (buildMemberNode)
+   * always sets this false, keeping its existing no-context-menu behavior
+   * byte-for-byte unchanged — composite-member Partial Edit integration is
+   * explicitly out of scope for Phase 5C-2 (see this ticket's own approved
+   * scope note: composite-member rows are read-only navigation only, same
+   * as before).
+   */
+  isStandalone: boolean;
   /** 0-based line of the member's own first line (jump target). */
   line: number;
   /** Always [] — complex-block members are not decomposed further in this revision. */
@@ -171,6 +206,32 @@ export interface BuildOutlineTreeOptions {
   };
   /** Translator for composite/complex-member display labels and fallback text. Defaults to English, same convention as every other optional `t` in this codebase. */
   t?: Translator;
+  /**
+   * Phase 5C-2 (2026-08-14): project STANDALONE callout/blockquote
+   * ComplexBlockInfo entries (i.e. NOT already consumed as some
+   * CompositeBlockInfo's own member — see `options.composites` above) as
+   * section-level sibling OutlineTreeComplexMemberNode rows
+   * (isStandalone: true). Independent of `composites`/`includeLists`: a
+   * caller may pass this alone (composite matching disabled or unused) and
+   * still get standalone callout/blockquote rows.
+   *
+   * `blocks` is typically the caller's own `scanComplexBlocks(doc).blocks`
+   * — every ComplexBlockKind, not just callout/blockquote; this function
+   * filters to callout/blockquote with `editability === "supported"`
+   * itself (see isStandaloneComplexBlockEligible below), so passing the
+   * full unfiltered scan result is both simplest for the caller and safest
+   * (no risk of the caller's own filtering disagreeing with this module's).
+   *
+   * A callout/blockquote is ALWAYS projected as a SECTION-level sibling in
+   * this revision, even when its own `parentId` resolves to a list item
+   * (Phase 5C-2 approved scope: "list itemの子としての表示は今回見送る...
+   * section直下へ委譲して構いません") — see resolveEnclosingSectionId
+   * below, which walks up past any list-item parent to the nearest
+   * enclosing section (or null, for top-of-document content).
+   */
+  standaloneComplexBlocks?: {
+    blocks: ComplexBlockInfo[];
+  };
 }
 
 /** Threaded through the recursive build below only when `options.composites` is set — see BuildOutlineTreeOptions.composites's doc comment. */
@@ -393,6 +454,257 @@ export function complexMemberDisplayLabel(
 }
 
 /**
+ * Phase 5C-2 (2026-08-14): decorative prefixes for a STANDALONE
+ * callout/blockquote row (isStandalone: true) — analogous to
+ * CompositeBlockRule.prefix, but deliberately a separate, plain display
+ * constant rather than a rule field: standalone rows have no
+ * CompositeBlockRule of their own (they are, by definition, NOT a matched
+ * composite), and this ticket's approved scope explicitly keeps the two
+ * prefix concepts separate. Not i18n keys — these are decorative glyphs,
+ * not translated text, matching how CompositeBlockRule.prefix ("◉"/"❖")
+ * is also plain model data rather than an i18n key. Kept as named
+ * constants (not inlined) so a future settings-driven override has one
+ * place to redirect.
+ */
+export const STANDALONE_CALLOUT_PREFIX = "▣ ";
+export const STANDALONE_BLOCKQUOTE_PREFIX = "❝ ";
+
+/**
+ * Phase 5C-2: maximum length (in characters) of a standalone
+ * callout/blockquote's generated label (standaloneComplexBlockLabel,
+ * below) before it is truncated with a trailing "…". Applied at the pure
+ * label-generation layer (not left to CSS text-overflow alone, unlike the
+ * list-row label — see buildListNode's `text` field) so a pathologically
+ * long callout title or first body line can never produce an oversized
+ * label value flowing into tests, tooltips, or any other consumer of this
+ * string, not just the rendered DOM row.
+ */
+const STANDALONE_COMPLEX_LABEL_MAX_LENGTH = 80;
+
+function truncateStandaloneLabel(label: string): string {
+  if (label.length <= STANDALONE_COMPLEX_LABEL_MAX_LENGTH) return label;
+  return label.slice(0, STANDALONE_COMPLEX_LABEL_MAX_LENGTH - 1).trimEnd() + "…";
+}
+
+/**
+ * Phase 5C-2: `[!type]` -> a simple, safe-for-any-unknown-type display
+ * name, per this ticket's approved "簡易整形で構わない" instruction — no
+ * i18n dictionary of callout type names is introduced. Strips everything
+ * except ASCII letters/digits/hyphen/underscore, splits on hyphen/
+ * underscore runs, capitalizes each resulting word's first letter, and
+ * rejoins with single spaces ("info-box" -> "Info Box", "TIP" -> "TIP",
+ * "note" -> "Note"). Returns "" (never throws, never returns a
+ * bracket/punctuation fragment) when the type string has nothing left
+ * after stripping, so callers can safely treat "" as "no usable type name,
+ * fall through to the next fallback tier".
+ */
+function formatCalloutTypeName(rawType: string): string {
+  const cleaned = rawType.replace(/[^a-zA-Z0-9_-]/g, "");
+  if (cleaned.length === 0) return "";
+  return cleaned
+    .split(/[-_]+/)
+    .filter((word) => word.length > 0)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+/**
+ * Phase 5C-2: display label for a STANDALONE callout/blockquote row —
+ * deliberately a SEPARATE function from complexMemberDisplayLabel above,
+ * not a wrapper around it, because the two fallback ORDERS genuinely
+ * differ (this ticket's own approved spec):
+ *
+ *   callout:    title -> type display name -> first non-empty body line
+ *               -> existing tree.complexMember.calloutFallback key
+ *   blockquote: first non-empty body line -> existing
+ *               tree.complexMember.blockquoteFallback key
+ *
+ * (complexMemberDisplayLabel's own order has no "type display name" tier
+ * at all and must stay exactly as it is — it still drives every
+ * composite-member row, which this ticket does not touch.) Reuses
+ * CALLOUT_TITLE_RE and stripQuotePrefixForDisplay from
+ * complexMemberDisplayLabel's own neighborhood rather than duplicating
+ * either regex/helper. Truncation (truncateStandaloneLabel) is applied to
+ * whichever tier's text is actually returned — never to the final
+ * fallback-key text, which is always short by construction.
+ *
+ * Per-block-only: this function has no knowledge of sibling rows, so two
+ * standalone blocks that happen to fall through to the exact same fallback
+ * text (most commonly the kind-fallback tier) will get IDENTICAL labels
+ * from this function alone — see disambiguateStandaloneLabels, below,
+ * which is what actually appends a "#N" suffix when that happens within
+ * one section's sibling group ("種別＋通番").
+ */
+export function standaloneComplexBlockLabel(
+  doc: ParsedDocument,
+  info: ComplexBlockInfo,
+  t: Translator = defaultTranslator
+): string {
+  const firstLine = doc.lines[info.range.startLine] ?? "";
+  if (info.kind === "callout") {
+    const m = firstLine.match(CALLOUT_TITLE_RE);
+    const title = m?.[3]?.trim();
+    if (title) return truncateStandaloneLabel(title);
+    const typeName = m?.[1] ? formatCalloutTypeName(m[1]) : "";
+    if (typeName) return truncateStandaloneLabel(typeName);
+    for (let l = info.range.startLine + 1; l <= info.range.endLine; l++) {
+      const body = stripQuotePrefixForDisplay(doc.lines[l] ?? "");
+      if (body.length > 0) return truncateStandaloneLabel(body);
+    }
+    return t("tree.complexMember.calloutFallback");
+  }
+  for (let l = info.range.startLine; l <= info.range.endLine; l++) {
+    const body = stripQuotePrefixForDisplay(doc.lines[l] ?? "");
+    if (body.length > 0) return truncateStandaloneLabel(body);
+  }
+  return t("tree.complexMember.blockquoteFallback");
+}
+
+/**
+ * Phase 5C-2: `info.kind` is callout/blockquote AND `info.editability ===
+ * "supported"` — the ONLY ComplexBlockInfo values this ticket ever
+ * projects as a standalone Tree row. "read-only"/"unsupported"/"ambiguous"
+ * are all deliberately excluded (this ticket's own approved instruction:
+ * "誤表示しない、を最優先できる" — a boundary this phase isn't fully
+ * confident about is simply not shown, never shown-but-disabled). Every
+ * other ComplexBlockKind (fenced-code/table/paragraph/thematic-break) is
+ * out of scope for this ticket and excluded unconditionally.
+ */
+function isStandaloneComplexBlockEligible(info: ComplexBlockInfo): boolean {
+  return (info.kind === "callout" || info.kind === "blockquote") && info.editability === "supported";
+}
+
+/**
+ * Phase 5C-2: walks a ComplexBlockInfo's own `parentId` chain up to the
+ * nearest enclosing SECTION, or null (top-of-document, no enclosing
+ * heading) — mirroring parser/compositeBlocks.ts's own
+ * resolveMemberSectionId, reimplemented locally rather than imported for
+ * the same reason that function's own doc comment gives (keeping this
+ * layer independent of parser/*'s internals; this module already has its
+ * own equally small copy of that walk-up pattern, so a second small copy
+ * here is consistent with the existing precedent rather than a new one).
+ * This is what implements this ticket's approved "list itemの子としての
+ * 表示は今回見送る...section直下へ委譲" decision: a callout/blockquote
+ * whose OWN parentId is a list item still resolves here to that list
+ * item's OWN enclosing section, not to the list item itself.
+ */
+function resolveEnclosingSectionId(doc: ParsedDocument, parentId: string | null): string | null {
+  let id: string | null = parentId;
+  const visited = new Set<string>();
+  while (id) {
+    if (visited.has(id)) return null; // defensive: never trust a cycle
+    visited.add(id);
+    const node = doc.nodes.get(id);
+    if (!node) return null;
+    if (node.type === "section") return node.id;
+    id = node.parentId;
+  }
+  return null;
+}
+
+/**
+ * Phase 5C-2: appends a "#N" suffix ("種別＋通番") to any label that
+ * exactly duplicates an earlier sibling's label within the same group
+ * (always one section's worth of standalone entries — see
+ * groupStandaloneComplexBlocks, below, which is the only caller). Applied
+ * generically to ANY duplicate, not specifically to blocks that hit the
+ * kind-fallback tier — in practice that tier (a short, kind-only string
+ * like "Callout") is overwhelmingly the one that repeats, since a real
+ * title/type-name/body-summary is very unlikely to collide by accident,
+ * but this function does not need to know or care which tier produced a
+ * given label. Numbering is 1-based and restarts at 1 for each distinct
+ * label value, in the group's own document order (the caller is expected
+ * to have already sorted `entries` by line).
+ */
+function disambiguateStandaloneLabels(
+  entries: { info: ComplexBlockInfo; label: string }[]
+): Map<string, string> {
+  const totalByLabel = new Map<string, number>();
+  for (const e of entries) totalByLabel.set(e.label, (totalByLabel.get(e.label) ?? 0) + 1);
+
+  const runningIndexByLabel = new Map<string, number>();
+  const finalLabelById = new Map<string, string>();
+  for (const e of entries) {
+    const total = totalByLabel.get(e.label) ?? 1;
+    if (total <= 1) {
+      finalLabelById.set(e.info.id, e.label);
+      continue;
+    }
+    const nextIndex = (runningIndexByLabel.get(e.label) ?? 0) + 1;
+    runningIndexByLabel.set(e.label, nextIndex);
+    finalLabelById.set(e.info.id, `${e.label} #${nextIndex}`);
+  }
+  return finalLabelById;
+}
+
+/**
+ * Phase 5C-2: groups every ELIGIBLE, non-composite-member ComplexBlockInfo
+ * in `blocks` by its resolved enclosing section id (resolveEnclosingSectionId),
+ * sorted by line within each group, with disambiguateStandaloneLabels
+ * already applied — the exact, ready-to-render `{info, label}[]` list
+ * buildChildren merges in for a given `sectionId` (null = top-of-document).
+ * `consumedComplexBlockIds` is every ComplexBlockInfo id already used as
+ * some CompositeBlockInfo's own (non-list) member — see buildOutlineTree's
+ * own construction of that set — so a callout/blockquote that's already
+ * shown as a composite's own read-only child is never ALSO shown as a
+ * second, standalone row for the same underlying content.
+ */
+function groupStandaloneComplexBlocks(
+  doc: ParsedDocument,
+  blocks: ComplexBlockInfo[],
+  consumedComplexBlockIds: Set<string>,
+  t: Translator
+): Map<string | null, { info: ComplexBlockInfo; label: string }[]> {
+  const bySection = new Map<string | null, ComplexBlockInfo[]>();
+  for (const info of blocks) {
+    if (!isStandaloneComplexBlockEligible(info)) continue;
+    if (consumedComplexBlockIds.has(info.id)) continue;
+    const sectionId = resolveEnclosingSectionId(doc, info.parentId);
+    const list = bySection.get(sectionId) ?? [];
+    list.push(info);
+    bySection.set(sectionId, list);
+  }
+
+  const result = new Map<string | null, { info: ComplexBlockInfo; label: string }[]>();
+  for (const [sectionId, infos] of bySection) {
+    infos.sort((a, b) => a.range.startLine - b.range.startLine);
+    const labeled = infos.map((info) => ({ info, label: standaloneComplexBlockLabel(doc, info, t) }));
+    const finalLabelById = disambiguateStandaloneLabels(labeled);
+    result.set(
+      sectionId,
+      infos.map((info) => ({ info, label: finalLabelById.get(info.id) ?? "" }))
+    );
+  }
+  return result;
+}
+
+/**
+ * Phase 5C-2: projects one standalone (isStandalone: true) callout/
+ * blockquote into an OutlineTreeComplexMemberNode — the prefix-bearing
+ * counterpart to buildMemberNode's composite-member construction (which
+ * always sets isStandalone: false and prefix: undefined). `label` is
+ * already fully resolved (standaloneComplexBlockLabel +
+ * disambiguateStandaloneLabels, both applied by groupStandaloneComplexBlocks
+ * before this is ever called) — this function does no label computation
+ * of its own.
+ */
+function buildStandaloneComplexNode(
+  info: ComplexBlockInfo,
+  label: string
+): OutlineTreeComplexMemberNode {
+  return {
+    kind: "complex-member",
+    id: info.id,
+    complexKind: info.kind,
+    label,
+    prefix: info.kind === "callout" ? STANDALONE_CALLOUT_PREFIX : STANDALONE_BLOCKQUOTE_PREFIX,
+    isStandalone: true,
+    line: info.range.startLine,
+    children: [],
+  };
+}
+
+/**
  * Phase 5D-0.3: projects one CompositeBlockMember into an OutlineTreeNode.
  * A "list"/"single-line-list" member reuses buildListNode verbatim (same
  * id, same recursive nested-list handling, including further nested
@@ -429,6 +741,7 @@ function buildMemberNode(
     id: member.id,
     complexKind: member.kind as ComplexBlockKind,
     label,
+    isStandalone: false,
     line: member.range.startLine,
     children: [],
   };
@@ -493,7 +806,8 @@ function buildSectionNode(
   doc: ParsedDocument,
   section: SectionBlockNode,
   includeLists: boolean,
-  ctx?: CompositeProjectionContext
+  ctx?: CompositeProjectionContext,
+  standaloneBySection?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>
 ): OutlineTreeSectionNode {
   return {
     kind: "section",
@@ -501,7 +815,7 @@ function buildSectionNode(
     headingText: section.headingText,
     headingLevel: section.headingLevel,
     line: section.range.startLine,
-    children: buildChildren(doc, section.childIds, includeLists, ctx),
+    children: buildChildren(doc, section.childIds, includeLists, section.id, ctx, standaloneBySection),
   };
 }
 
@@ -522,12 +836,23 @@ function buildSectionNode(
  * entry for this id; this function does not re-check settings itself). A
  * plain (non-composite) list item still follows `includeLists` exactly as
  * before.
+ *
+ * Phase 5C-2 (2026-08-14): `sectionId` (this call's own enclosing section
+ * id, or null for the top-level call) is looked up in `standaloneBySection`
+ * — already fully grouped/labeled by groupStandaloneComplexBlocks — and any
+ * entries found are merged in as additional OutlineTreeComplexMemberNode
+ * children, sorted into document order alongside every other child exactly
+ * like a composite or plain list row already is. Independent of
+ * `includeLists`/`ctx` (a standalone callout/blockquote is not a
+ * BlockNode-backed row at all, so neither flag is relevant to it).
  */
 function buildChildren(
   doc: ParsedDocument,
   ids: string[],
   includeLists: boolean,
-  ctx?: CompositeProjectionContext
+  sectionId: string | null,
+  ctx?: CompositeProjectionContext,
+  standaloneBySection?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>
 ): OutlineTreeNode[] {
   const withLine: Array<{ node: OutlineTreeNode; line: number }> = [];
   for (const id of ids) {
@@ -535,7 +860,7 @@ function buildChildren(
     if (!child) continue;
     if (isSectionNode(child)) {
       withLine.push({
-        node: buildSectionNode(doc, child, includeLists, ctx),
+        node: buildSectionNode(doc, child, includeLists, ctx, standaloneBySection),
         line: child.range.startLine,
       });
       continue;
@@ -553,6 +878,9 @@ function buildChildren(
         line: child.range.startLine,
       });
     }
+  }
+  for (const { info, label } of standaloneBySection?.get(sectionId) ?? []) {
+    withLine.push({ node: buildStandaloneComplexNode(info, label), line: info.range.startLine });
   }
   withLine.sort((a, b) => a.line - b.line);
   return withLine.map((x) => x.node);
@@ -644,6 +972,25 @@ export function buildOutlineTree(
 ): OutlineTreeNode[] {
   const t = options?.t ?? defaultTranslator;
   let ctx: CompositeProjectionContext | undefined;
+  // Phase 5C-2: every ComplexBlockInfo id already consumed as some
+  // CompositeBlockInfo's own (non-list) member — collected from
+  // options.composites.infos regardless of whether those composites are
+  // themselves safely projectable, so a standalone row can never appear
+  // for content that's already shown (or would be shown, if its own
+  // safety check passed) as a composite's own child. Deliberately
+  // independent of isCompositeSafelyProjectable's own per-composite check
+  // below — this set only needs to know "which ids are SPOKEN FOR", not
+  // "which composites are RENDERABLE".
+  const consumedComplexBlockIds = new Set<string>();
+  if (options?.composites) {
+    for (const info of options.composites.infos) {
+      for (const member of info.members) {
+        if (member.kind !== "list" && member.kind !== "single-line-list") {
+          consumedComplexBlockIds.add(member.id);
+        }
+      }
+    }
+  }
   if (options?.composites && options.composites.infos.length > 0) {
     const { complexBlocksById, rules } = options.composites;
     const firstMemberIdToComposite = new Map<string, CompositeBlockInfo>();
@@ -659,7 +1006,11 @@ export function buildOutlineTree(
       t,
     };
   }
-  return buildChildren(doc, doc.topLevelIds, options?.includeLists ?? false, ctx);
+
+  const standaloneBySection = options?.standaloneComplexBlocks
+    ? groupStandaloneComplexBlocks(doc, options.standaloneComplexBlocks.blocks, consumedComplexBlockIds, t)
+    : undefined;
+  return buildChildren(doc, doc.topLevelIds, options?.includeLists ?? false, null, ctx, standaloneBySection);
 }
 
 /** Flatten a tree back into a list, depth-first, document order. */
