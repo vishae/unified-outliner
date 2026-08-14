@@ -222,12 +222,25 @@ export interface BuildOutlineTreeOptions {
    * full unfiltered scan result is both simplest for the caller and safest
    * (no risk of the caller's own filtering disagreeing with this module's).
    *
-   * A callout/blockquote is ALWAYS projected as a SECTION-level sibling in
-   * this revision, even when its own `parentId` resolves to a list item
-   * (Phase 5C-2 approved scope: "list itemの子としての表示は今回見送る...
-   * section直下へ委譲して構いません") — see resolveEnclosingSectionId
-   * below, which walks up past any list-item parent to the nearest
-   * enclosing section (or null, for top-of-document content).
+   * Phase 5C-2 (2026-08-14) originally projected EVERY callout/blockquote as
+   * a SECTION-level sibling, even when its own `parentId` resolved to a
+   * list item ("list itemの子としての表示は今回見送る...section直下へ委譲
+   * して構いません"). Phase 5C-5 (2026-08-14, "Standalone Callout /
+   * Blockquote の list 子表示") replaces that blanket delegation with a
+   * DISPLAY-ONLY fix: a block whose `parentId` resolves to an actual list
+   * item is now projected as that list item's own child (see
+   * resolveStandaloneGroupKey/buildListNode below); only a block whose
+   * `parentId` is a section (or null — top-of-document content) still
+   * resolves via resolveEnclosingSectionId, unchanged from before. This is
+   * purely a Tree-projection correction, not a parser change: parser/
+   * complexBlocks.ts's own `resolveParentId` already correctly resolves a
+   * list-owned block's parentId to that list item — see this ticket's own
+   * investigation report — nothing in the parser layer changed for this.
+   * No structural-edit capability is added either way: a list-child
+   * complex-member row remains exactly as read-only as a section-level one
+   * (readOnlyNodeIds, draggable-exclusion, move's own pre-existing
+   * "nested-in-list" rejection in edit/moveStandaloneComplexBlock.ts — all
+   * three untouched by this ticket).
    */
   standaloneComplexBlocks?: {
     blocks: ComplexBlockInfo[];
@@ -638,16 +651,41 @@ function disambiguateStandaloneLabels(
 }
 
 /**
- * Phase 5C-2: groups every ELIGIBLE, non-composite-member ComplexBlockInfo
- * in `blocks` by its resolved enclosing section id (resolveEnclosingSectionId),
- * sorted by line within each group, with disambiguateStandaloneLabels
- * already applied — the exact, ready-to-render `{info, label}[]` list
- * buildChildren merges in for a given `sectionId` (null = top-of-document).
+ * Phase 5C-5: the grouping KEY for one standalone ComplexBlockInfo — its own
+ * `parentId` directly, when that id resolves in `doc.nodes` to an actual
+ * ListBlockNode (so buildListNode, below, can later attach it as that list
+ * item's own child); otherwise falls through to the pre-existing
+ * resolveEnclosingSectionId walk (section id, or null for top-of-document
+ * content), completely UNCHANGED from Phase 5C-2's original behavior for
+ * every block whose parentId is a section or null. This is the one place
+ * this ticket's "list itemの子としての表示" decision is actually made —
+ * everything downstream (buildChildren/buildListNode) just merges whatever
+ * key groupStandaloneComplexBlocks produced.
+ */
+function resolveStandaloneGroupKey(doc: ParsedDocument, parentId: string | null): string | null {
+  if (parentId) {
+    const parentNode = doc.nodes.get(parentId);
+    if (parentNode && isListNode(parentNode)) return parentId;
+  }
+  return resolveEnclosingSectionId(doc, parentId);
+}
+
+/**
+ * Phase 5C-2, generalized by Phase 5C-5: groups every ELIGIBLE, non-
+ * composite-member ComplexBlockInfo in `blocks` by resolveStandaloneGroupKey
+ * — a LIST ITEM id when the block's own parentId resolves to one, otherwise
+ * its resolved enclosing section id (or null) exactly as before Phase 5C-5
+ * — sorted by line within each group, with disambiguateStandaloneLabels
+ * already applied (scoped to each group independently, list-item groups and
+ * section groups alike). The exact, ready-to-render `{info, label}[]` list
+ * buildChildren (section/top-level groups) and buildListNode (list-item
+ * groups) each merge in for their own respective key.
  * `consumedComplexBlockIds` is every ComplexBlockInfo id already used as
  * some CompositeBlockInfo's own (non-list) member — see buildOutlineTree's
  * own construction of that set — so a callout/blockquote that's already
  * shown as a composite's own read-only child is never ALSO shown as a
- * second, standalone row for the same underlying content.
+ * second, standalone row for the same underlying content (this exclusion
+ * itself is unchanged by Phase 5C-5).
  */
 function groupStandaloneComplexBlocks(
   doc: ParsedDocument,
@@ -655,23 +693,23 @@ function groupStandaloneComplexBlocks(
   consumedComplexBlockIds: Set<string>,
   t: Translator
 ): Map<string | null, { info: ComplexBlockInfo; label: string }[]> {
-  const bySection = new Map<string | null, ComplexBlockInfo[]>();
+  const byParentKey = new Map<string | null, ComplexBlockInfo[]>();
   for (const info of blocks) {
     if (!isStandaloneComplexBlockEligible(info)) continue;
     if (consumedComplexBlockIds.has(info.id)) continue;
-    const sectionId = resolveEnclosingSectionId(doc, info.parentId);
-    const list = bySection.get(sectionId) ?? [];
+    const groupKey = resolveStandaloneGroupKey(doc, info.parentId);
+    const list = byParentKey.get(groupKey) ?? [];
     list.push(info);
-    bySection.set(sectionId, list);
+    byParentKey.set(groupKey, list);
   }
 
   const result = new Map<string | null, { info: ComplexBlockInfo; label: string }[]>();
-  for (const [sectionId, infos] of bySection) {
+  for (const [groupKey, infos] of byParentKey) {
     infos.sort((a, b) => a.range.startLine - b.range.startLine);
     const labeled = infos.map((info) => ({ info, label: standaloneComplexBlockLabel(doc, info, t) }));
     const finalLabelById = disambiguateStandaloneLabels(labeled);
     result.set(
-      sectionId,
+      groupKey,
       infos.map((info) => ({ info, label: finalLabelById.get(info.id) ?? "" }))
     );
   }
@@ -720,11 +758,12 @@ function buildStandaloneComplexNode(
 function buildMemberNode(
   doc: ParsedDocument,
   member: CompositeBlockMember,
-  ctx: CompositeProjectionContext
+  ctx: CompositeProjectionContext,
+  standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>
 ): OutlineTreeNode {
   if (member.kind === "list" || member.kind === "single-line-list") {
     const node = doc.nodes.get(member.id);
-    if (node && isListNode(node)) return buildListNode(doc, node, ctx);
+    if (node && isListNode(node)) return buildListNode(doc, node, ctx, standaloneByParentId);
   }
   const info = ctx.complexBlocksById.get(member.id);
   // 2026-08-12 self-review §9 論点5: `info` is falsy only for a member that
@@ -757,10 +796,22 @@ function buildMemberNode(
  * prefix rather than throwing, consistent with this whole codebase's
  * "resolve safely" policy.
  */
+/**
+ * Phase 5C-5: `standaloneByParentId` is threaded all the way down here (and
+ * on into buildMemberNode -> buildListNode below) SOLELY so a standalone
+ * complex block nested inside one of THIS composite's own member list
+ * item's further-nested child list items keeps being displayed exactly as
+ * it was before this ticket (via buildListNode's own merge, once that
+ * nested list item is reached) — see buildListNode's own doc comment. This
+ * is plumbing only: composite matching, movability, deletability, and
+ * Partial-Edit exclusion for composite members are all completely
+ * unchanged by this ticket.
+ */
 function buildCompositeNode(
   doc: ParsedDocument,
   composite: CompositeBlockInfo,
-  ctx: CompositeProjectionContext
+  ctx: CompositeProjectionContext,
+  standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>
 ): OutlineTreeCompositeNode {
   const rule = getCompositeBlockRuleById(ctx.rules, composite.ruleId);
   return {
@@ -770,16 +821,35 @@ function buildCompositeNode(
     label: rule ? compositeBlockDisplayLabel(rule, ctx.t) : composite.ruleId,
     prefix: rule?.prefix ?? "",
     line: composite.range.startLine,
-    children: composite.members.map((m) => buildMemberNode(doc, m, ctx)),
+    children: composite.members.map((m) => buildMemberNode(doc, m, ctx, standaloneByParentId)),
   };
 }
 
+/**
+ * Phase 5C-5: standalone complex blocks whose own `parentId` resolves to
+ * THIS list item (per groupStandaloneComplexBlocks' resolveStandaloneGroupKey)
+ * are merged into `children` alongside nested list items / composites,
+ * sorted into document order together — the list-item counterpart of
+ * buildChildren's own section-level merge below. `standaloneByParentId` is
+ * optional and defaults to no merge (undefined -> `?.get(item.id) ?? []`
+ * -> empty), so every pre-Phase-5C-5 caller that doesn't pass it gets
+ * byte-identical behavior to before this ticket.
+ *
+ * Sorting by line (previously this function just pushed nested list items
+ * in `item.childIds` order, which is already document order by
+ * construction — see parser/parseDocument.ts) is now REQUIRED rather than
+ * incidental, since a merged-in standalone entry is not part of
+ * `item.childIds` at all and must be interleaved by its own line number —
+ * mirrors buildChildren's own pre-existing sort for exactly the same
+ * reason.
+ */
 function buildListNode(
   doc: ParsedDocument,
   item: ListBlockNode,
-  ctx?: CompositeProjectionContext
+  ctx?: CompositeProjectionContext,
+  standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>
 ): OutlineTreeListNode {
-  const children: OutlineTreeNode[] = [];
+  const withLine: Array<{ node: OutlineTreeNode; line: number }> = [];
   for (const id of item.childIds) {
     const child = doc.nodes.get(id);
     // Nested list items only — a list item never owns a section.
@@ -790,15 +860,24 @@ function buildListNode(
     // level below, mirrored here so a composite can be reached at any
     // nesting depth once its own ancestor chain is already visible.
     const composite = ctx?.firstMemberIdToComposite.get(child.id);
-    children.push(composite ? buildCompositeNode(doc, composite, ctx!) : buildListNode(doc, child, ctx));
+    withLine.push({
+      node: composite
+        ? buildCompositeNode(doc, composite, ctx!, standaloneByParentId)
+        : buildListNode(doc, child, ctx, standaloneByParentId),
+      line: child.range.startLine,
+    });
   }
+  for (const { info, label } of standaloneByParentId?.get(item.id) ?? []) {
+    withLine.push({ node: buildStandaloneComplexNode(info, label), line: info.range.startLine });
+  }
+  withLine.sort((a, b) => a.line - b.line);
   return {
     kind: "list",
     id: item.id,
     text: listItemTreeDisplayText(item, listItemDisplayText(doc, item)),
     indentDepth: item.depth,
     line: item.range.startLine,
-    children,
+    children: withLine.map((x) => x.node),
   };
 }
 
@@ -807,7 +886,7 @@ function buildSectionNode(
   section: SectionBlockNode,
   includeLists: boolean,
   ctx?: CompositeProjectionContext,
-  standaloneBySection?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>
+  standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>
 ): OutlineTreeSectionNode {
   return {
     kind: "section",
@@ -815,7 +894,7 @@ function buildSectionNode(
     headingText: section.headingText,
     headingLevel: section.headingLevel,
     line: section.range.startLine,
-    children: buildChildren(doc, section.childIds, includeLists, section.id, ctx, standaloneBySection),
+    children: buildChildren(doc, section.childIds, includeLists, section.id, ctx, standaloneByParentId),
   };
 }
 
@@ -837,14 +916,20 @@ function buildSectionNode(
  * plain (non-composite) list item still follows `includeLists` exactly as
  * before.
  *
- * Phase 5C-2 (2026-08-14): `sectionId` (this call's own enclosing section
- * id, or null for the top-level call) is looked up in `standaloneBySection`
- * — already fully grouped/labeled by groupStandaloneComplexBlocks — and any
- * entries found are merged in as additional OutlineTreeComplexMemberNode
+ * Phase 5C-2 (2026-08-14), key generalized by Phase 5C-5: `sectionId` (this
+ * call's own enclosing section id, or null for the top-level call) is
+ * looked up in `standaloneByParentId` — already fully grouped/labeled by
+ * groupStandaloneComplexBlocks, keyed by resolveStandaloneGroupKey — and
+ * any entries found are merged in as additional OutlineTreeComplexMemberNode
  * children, sorted into document order alongside every other child exactly
- * like a composite or plain list row already is. Independent of
- * `includeLists`/`ctx` (a standalone callout/blockquote is not a
- * BlockNode-backed row at all, so neither flag is relevant to it).
+ * like a composite or plain list row already is. Only entries whose group
+ * key IS this section (or null, at the top level) are ever found here — a
+ * list-item-keyed entry is instead picked up by buildListNode's own merge,
+ * once that list item is reached. Independent of `includeLists`/`ctx` (a
+ * standalone callout/blockquote is not a BlockNode-backed row at all, so
+ * neither flag is relevant to it). `standaloneByParentId` is also passed
+ * down into buildListNode/buildCompositeNode below so the SAME map serves
+ * every nesting depth, not just this call's own direct children.
  */
 function buildChildren(
   doc: ParsedDocument,
@@ -852,7 +937,7 @@ function buildChildren(
   includeLists: boolean,
   sectionId: string | null,
   ctx?: CompositeProjectionContext,
-  standaloneBySection?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>
+  standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>
 ): OutlineTreeNode[] {
   const withLine: Array<{ node: OutlineTreeNode; line: number }> = [];
   for (const id of ids) {
@@ -860,7 +945,7 @@ function buildChildren(
     if (!child) continue;
     if (isSectionNode(child)) {
       withLine.push({
-        node: buildSectionNode(doc, child, includeLists, ctx, standaloneBySection),
+        node: buildSectionNode(doc, child, includeLists, ctx, standaloneByParentId),
         line: child.range.startLine,
       });
       continue;
@@ -869,17 +954,17 @@ function buildChildren(
     const composite = ctx?.firstMemberIdToComposite.get(child.id);
     if (composite) {
       withLine.push({
-        node: buildCompositeNode(doc, composite, ctx!),
+        node: buildCompositeNode(doc, composite, ctx!, standaloneByParentId),
         line: composite.range.startLine,
       });
     } else if (includeLists) {
       withLine.push({
-        node: buildListNode(doc, child, ctx),
+        node: buildListNode(doc, child, ctx, standaloneByParentId),
         line: child.range.startLine,
       });
     }
   }
-  for (const { info, label } of standaloneBySection?.get(sectionId) ?? []) {
+  for (const { info, label } of standaloneByParentId?.get(sectionId) ?? []) {
     withLine.push({ node: buildStandaloneComplexNode(info, label), line: info.range.startLine });
   }
   withLine.sort((a, b) => a.line - b.line);
@@ -1007,10 +1092,12 @@ export function buildOutlineTree(
     };
   }
 
-  const standaloneBySection = options?.standaloneComplexBlocks
+  // Phase 5C-5: renamed from standaloneBySection — the map's keys are no
+  // longer exclusively section ids (or null); see resolveStandaloneGroupKey.
+  const standaloneByParentId = options?.standaloneComplexBlocks
     ? groupStandaloneComplexBlocks(doc, options.standaloneComplexBlocks.blocks, consumedComplexBlockIds, t)
     : undefined;
-  return buildChildren(doc, doc.topLevelIds, options?.includeLists ?? false, null, ctx, standaloneBySection);
+  return buildChildren(doc, doc.topLevelIds, options?.includeLists ?? false, null, ctx, standaloneByParentId);
 }
 
 /** Flatten a tree back into a list, depth-first, document order. */

@@ -823,17 +823,20 @@ describe("buildOutlineTree (Phase 5C-2: standalone callout/blockquote projection
     expect(section.children).toHaveLength(0);
   });
 
-  it("delegates a standalone callout nested inside a list item's continuation to its enclosing SECTION, not the list item ('list itemの子としての表示は今回見送る')", () => {
+  it("Phase 5C-5: projects a standalone callout nested inside a list item's continuation as THAT LIST ITEM's own child, not a section-level sibling ('list 子表示')", () => {
     const text = ["# H", "- item text", "  > [!note] callout in list", "  > body line"].join("\n");
     const { tree } = treeWithStandalone(text, true);
     const section = tree[0];
     if (!isOutlineSectionNode(section)) throw new Error("expected section");
-    // Both the list item AND the callout are section H's own direct
-    // children — the callout is NOT nested under the list item's children.
-    expect(section.children.map((n) => n.kind)).toEqual(["list", "complex-member"]);
-    const [listNode, calloutNode] = section.children;
+    // The list item is section H's only direct child now — the callout is
+    // nested UNDER it, not a sibling of it (reversed from Phase 5C-2's
+    // original "section直下委譲" behavior, which this same fixture used to
+    // pin — see git history for the pre-Phase-5C-5 version of this test).
+    expect(section.children.map((n) => n.kind)).toEqual(["list"]);
+    const [listNode] = section.children;
     if (!isOutlineListNode(listNode)) throw new Error("expected list node");
-    expect(listNode.children).toHaveLength(0);
+    expect(listNode.children).toHaveLength(1);
+    const [calloutNode] = listNode.children;
     if (!isOutlineComplexMemberNode(calloutNode)) throw new Error("expected complex-member");
     expect(calloutNode.isStandalone).toBe(true);
     expect(calloutNode.label).toBe("callout in list");
