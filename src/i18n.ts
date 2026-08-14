@@ -215,6 +215,8 @@ const en = {
   "tree.menu.deleteListSubtree": "Delete list subtree",
   "tree.menu.unavailableSuffix": " — unavailable",
   "tree.menu.deleteCompositeBlock": "Delete extended block",
+  "tree.menu.compositeMoveUp": "Move extended block up",
+  "tree.menu.compositeMoveDown": "Move extended block down",
 
   // ---- Partial Edit Pane --------------------------------------------------
   "partialEdit.viewName": "Unified Outliner: Partial Edit",
@@ -328,6 +330,33 @@ const en = {
     "Unified Outliner: this extended block contains a kind that cannot be deleted in this version.",
   "reason.ambiguous-section":
     "Unified Outliner: this extended block's members do not agree on a single enclosing section — deletion skipped for safety.",
+
+  // ---- CompositeBlock move reasons (edit/moveCompositeBlock.ts's
+  // NoCompositeMoveReason, Phase 5C-1 ticket 4-4). "unsafe-indent" is
+  // reused as-is from the reason.unsafe-indent key above (already
+  // operation-neutral wording). "nested-in-list", "composite-boundary-
+  // changed", and "range-invalid" are NOT reused from the delete-specific
+  // reason.* keys above (those say "deletion" explicitly, e.g.
+  // reason.nested-in-list's "cannot be deleted in this version") — reusing
+  // them here would show a misleading "deleted" message for a move
+  // rejection, and this ticket's own constraints rule out editing delete's
+  // existing wording/tests. Distinct reason.compositeMove* keys below cover
+  // exactly those three; every other CompositeBlockMoveRejectionReason /
+  // NoCompositeMoveReason value has no such collision and is looked up via
+  // the ordinary "reason." + reason pattern (see
+  // view/OutlineTreeView.ts#compositeMoveReasonText).
+  "reason.no-adjacent-compatible-unit":
+    "Unified Outliner: nothing recognizable to swap with in that direction.",
+  "reason.different-parent-or-depth":
+    "Unified Outliner: the adjacent item is not at the same level — move skipped for safety.",
+  "reason.no-target":
+    "Unified Outliner: could not determine a safe move target.",
+  "reason.compositeMoveNestedInList":
+    "Unified Outliner: this extended block is nested inside another list item and cannot be moved in this version.",
+  "reason.compositeMoveBoundaryChanged":
+    "Unified Outliner: the note changed since this extended block was selected — the move was cancelled to avoid affecting the wrong content.",
+  "reason.compositeMoveRangeInvalid":
+    "Unified Outliner: could not confirm this extended block's boundary — the move was skipped for safety.",
 } as const;
 
 export type TranslationKey = keyof typeof en;
@@ -479,6 +508,8 @@ const ja: Record<TranslationKey, string> = {
   "tree.menu.deleteListSubtree": "リストサブツリーを削除",
   "tree.menu.unavailableSuffix": "（利用不可）",
   "tree.menu.deleteCompositeBlock": "拡張ブロックを削除",
+  "tree.menu.compositeMoveUp": "拡張ブロックを上へ移動",
+  "tree.menu.compositeMoveDown": "拡張ブロックを下へ移動",
 
   // ---- 部分編集ペイン -------------------------------------------------------
   "partialEdit.viewName": "Unified Outliner: 部分編集",
@@ -588,6 +619,31 @@ const ja: Record<TranslationKey, string> = {
     "Unified Outliner: この拡張ブロックには、このバージョンでは削除できない種別が含まれている。",
   "reason.ambiguous-section":
     "Unified Outliner: この拡張ブロックのmember間でセクションの所属が一致しないため、安全のため削除をスキップした。",
+
+  // ---- CompositeBlock move reasons（edit/moveCompositeBlock.ts の
+  // NoCompositeMoveReason、Phase 5C-1 チケット4-4）。"unsafe-indent" は
+  // 上記 reason.unsafe-indent をそのまま再利用する（元々操作に依存しない
+  // 文言であるため）。"nested-in-list"／"composite-boundary-changed"／
+  // "range-invalid" は上記の削除専用 reason.* キー（例：
+  // reason.nested-in-list の「削除できない」という文言）を再利用しない —
+  // move の拒否に対して誤って「削除」と表示してしまうことを避けるため、
+  // また本チケットの制約上、削除の既存文言・既存テストを変更しないため。
+  // 以下の reason.compositeMove* キーがその3件を個別にカバーする。他の
+  // CompositeBlockMoveRejectionReason／NoCompositeMoveReason 値はこの
+  // 衝突が無いため、通常どおり "reason." + reason のパターンで解決する
+  // （view/OutlineTreeView.ts#compositeMoveReasonText 参照）。
+  "reason.no-adjacent-compatible-unit":
+    "Unified Outliner: その方向に入れ替えられる認識可能な対象がない。",
+  "reason.different-parent-or-depth":
+    "Unified Outliner: 隣接する項目が同じ階層にないため、安全のため移動をスキップした。",
+  "reason.no-target":
+    "Unified Outliner: 安全な移動先を決定できなかった。",
+  "reason.compositeMoveNestedInList":
+    "Unified Outliner: この拡張ブロックは別の list item にネストしているため、このバージョンでは移動できない。",
+  "reason.compositeMoveBoundaryChanged":
+    "Unified Outliner: この拡張ブロックを選択した後にノートが変更されたため、誤った内容に影響しないよう移動をキャンセルした。",
+  "reason.compositeMoveRangeInvalid":
+    "Unified Outliner: この拡張ブロックの範囲を確認できなかったため、安全のため移動をスキップした。",
 };
 
 const DICTIONARIES: Record<SupportedLocale, Record<TranslationKey, string>> = {

@@ -184,7 +184,11 @@ import {
   OutlineTreeNode,
 } from "../tree/buildOutlineTree";
 import { scanComplexBlocks } from "../parser/complexBlocks";
-import { evaluateCompositeBlockDeletability, matchCompositeBlocks } from "../parser/compositeBlocks";
+import {
+  evaluateCompositeBlockDeletability,
+  evaluateCompositeBlockMovability,
+  matchCompositeBlocks,
+} from "../parser/compositeBlocks";
 import { CompositeBlockInfo, CompositeBlockRule } from "../model/compositeBlock";
 import { ComplexBlockScanResult } from "../model/complexBlock";
 import {
@@ -192,6 +196,8 @@ import {
   CompositeBlockSnapshot,
   deleteCompositeBlock,
 } from "../edit/deleteCompositeBlock";
+import { CompositeMoveDirection } from "../move/findCompositeMoveTarget";
+import { moveCompositeBlock, NoCompositeMoveReason } from "../edit/moveCompositeBlock";
 import { getEnabledCompositeBlockRules } from "../settingsDefaults";
 import { resolveHighlightedNodeId } from "../tree/resolveHighlightedSectionId";
 import {
@@ -2146,10 +2152,18 @@ export class OutlineTreeView extends ItemView {
    * editor's content at the moment "Delete" is actually clicked. See this
    * class's own doc comment on currentComposites/currentComplexScan.
    *
-   * If the composite cannot currently be resolved, or
-   * evaluateCompositeBlockDeletability says it isn't deletable, NO menu is
-   * shown at all (not even an empty one or a disabled item) — per approval
-   * §3, MVP omits the item entirely rather than showing a disabled one.
+   * If the composite cannot currently be resolved, or NONE of delete/move-
+   * up/move-down apply to it (evaluateCompositeBlockDeletability says it
+   * isn't deletable AND evaluateCompositeBlockMovability says it isn't
+   * eligible in either direction), NO menu is shown at all (not even an
+   * empty one or a disabled item) — per approval §3, MVP omits each item
+   * entirely rather than showing a disabled one. Each of the three
+   * possible items (move up / move down / delete, Phase 5C-1 ticket 4-4)
+   * is gated INDEPENDENTLY — a composite can be movable in one or both
+   * directions while not deletable, or vice versa, since
+   * evaluateCompositeBlockMovability and evaluateCompositeBlockDeletability
+   * are deliberately separate, independently-re-derived judgments (see
+   * evaluateCompositeBlockMovability's own doc comment).
    */
   private showCompositeCommandMenu(evt: MouseEvent, compositeId: string): void {
     const node = this.nodeById.get(compositeId);
@@ -2161,24 +2175,57 @@ export class OutlineTreeView extends ItemView {
     if (!doc || !complexScan || !composite) return;
 
     const deletability = evaluateCompositeBlockDeletability(doc, complexScan, composite);
-    if (!deletability.deletable) return;
+    const movabilityUp = evaluateCompositeBlockMovability(
+      doc,
+      complexScan,
+      composite,
+      "up",
+      this.currentComposites
+    );
+    const movabilityDown = evaluateCompositeBlockMovability(
+      doc,
+      complexScan,
+      composite,
+      "down",
+      this.currentComposites
+    );
+    if (!deletability.deletable && !movabilityUp.eligible && !movabilityDown.eligible) return;
 
     const snapshot = buildCompositeBlockSnapshot(composite);
     const rules = getEnabledCompositeBlockRules(this.plugin.settings.compositeBlocks);
     const label = node.label;
 
     const menu = new Menu();
-    menu.addItem((item) =>
-      item
-        .setTitle(this.plugin.t("tree.menu.deleteCompositeBlock"))
-        .setIcon("trash-2")
-        .setWarning(true)
-        .onClick(() => {
-          new ConfirmCompositeDeleteModal(this.app, this.plugin, label, snapshot, (confirmed) => {
-            if (confirmed) this.dispatchAndApplyCompositeDelete(snapshot, rules);
-          }).open();
-        })
-    );
+
+    if (movabilityUp.eligible) {
+      menu.addItem((item) =>
+        item
+          .setTitle(this.plugin.t("tree.menu.compositeMoveUp"))
+          .setIcon("arrow-up")
+          .onClick(() => this.dispatchAndApplyCompositeMove(snapshot, "up", rules))
+      );
+    }
+    if (movabilityDown.eligible) {
+      menu.addItem((item) =>
+        item
+          .setTitle(this.plugin.t("tree.menu.compositeMoveDown"))
+          .setIcon("arrow-down")
+          .onClick(() => this.dispatchAndApplyCompositeMove(snapshot, "down", rules))
+      );
+    }
+    if (deletability.deletable) {
+      menu.addItem((item) =>
+        item
+          .setTitle(this.plugin.t("tree.menu.deleteCompositeBlock"))
+          .setIcon("trash-2")
+          .setWarning(true)
+          .onClick(() => {
+            new ConfirmCompositeDeleteModal(this.app, this.plugin, label, snapshot, (confirmed) => {
+              if (confirmed) this.dispatchAndApplyCompositeDelete(snapshot, rules);
+            }).open();
+          })
+      );
+    }
 
     this.showTrackedMenu(menu, evt);
   }
@@ -2429,6 +2476,103 @@ export class OutlineTreeView extends ItemView {
       this.refresh();
     }
     return changed;
+  }
+
+  /**
+   * Phase 5C-1 ticket 4-4: dedicated, thin dispatch for composite-block
+   * move — mirrors dispatchAndApplyCompositeDelete's own structure exactly
+   * (same multi-cursor guard, same "read the editor's CURRENT text and
+   * hand it to the pure function along with the menu-time snapshot" shape,
+   * same applyLineEditOutcome/scroll/refresh tail). All Markdown
+   * re-parsing, CompositeBlock re-resolution, snapshot comparison,
+   * movability re-verification, and target/range resolution are
+   * moveCompositeBlock's/evaluateCompositeBlockMovability's/
+   * findCompositeMoveTarget's job (see edit/moveCompositeBlock.ts) —
+   * nothing here duplicates any of it.
+   *
+   * Two differences from dispatchAndApplyCompositeDelete, both per this
+   * ticket's approved design: (1) no confirmation modal — a move is
+   * non-destructive and undoable the exact same way every other Tree move
+   * already is (Obsidian's own Undo), unlike delete which removes content;
+   * (2) reason -> Notice text goes through this class's own
+   * compositeMoveReasonText, not the shared reasonText — see that method's
+   * own doc comment for why three of NoCompositeMoveReason's values need
+   * move-specific wording rather than the ordinary "reason." + reason
+   * lookup every other outcome in this view shares.
+   *
+   * `snapshot` reaches this function only via a closure captured at
+   * menu-build time (showCompositeCommandMenu → here) — never a bare
+   * composite-N id, for the same reason dispatchAndApplyCompositeDelete's
+   * own doc comment explains.
+   */
+  private dispatchAndApplyCompositeMove(
+    snapshot: CompositeBlockSnapshot,
+    direction: CompositeMoveDirection,
+    rules: CompositeBlockRule[]
+  ): boolean {
+    const view = this.activeMarkdownView.get();
+    if (!view) return false;
+    const editor: Editor = view.editor;
+
+    if (editor.listSelections().length > 1) {
+      this.notify(this.plugin.t("notice.multipleCursors"));
+      return false;
+    }
+
+    const text = editor.getValue();
+    const outcome = moveCompositeBlock(text, { snapshot, direction }, rules);
+
+    const cursor = { line: snapshot.range.startLine, ch: 0 };
+    const changed = applyLineEditOutcome(
+      editor,
+      cursor,
+      snapshot.range.startLine,
+      text.split("\n"),
+      outcome,
+      () => this.notify(this.compositeMoveReasonText(outcome.reason))
+    );
+
+    if (changed) {
+      const cur = editor.getCursor();
+      const lineLen = editor.getLine(cur.line)?.length ?? 0;
+      editor.scrollIntoView(
+        { from: { line: cur.line, ch: 0 }, to: { line: cur.line, ch: lineLen } },
+        true
+      );
+      this.refresh();
+    }
+    return changed;
+  }
+
+  /**
+   * Translate a NoCompositeMoveReason into the current locale — like
+   * reasonText, below, but NOT a plain "reason." + reason lookup for every
+   * value. "nested-in-list", "composite-boundary-changed", and
+   * "range-invalid" are ALSO NoCompositeDeleteReason values whose existing
+   * reason.* keys are worded specifically for delete ("...cannot be
+   * deleted...", "...deletion was cancelled...", "...deletion skipped..."
+   * — see i18n.ts's own CompositeBlock delete reasons section); reusing
+   * them here would show a misleading "deleted" message for a move
+   * rejection, and this ticket's own constraints rule out editing delete's
+   * existing wording/tests. Distinct reason.compositeMove* keys (i18n.ts)
+   * cover exactly those three cases; every other NoCompositeMoveReason
+   * value ("unsafe-indent", "no-adjacent-compatible-unit",
+   * "different-parent-or-depth", "no-target") has no such collision and
+   * falls through to the ordinary "reason." + reason pattern, exactly like
+   * reasonText.
+   */
+  private compositeMoveReasonText(reason: NoCompositeMoveReason | undefined): string | undefined {
+    if (!reason) return undefined;
+    switch (reason) {
+      case "nested-in-list":
+        return this.plugin.t("reason.compositeMoveNestedInList");
+      case "composite-boundary-changed":
+        return this.plugin.t("reason.compositeMoveBoundaryChanged");
+      case "range-invalid":
+        return this.plugin.t("reason.compositeMoveRangeInvalid");
+      default:
+        return this.plugin.t(("reason." + reason) as TranslationKey);
+    }
   }
 
   private notify(message: string | undefined): void {
