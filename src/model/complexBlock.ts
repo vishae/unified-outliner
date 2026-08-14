@@ -180,3 +180,69 @@ export interface ComplexBlockScanResult {
 export type ComplexBlockRejection =
   | { blocked: true; kind: ComplexBlockKind; editability: BlockEditability; reason: string }
   | { blocked: false };
+
+// ---- Phase 5C-3: standalone (non-composite-member) callout/blockquote
+// move-eligibility ------------------------------------------------------
+//
+// A DIFFERENT, narrower question than anything above this line: everything
+// above is about RECOGNITION (is this a callout/blockquote, and what is its
+// boundary/editability). The types below classify whether one SPECIFIC,
+// already-recognized, standalone ComplexBlockInfo (never a CompositeBlock's
+// own member — see model/compositeBlock.ts's own top doc comment for why
+// composite membership is tracked separately) may be safely swapped with
+// the adjacent block in a given up/down direction. See
+// parser/compositeBlocks.ts's evaluateStandaloneComplexBlockMovability for
+// the exact, independently-re-derived condition list.
+//
+// Deliberately mirrors CompositeBlockMoveRejectionReason /
+// CompositeBlockMovability (model/compositeBlock.ts) in shape, but is its
+// own, separate type: a standalone complex block has no `depth`/
+// `indentColumns` concept at all (it is never nested — Phase 5C-3 approval
+// explicitly excludes any block sitting under a list item's continuation),
+// so there is no "unsafe-indent" or "different-parent-or-depth" reason here
+// — only the narrower set below applies.
+
+/**
+ * Every way a standalone callout/blockquote's move (in one specific
+ * direction) may be refused:
+ *   - "not-supported": the target itself is not kind "callout"/"blockquote",
+ *     or its own `editability !== "supported"`. Defense-in-depth — a real
+ *     caller should never reach this function with an ineligible target in
+ *     the first place (see tree/buildOutlineTree.ts's own
+ *     isStandaloneComplexBlockEligible, which already filters to exactly
+ *     this condition before a row is ever shown), but this function
+ *     re-verifies its own input rather than trusting it.
+ *   - "composite-member": the target IS currently a matched CompositeBlock's
+ *     own member (re-checked fresh against `allComposites`, never trusted
+ *     from Tree-render time) — Phase 5C-3 approval §1 explicitly excludes
+ *     composite members from this feature entirely.
+ *   - "nested-in-list": the target's own `parentId` resolves to a
+ *     list-typed node — i.e. it sits inside a list item's continuation
+ *     rather than directly under its enclosing section (or under no
+ *     section at all). Phase 5C-3 approval §3 explicitly excludes this
+ *     case.
+ *   - "no-adjacent-compatible-unit": no eligible standalone callout/
+ *     blockquote exists immediately in the requested direction (the
+ *     document's own edge, a section heading, a list item, a composite's
+ *     own boundary, a composite MEMBER's own boundary, or any other
+ *     ComplexBlockKind — paragraph/fenced-code/table/thematic-break, all
+ *     explicitly out of scope per Phase 5C-3 approval's "A案のみ" decision
+ *     — all collapse to this one reason, mirroring
+ *     CompositeBlockMoveRejectionReason's own equivalent value).
+ *   - "different-section": an eligible adjacent standalone callout/
+ *     blockquote WAS found, but its own `parentId` differs from the
+ *     target's — i.e. the two sit in different sections (or one is
+ *     top-of-document and the other isn't). Move in this revision never
+ *     crosses a section boundary, exactly like composite move's own
+ *     swap-only-never-cross-section design.
+ */
+export type StandaloneComplexBlockMoveRejectionReason =
+  | "not-supported"
+  | "composite-member"
+  | "nested-in-list"
+  | "no-adjacent-compatible-unit"
+  | "different-section";
+
+export type StandaloneComplexBlockMovability =
+  | { eligible: true }
+  | { eligible: false; reason: StandaloneComplexBlockMoveRejectionReason };

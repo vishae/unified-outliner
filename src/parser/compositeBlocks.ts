@@ -69,7 +69,12 @@
  */
 import { isListNode, LineRange, ListBlockNode, ParsedDocument } from "../model/block";
 import { isBlankLine } from "./parseDocument";
-import { BlockDiagnostic, ComplexBlockScanResult } from "../model/complexBlock";
+import {
+  BlockDiagnostic,
+  ComplexBlockInfo,
+  ComplexBlockScanResult,
+  StandaloneComplexBlockMovability,
+} from "../model/complexBlock";
 import {
   CompositeBlockDeletability,
   CompositeBlockDeleteRejectionReason,
@@ -742,4 +747,185 @@ export function describeCompositeBlockRejection(
     ruleId: composite.ruleId,
     reason: describeDeleteRejectionReason(result.reason as CompositeBlockDeleteRejectionReason, result.offendingMemberId),
   };
+}
+
+// ---- Phase 5C-3 (2026-08-14): standalone (non-composite-member)
+// callout/blockquote move-eligibility ------------------------------------
+//
+// A THIRD swap-move feature, alongside CompositeBlock move (ticket 4-1
+// above). Target here is one standalone ComplexBlockInfo (never a
+// CompositeBlock's own member) — see model/complexBlock.ts's own
+// StandaloneComplexBlockMovability doc comment for the full reason
+// taxonomy and why this is a separate type from CompositeBlockMovability.
+//
+// Approved scope (Phase 5C-3): adjacency candidates are limited to OTHER
+// standalone callout/blockquote blocks only ("A案") — never a list item,
+// section, composite, composite member, or any other ComplexBlockKind
+// (paragraph/fenced-code/table/thematic-break). This is intentionally
+// narrower than CompositeBlock move's own adjacency scan
+// (findAdjacentAnchorNode, above), which also recognizes plain list items
+// and other composites as valid partners — that breadth exists because a
+// composite's own anchor IS a ListBlockNode with real list-sibling
+// semantics; a standalone complex block has none of that, and Phase 5C-3's
+// own approval explicitly rejects widening the candidate set to list/
+// section/paragraph/fenced-code/table/Mermaid.
+
+/**
+ * True when `info` qualifies as a move candidate ON ITS OWN — kind
+ * "callout"/"blockquote", `editability === "supported"`, and NOT nested
+ * inside a list item's continuation (its own `parentId`, if non-null, must
+ * resolve to a "section"-typed node, never a "list"-typed one — mirroring
+ * isNestedInList's own check above, reimplemented locally since that
+ * function's parameter shape (`{ parentId }`) happens to already fit a
+ * ComplexBlockInfo too, but keeping this as its own small function avoids
+ * implying a false coupling between the two feature areas). Does NOT check
+ * composite membership — see isStandaloneComplexBlockMoveCandidate's own
+ * doc comment below for why that is a separate, `allComposites`-dependent
+ * check.
+ */
+function isStandaloneComplexBlockShapeEligible(doc: ParsedDocument, info: ComplexBlockInfo): boolean {
+  if (info.kind !== "callout" && info.kind !== "blockquote") return false;
+  if (info.editability !== "supported") return false;
+  if (info.parentId) {
+    const owner = doc.nodes.get(info.parentId);
+    if (owner && owner.type === "list") return false;
+  }
+  return true;
+}
+
+/**
+ * True when `id` is currently some CompositeBlockInfo's own member id (list
+ * or complex-kind alike) — i.e. this block is presently part of a matched
+ * composite and therefore excluded from standalone-move candidacy (Phase
+ * 5C-3 approval §1). Always re-checked fresh against `allComposites`
+ * (the caller's own current matchCompositeBlocks result), never assumed
+ * from any earlier Tree-render-time computation.
+ */
+function isComposedMember(allComposites: CompositeBlockInfo[], id: string): boolean {
+  return allComposites.some((c) => c.members.some((m) => m.id === id));
+}
+
+/** `isStandaloneComplexBlockShapeEligible` AND not currently a composite member — the full standalone-move-candidate eligibility gate, applied identically to both the move TARGET and any ADJACENT candidate. */
+function isStandaloneComplexBlockMoveCandidate(
+  doc: ParsedDocument,
+  allComposites: CompositeBlockInfo[],
+  info: ComplexBlockInfo
+): boolean {
+  return isStandaloneComplexBlockShapeEligible(doc, info) && !isComposedMember(allComposites, info.id);
+}
+
+/**
+ * Scans `complexScan.blocks` for the standalone-move-eligible callout/
+ * blockquote whose own range boundary sits exactly at `line`, in
+ * `direction` — the complex-block counterpart to findAdjacentAnchorNode
+ * above, scoped to Phase 5C-3's narrower "A案" candidate set (callout/
+ * blockquote only — see this section's own top doc comment). Returns
+ * `null` when no such block exists at that exact boundary: the document's
+ * own edge/frontmatter, a section heading, a list item, a composite's own
+ * boundary, a composite MEMBER's own boundary, an unsupported/ambiguous/
+ * read-only complex block, or any non-callout/blockquote ComplexBlockKind
+ * all fall through to `null` here.
+ *
+ * direction "down": the returned block's own `range.startLine === line`.
+ * direction "up": the returned block's own `range.endLine === line`.
+ *
+ * Exported (Phase 5C-3) SOLELY so move/findStandaloneComplexBlockMoveTarget.ts
+ * can perform the exact same adjacency scan
+ * evaluateStandaloneComplexBlockMovability (below) already performs, with
+ * zero risk of the two drifting apart — mirrors skipBlankLines/
+ * findAdjacentAnchorNode's own export rationale (ticket 4-2) exactly.
+ */
+export function findAdjacentStandaloneComplexBlock(
+  doc: ParsedDocument,
+  complexScan: ComplexBlockScanResult,
+  allComposites: CompositeBlockInfo[],
+  line: number,
+  direction: "up" | "down"
+): ComplexBlockInfo | null {
+  for (const info of complexScan.blocks) {
+    const boundary = direction === "down" ? info.range.startLine : info.range.endLine;
+    if (boundary !== line) continue;
+    if (!isStandaloneComplexBlockMoveCandidate(doc, allComposites, info)) continue;
+    return info;
+  }
+  return null;
+}
+
+/**
+ * Evaluates whether `target` (a standalone, non-composite-member
+ * ComplexBlockInfo) may be safely swapped with whatever adjacent standalone
+ * callout/blockquote sits immediately in `direction`, per Phase 5C-3's
+ * approved condition set — checked in the order below; the first failing
+ * condition determines the single reported reason, matching every other
+ * rejection-reporting function in this codebase:
+ *
+ *   1. `target` itself must pass isStandaloneComplexBlockShapeEligible
+ *      (kind callout/blockquote, `editability === "supported"`, not nested
+ *      in a list) — otherwise "not-supported" (wrong kind or editability)
+ *      or "nested-in-list" (nested-in-list check specifically), checked in
+ *      that order. Defense-in-depth: a real caller should never reach this
+ *      function with an ineligible `target` (see
+ *      tree/buildOutlineTree.ts's own isStandaloneComplexBlockEligible,
+ *      which already filters to this exact condition before a Tree row is
+ *      ever shown), but this function re-verifies its own input rather
+ *      than trusting it, same policy as evaluateCompositeBlockMovability's
+ *      own anchor re-check above.
+ *   2. `target.id` must NOT currently be some CompositeBlockInfo's own
+ *      member (re-checked fresh against `allComposites`) — otherwise
+ *      "composite-member".
+ *   3. A real adjacent boundary must be found in `direction`: scan from
+ *      just outside `target.range` (skipBlankLines, reused unchanged from
+ *      ticket 4-1/4-2), then resolve it
+ *      (findAdjacentStandaloneComplexBlock, above). Reaching the document
+ *      edge/frontmatter, or landing on anything that isn't itself an
+ *      eligible standalone callout/blockquote (a list item, a section
+ *      heading, a composite, a composite member, an unsupported/ambiguous/
+ *      read-only block, or any other ComplexBlockKind) is reported as
+ *      "no-adjacent-compatible-unit" — this never hops across a section
+ *      heading, exactly like CompositeBlock move's own swap-only-never-
+ *      cross-section design.
+ *   4. The resolved adjacent block's own `parentId` must equal `target`'s
+ *      own `parentId` (both null — top-of-document — also counts as
+ *      equal, mirroring matchCompositeBlocks's own resolveMemberSectionId
+ *      convention). Otherwise: "different-section".
+ */
+export function evaluateStandaloneComplexBlockMovability(
+  doc: ParsedDocument,
+  complexScan: ComplexBlockScanResult,
+  target: ComplexBlockInfo,
+  direction: "up" | "down",
+  allComposites: CompositeBlockInfo[]
+): StandaloneComplexBlockMovability {
+  if (target.kind !== "callout" && target.kind !== "blockquote") {
+    return { eligible: false, reason: "not-supported" };
+  }
+  if (target.editability !== "supported") {
+    return { eligible: false, reason: "not-supported" };
+  }
+  if (target.parentId) {
+    const owner = doc.nodes.get(target.parentId);
+    if (owner && owner.type === "list") {
+      return { eligible: false, reason: "nested-in-list" };
+    }
+  }
+  if (isComposedMember(allComposites, target.id)) {
+    return { eligible: false, reason: "composite-member" };
+  }
+
+  const boundaryLine = direction === "up" ? target.range.startLine - 1 : target.range.endLine + 1;
+  const k = skipBlankLines(doc, boundaryLine, direction);
+  if (k === null) {
+    return { eligible: false, reason: "no-adjacent-compatible-unit" };
+  }
+
+  const adjacent = findAdjacentStandaloneComplexBlock(doc, complexScan, allComposites, k, direction);
+  if (!adjacent) {
+    return { eligible: false, reason: "no-adjacent-compatible-unit" };
+  }
+
+  if (adjacent.parentId !== target.parentId) {
+    return { eligible: false, reason: "different-section" };
+  }
+
+  return { eligible: true };
 }

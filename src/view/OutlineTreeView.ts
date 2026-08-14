@@ -187,6 +187,7 @@ import { scanComplexBlocks } from "../parser/complexBlocks";
 import {
   evaluateCompositeBlockDeletability,
   evaluateCompositeBlockMovability,
+  evaluateStandaloneComplexBlockMovability,
   matchCompositeBlocks,
 } from "../parser/compositeBlocks";
 import { CompositeBlockInfo, CompositeBlockRule } from "../model/compositeBlock";
@@ -198,6 +199,13 @@ import {
 } from "../edit/deleteCompositeBlock";
 import { CompositeMoveDirection } from "../move/findCompositeMoveTarget";
 import { compositeMoveReasonText, moveCompositeBlock } from "../edit/moveCompositeBlock";
+import { StandaloneMoveDirection } from "../move/findStandaloneComplexBlockMoveTarget";
+import {
+  buildStandaloneComplexBlockSnapshot,
+  moveStandaloneComplexBlock,
+  StandaloneComplexBlockSnapshot,
+  standaloneComplexBlockMoveReasonText,
+} from "../edit/moveStandaloneComplexBlock";
 import { getEnabledCompositeBlockRules } from "../settingsDefaults";
 import { resolveHighlightedNodeId } from "../tree/resolveHighlightedSectionId";
 import {
@@ -607,11 +615,27 @@ export class OutlineTreeView extends ItemView {
       // class's own doc comment on currentComposites/currentComplexScan for
       // why this is never treated as a source of delete-time safety.
       this.currentComposites = infos;
-      this.currentComplexScan = complexScan;
     } else {
+      // matchCompositeBlocks(doc, complexScan, []) would also always
+      // return [] here (an empty rule list can never match anything) —
+      // hardcoding [] instead avoids paying that call's own candidate-
+      // collection pass for users who have every composite rule disabled,
+      // preserving the original "skip the more expensive matching step
+      // entirely when unused" optimization this branch has always had.
       this.currentComposites = [];
-      this.currentComplexScan = null;
     }
+    // Phase 5C-3: cached UNCONDITIONALLY now (previously only inside the
+    // `enabledRules.length > 0` branch above). showStandaloneComplexBlockMenu
+    // needs a fresh complexScan (a standalone callout/blockquote's own
+    // range/parentId, for building its move snapshot and running the
+    // move judge) at menu-build time even when every composite rule is
+    // disabled — standalone move's own safety checks (e.g. "is this
+    // currently a composite member") must stay correct regardless of that
+    // unrelated setting. `complexScan` itself already runs unconditionally
+    // per the doc comment above this method's own complexScan computation
+    // (Phase 5C-2), so this is just widening this ALREADY-computed value's
+    // own caching condition, not adding a new computation.
+    this.currentComplexScan = complexScan;
 
     this.currentTree = buildOutlineTree(doc, {
       includeLists,
@@ -2281,25 +2305,43 @@ export class OutlineTreeView extends ItemView {
 
   /**
    * Phase 5C-2: a standalone (non-composite-member) callout/blockquote
-   * row's own right-click/long-press menu — deliberately a single-item
-   * menu ("Open in Partial Edit" only), per the approved spec's explicit
-   * "以下は出さないでください: Move up/down, Delete, Insert before/after/
-   * child, Duplicate, Any composite-specific command" instruction. Kept
-   * entirely separate from showCompositeCommandMenu (composite-member
-   * rows) rather than folded into it, since node.isStandalone is what
-   * distinguishes the two at the call site (see renderNode's
-   * `isComplexMember && node.isStandalone` branch) and their allowed
-   * actions are deliberately disjoint.
+   * row's own right-click/long-press menu. Phase 5C-3 added move up/down
+   * to what was, until then, a fixed single-item menu ("Open in Partial
+   * Edit" only) — see this ticket's own approved scope. Kept entirely
+   * separate from showCompositeCommandMenu (composite-member rows) rather
+   * than folded into it, since node.isStandalone is what distinguishes the
+   * two at the call site (see renderNode's `isComplexMember &&
+   * node.isStandalone` branch) and their allowed actions are deliberately
+   * disjoint (composite rows: delete + move, no Partial Edit; standalone
+   * rows: Partial Edit + move, no delete/insert/duplicate).
    *
-   * Reuses the exact tree.menu.openPartialEditPane i18n key and
-   * activatePartialEditView entry point that showStructureCommandMenu/
-   * showListCommandMenu's own "Open in Partial Edit" items already use —
-   * no new i18n key needed. activatePartialEditView's own re-parse (via
-   * extractSubtreeText, which Phase 5C-2 taught to fall back to a fresh
-   * scanComplexBlocks(doc) lookup when doc.nodes.get(nodeId) fails) is
+   * "Open in Partial Edit" reuses the exact tree.menu.openPartialEditPane
+   * i18n key and activatePartialEditView entry point that
+   * showStructureCommandMenu/showListCommandMenu's own "Open in Partial
+   * Edit" items already use, and is ALWAYS shown, unconditionally —
+   * activatePartialEditView's own re-parse (via extractSubtreeText) is
    * what re-verifies this id still resolves to a supported standalone
-   * callout/blockquote at click time — no extra re-check is needed here,
-   * matching how the section/list variants of this same item work.
+   * callout/blockquote at click time, no extra re-check needed here. Move
+   * up/down are each independently gated by
+   * evaluateStandaloneComplexBlockMovability, mirroring
+   * showCompositeCommandMenu's own per-direction gating — but UNLIKE that
+   * method, this one never suppresses the whole menu when both directions
+   * are ineligible: Partial Edit has no eligibility concept of its own, so
+   * a standalone row's menu is never empty (Phase 5C-3 approval: "Partial
+   * Edit しか出ない状態は正常" — a deliberate, accepted asymmetry with
+   * showCompositeCommandMenu's "show nothing at all when every item is
+   * unavailable" behavior).
+   *
+   * `this.currentComplexScan`/`this.currentComposites` (refresh()-time
+   * cached values, Phase 5C-3 widened to be unconditionally populated — see
+   * refresh()'s own doc comment) are used ONLY to decide which move items
+   * to show and to build the move snapshot, exactly like
+   * showCompositeCommandMenu's own use of the same two fields — never
+   * treated as a source of move-time safety themselves. Actual move safety
+   * is entirely moveStandaloneComplexBlock's/
+   * evaluateStandaloneComplexBlockMovability's re-parse/re-scan/re-match/
+   * re-evaluate job, run against the editor's content at the moment "Move
+   * up"/"Move down" is actually clicked.
    *
    * No readOnlyNodeIds gate here: standalone complex-member rows are
    * unconditionally in that set (see collectReadOnlyOutlineNodeIds), so
@@ -2319,7 +2361,121 @@ export class OutlineTreeView extends ItemView {
         // above for the same pattern.
         .onClick(() => void this.plugin.activatePartialEditView(nodeId))
     );
+
+    const doc = this.currentDoc;
+    const complexScan = this.currentComplexScan;
+    const target = complexScan?.blocks.find((b) => b.id === nodeId);
+    if (doc && complexScan && target) {
+      const snapshot = buildStandaloneComplexBlockSnapshot(target);
+      if (snapshot) {
+        const rules = getEnabledCompositeBlockRules(this.plugin.settings.compositeBlocks);
+        const movabilityUp = evaluateStandaloneComplexBlockMovability(
+          doc,
+          complexScan,
+          target,
+          "up",
+          this.currentComposites
+        );
+        const movabilityDown = evaluateStandaloneComplexBlockMovability(
+          doc,
+          complexScan,
+          target,
+          "down",
+          this.currentComposites
+        );
+        if (movabilityUp.eligible) {
+          menu.addItem((item) =>
+            item
+              .setTitle(this.plugin.t("tree.menu.standaloneMoveUp"))
+              .setIcon("arrow-up")
+              .onClick(() => this.dispatchAndApplyStandaloneComplexBlockMove(snapshot, "up", rules))
+          );
+        }
+        if (movabilityDown.eligible) {
+          menu.addItem((item) =>
+            item
+              .setTitle(this.plugin.t("tree.menu.standaloneMoveDown"))
+              .setIcon("arrow-down")
+              .onClick(() => this.dispatchAndApplyStandaloneComplexBlockMove(snapshot, "down", rules))
+          );
+        }
+      }
+    }
+
     this.showTrackedMenu(menu, evt);
+  }
+
+  /**
+   * Phase 5C-3: dedicated, thin dispatch for standalone (non-composite-
+   * member) callout/blockquote move — mirrors dispatchAndApplyCompositeMove
+   * exactly (same multi-cursor guard, same "read the editor's CURRENT text
+   * and hand it to the pure function along with the menu-time snapshot"
+   * shape, same applyLineEditOutcome/scroll/refresh tail). All Markdown
+   * re-parsing, block re-resolution, snapshot comparison, movability
+   * re-verification, and target/range resolution are
+   * moveStandaloneComplexBlock's/evaluateStandaloneComplexBlockMovability's/
+   * findStandaloneComplexBlockMoveTarget's job (see
+   * edit/moveStandaloneComplexBlock.ts) — nothing here duplicates any of
+   * it.
+   *
+   * Phase 5C-3 approval's own explicit, formal decision: Tree row selection
+   * follow-through is NOT a guarantee of this method. `this.refresh()`
+   * below rebuilds the Tree and re-runs `ensureSelection()` exactly like
+   * every other successful command does, but the cursor-follow resolver
+   * (resolveHighlightedNodeId/resolveCurrentBlock) only ever understands
+   * BlockNode ids (section/list) — it cannot resolve to a complex-member
+   * row — so after a successful move, Tree selection may fall back to the
+   * moved block's own enclosing section rather than staying on the moved
+   * row itself. This is an accepted, documented limitation (Phase 5C-3
+   * approval: "Tree 行選択は「維持されればよい」が、維持されなくても不具合
+   * とはしない"), not a defect to fix here — extending
+   * resolveCurrentBlock/highlightedId to understand complex-member rows is
+   * explicitly out of this ticket's scope. Body-editor cursor scroll
+   * (below) is unaffected by this limitation, since it never depends on
+   * Tree node resolution at all.
+   *
+   * `snapshot` reaches this function only via a closure captured at
+   * menu-build time (showStandaloneComplexBlockMenu → here) — never a bare
+   * complex-block id, for the same reason dispatchAndApplyCompositeDelete's
+   * own doc comment explains for composites.
+   */
+  private dispatchAndApplyStandaloneComplexBlockMove(
+    snapshot: StandaloneComplexBlockSnapshot,
+    direction: StandaloneMoveDirection,
+    rules: CompositeBlockRule[]
+  ): boolean {
+    const view = this.activeMarkdownView.get();
+    if (!view) return false;
+    const editor: Editor = view.editor;
+
+    if (editor.listSelections().length > 1) {
+      this.notify(this.plugin.t("notice.multipleCursors"));
+      return false;
+    }
+
+    const text = editor.getValue();
+    const outcome = moveStandaloneComplexBlock(text, { snapshot, direction }, rules);
+
+    const cursor = { line: snapshot.range.startLine, ch: 0 };
+    const changed = applyLineEditOutcome(
+      editor,
+      cursor,
+      snapshot.range.startLine,
+      text.split("\n"),
+      outcome,
+      () => this.notify(standaloneComplexBlockMoveReasonText((k) => this.plugin.t(k), outcome.reason))
+    );
+
+    if (changed) {
+      const cur = editor.getCursor();
+      const lineLen = editor.getLine(cur.line)?.length ?? 0;
+      editor.scrollIntoView(
+        { from: { line: cur.line, ch: 0 }, to: { line: cur.line, ch: lineLen } },
+        true
+      );
+      this.refresh();
+    }
+    return changed;
   }
 
   /**

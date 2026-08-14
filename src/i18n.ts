@@ -219,6 +219,13 @@ const en = {
   "tree.menu.deleteCompositeBlock": "Delete extended block",
   "tree.menu.compositeMoveUp": "Move extended block up",
   "tree.menu.compositeMoveDown": "Move extended block down",
+  // Phase 5C-3: standalone (non-composite-member) callout/blockquote move
+  // menu items — deliberately NEW, dedicated keys rather than reusing
+  // tree.menu.compositeMoveUp/Down above, since that pair's wording
+  // ("extended block") is composite-specific and would be misleading for a
+  // block that was never part of any CompositeBlock.
+  "tree.menu.standaloneMoveUp": "Move up",
+  "tree.menu.standaloneMoveDown": "Move down",
 
   // ---- Partial Edit Pane --------------------------------------------------
   "partialEdit.viewName": "Unified Outliner: Partial Edit",
@@ -372,6 +379,31 @@ const en = {
     "Unified Outliner: no extended block was found at the cursor position.",
   "reason.compositeMoveSelectionOutOfBounds":
     "Unified Outliner: the current selection extends beyond this extended block — the move was cancelled.",
+
+  // ---- Standalone (non-composite-member) callout/blockquote move reasons
+  // (Phase 5C-3, edit/moveStandaloneComplexBlock.ts's
+  // NoStandaloneComplexBlockMoveReason). Deliberately NEW, dedicated keys —
+  // never a reuse of any reason.compositeMove* key above, since those are
+  // worded around "extended block" (CompositeBlock-specific terminology)
+  // and would misdescribe a callout/blockquote that was never part of any
+  // CompositeBlock. See standaloneComplexBlockMoveReasonText's own doc
+  // comment for the full mapping.
+  "reason.standaloneMoveNotSupported":
+    "Unified Outliner: this block cannot be moved (unsupported, ambiguous, or read-only content).",
+  "reason.standaloneMoveCompositeMember":
+    "Unified Outliner: this block is part of an extended block and cannot be moved on its own.",
+  "reason.standaloneMoveNestedInList":
+    "Unified Outliner: this block is nested inside a list item and cannot be moved in this version.",
+  "reason.standaloneMoveNoAdjacentUnit":
+    "Unified Outliner: nothing recognizable to swap with in that direction.",
+  "reason.standaloneMoveDifferentSection":
+    "Unified Outliner: the adjacent block is in a different section — move skipped for safety.",
+  "reason.standaloneMoveBoundaryChanged":
+    "Unified Outliner: the note changed since this block was selected — the move was cancelled to avoid affecting the wrong content.",
+  "reason.standaloneMoveRangeInvalid":
+    "Unified Outliner: could not confirm this block's boundary — the move was skipped for safety.",
+  "reason.standaloneMoveNoTarget":
+    "Unified Outliner: could not determine a safe move target.",
 } as const;
 
 export type TranslationKey = keyof typeof en;
@@ -527,6 +559,8 @@ const ja: Record<TranslationKey, string> = {
   "tree.menu.deleteCompositeBlock": "拡張ブロックを削除",
   "tree.menu.compositeMoveUp": "拡張ブロックを上へ移動",
   "tree.menu.compositeMoveDown": "拡張ブロックを下へ移動",
+  "tree.menu.standaloneMoveUp": "上へ移動",
+  "tree.menu.standaloneMoveDown": "下へ移動",
 
   // ---- 部分編集ペイン -------------------------------------------------------
   "partialEdit.viewName": "Unified Outliner: 部分編集",
@@ -673,6 +707,29 @@ const ja: Record<TranslationKey, string> = {
     "Unified Outliner: カーソル位置に拡張ブロックが見つからなかった。",
   "reason.compositeMoveSelectionOutOfBounds":
     "Unified Outliner: 現在の選択範囲がこの拡張ブロックの外へはみ出しているため、移動をキャンセルした。",
+
+  // ---- 単体（非compositeメンバー）callout/blockquote move理由
+  // (Phase 5C-3、edit/moveStandaloneComplexBlock.ts の
+  // NoStandaloneComplexBlockMoveReason)。上記の reason.compositeMove* は
+  // 「拡張ブロック」というcomposite前提の文言のため再利用しない — 単体の
+  // callout/blockquoteはcompositeの一部だったことがないため、そのまま流用
+  // すると意味が誤って伝わる。
+  "reason.standaloneMoveNotSupported":
+    "Unified Outliner: このブロックは移動できない（未対応・境界不確定・読み取り専用のいずれか）。",
+  "reason.standaloneMoveCompositeMember":
+    "Unified Outliner: このブロックは拡張ブロックの一部であり、単体では移動できない。",
+  "reason.standaloneMoveNestedInList":
+    "Unified Outliner: このブロックはリスト項目の中に入れ子になっており、現バージョンでは移動できない。",
+  "reason.standaloneMoveNoAdjacentUnit":
+    "Unified Outliner: その方向に入れ替え可能なブロックが見当たらない。",
+  "reason.standaloneMoveDifferentSection":
+    "Unified Outliner: 隣接するブロックが別のセクションにあるため、安全のため移動をスキップした。",
+  "reason.standaloneMoveBoundaryChanged":
+    "Unified Outliner: このブロックを選択した後にノートが変更されたため、誤った内容に影響しないよう移動をキャンセルした。",
+  "reason.standaloneMoveRangeInvalid":
+    "Unified Outliner: このブロックの範囲を確認できなかったため、安全のため移動をスキップした。",
+  "reason.standaloneMoveNoTarget":
+    "Unified Outliner: 安全な移動先を特定できなかった。",
 };
 
 const DICTIONARIES: Record<SupportedLocale, Record<TranslationKey, string>> = {
