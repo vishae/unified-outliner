@@ -121,7 +121,7 @@
  * a list item's continuation, which correctly resolves parentId to that
  * list item (the owner need not be a section).
  */
-import { BlockNode, LineRange, ParsedDocument } from "../model/block";
+import { BlockNode, isListNode, ListBlockNode, LineRange, ParsedDocument } from "../model/block";
 import {
   BlockDiagnostic,
   ComplexBlockInfo,
@@ -129,7 +129,7 @@ import {
   ComplexBlockRejection,
   ComplexBlockScanResult,
 } from "../model/complexBlock";
-import { isBlankLine } from "./parseDocument";
+import { indentColumnsOf, isBlankLine, leadingWhitespace, TAB_WIDTH } from "./parseDocument";
 
 // Intentionally byte-identical to parser/parseDocument.ts's own HEADING_RE /
 // LIST_RE — see this file's top doc comment for why these are duplicated
@@ -152,6 +152,54 @@ const DELIMITER_CELL_RE = /^:?-+:?$/;
 // heading disambiguation described in its own doc comment.
 const THEMATIC_BREAK_RE =
   /^[ ]{0,3}(?:(-)[ \t]*(?:-[ \t]*){2,}|(\*)[ \t]*(?:\*[ \t]*){2,}|(_)[ \t]*(?:_[ \t]*){2,})$/;
+
+// Phase 5P-1: intentionally byte-identical to edit/insertBlock.ts's own
+// LIST_MARKER_PREFIX_RE / contentColumnOf (see listItemContentColumn below).
+// Duplicated — not imported — for the same layering reason HEADING_RE/
+// LIST_RE are duplicated at the top of this file: parser/* must never
+// depend on edit/*, which itself already depends on parser/* (see
+// parser/compositeBlocks.ts's resolveMemberSectionId doc comment for the
+// same rule applied elsewhere in this codebase). Any future change to
+// insertBlock.ts's contentColumnOf MUST be mirrored here.
+const LIST_MARKER_PREFIX_RE = /^([ \t]*)([-*+]|\d+[.)])([ \t]*)/;
+
+/**
+ * The column at which `item`'s own text content begins — see
+ * edit/insertBlock.ts's contentColumnOf for the full rationale (this is a
+ * byte-identical duplicate, not a re-derivation). Used by scanParagraphBlocks
+ * (5P-1) to decide whether a continuation line indented AT LEAST this far is
+ * that list item's own CHILD paragraph, as opposed to marginal
+ * under-indented continuation text that stays fully invisible to this
+ * scanner (see scanParagraphBlocks's own doc comment).
+ */
+function listItemContentColumn(doc: ParsedDocument, item: ListBlockNode): number {
+  const line = doc.lines[item.range.startLine];
+  const m = line.match(LIST_MARKER_PREFIX_RE);
+  if (!m) return item.indentColumns + TAB_WIDTH;
+  const [, leadWs, marker, gapWs] = m;
+  const col = indentColumnsOf(leadWs + marker + gapWs);
+  return gapWs.length === 0 ? col + 1 : col;
+}
+
+/**
+ * Phase 5P-1's "正しい深さ" contract element: the depth a recognized
+ * ComplexBlockInfo would occupy if projected alongside the existing
+ * BlockNode hierarchy — top-level (no enclosing section/list) is 0,
+ * otherwise one deeper than its resolved parentId's own BlockNode.depth.
+ * Deliberately NOT stored as a field on ComplexBlockInfo itself (that type
+ * stays exactly as Phase 5C defined it — see model/complexBlock.ts's doc
+ * comment on why it is never extended casually); this is a small, pure,
+ * on-demand helper a caller (or a test) can apply to any already-resolved
+ * parentId, paragraph or otherwise. Returns 0 for both "no parent" and the
+ * defensive case of a parentId that no longer resolves to a node (should
+ * not happen for a parentId this module itself just resolved via
+ * resolveParentId, but this function does not assume that).
+ */
+export function complexBlockDepth(doc: ParsedDocument, parentId: string | null): number {
+  if (parentId === null) return 0;
+  const parent = doc.nodes.get(parentId);
+  return parent ? parent.depth + 1 : 0;
+}
 
 function rangesOverlap(a: LineRange, b: LineRange): boolean {
   return a.startLine <= b.endLine && b.startLine <= a.endLine;
@@ -685,28 +733,48 @@ export function scanThematicBreakBlocks(doc: ParsedDocument): ComplexBlockScanRe
 }
 
 /**
- * Paragraph recognition — diagnostic-only, per Phase 5C's approved policy:
- * paragraph blocks NEVER get editability "supported", only "read-only"
- * (boundary known, but structural operations on paragraphs are a permanent
- * non-goal — see docs/mixed-structure-spec.md §6) or "ambiguous" (boundary
- * genuinely uncertain). Nothing about this function's output is wired into
- * any UI or existing id-resolution path; it exists purely so a future
- * BlockIndex or diagnostic view has range information available. Paragraph
- * is NOT a Tree/Partial Edit addition target in any future phase unless a
- * separate, explicit design decision revisits docs/mixed-structure-spec.md
- * §6 — see docs/phase5c_block-model-and-tree-display-spec.md.
+ * Paragraph recognition — a range/parent/depth supplier for Phase 5P's
+ * "basic block" foundation (see docs/phase5p_paragraph-block-foundation-plan.md),
+ * inherited unchanged from Phase 5C's original scanner. Paragraph blocks
+ * still NEVER get editability "supported" in this phase (5P-1 adds no
+ * operation of any kind — see this file's own restraint below) — only
+ * "read-only" (boundary confidently known; no operation is authorized for
+ * this instance YET, not "permanently forbidden" — the meaning of
+ * "read-only" itself was narrowed by Phase 5P-0, see
+ * docs/phase5c_block-model-and-tree-display-spec.md §4 and
+ * docs/mixed-structure-spec.md §6) or "ambiguous" (boundary genuinely
+ * uncertain). Nothing about this function's output is wired into any Tree
+ * display, drag & drop, addition/deletion, or Partial Edit path — Phase 5P-1
+ * is recognition only; see the plan doc's §7 "意図的な非対象" list for what
+ * remains out of scope.
  *
- * A candidate line must be: non-blank; not frontmatter; not fenced-code;
- * not a heading line; not a list-marker line; and not owned (via
- * doc.lineToOwningNodeId) by a LIST node — list continuation text is
- * already treated as part of its owning list item by
- * docs/mixed-structure-spec.md and edit/listBodyRange.ts, so it is
- * deliberately excluded here rather than re-claimed as an independent
- * paragraph. A line owned by a SECTION (ordinary body text) or by nothing
- * (top-level text before any heading) IS a candidate. This function does
- * NOT exclude quote-prefixed or pipe-table-row-shaped lines — see this
- * module's top doc comment for why that redundancy is intentional and
- * resolved by mergeBlockRangesSafely, not by this scanner.
+ * A candidate line must be: non-blank; not frontmatter; not fenced-code; not
+ * a heading line; not a list-marker line. Its treatment then depends on
+ * `doc.lineToOwningNodeId`:
+ *   - Owned by a SECTION (ordinary body text), or owned by nothing
+ *     (top-level text before any heading) — always a candidate, exactly as
+ *     Phase 5C originally recognized it.
+ *   - Owned by a LIST item — Phase 5P-1 narrows the original Phase 5C
+ *     blanket exclusion. A line indented AT LEAST as far as the owning list
+ *     item's own content-start column (listItemContentColumn, a byte-
+ *     identical duplicate of edit/insertBlock.ts's contentColumnOf) is now a
+ *     candidate, and resolves (via the existing resolveParentId call below,
+ *     unchanged) to that list item's own id as parentId — this is the
+ *     "list item の子になる paragraph" case docs/phase5p_paragraph-block-
+ *     foundation-plan.md §5 requires. A line indented LESS than that column
+ *     remains excluded, exactly as Phase 5C originally treated ALL
+ *     list-owned lines: it is still genuinely the list item's OWN single
+ *     continuation text (docs/mixed-structure-spec.md, edit/listBodyRange.ts),
+ *     not an independently addressable unit. A paragraph that is NOT
+ *     indented far enough to be owned by any list item at all (i.e. it sits
+ *     at or below the item's own marker column, so parser/parseDocument.ts
+ *     itself already closed the item before this line) was never affected
+ *     by any of this — it resolves as an ordinary section/top-level
+ *     candidate, same as before Phase 5P.
+ *
+ * This function does NOT exclude quote-prefixed or pipe-table-row-shaped
+ * lines — see this module's top doc comment for why that redundancy is
+ * intentional and resolved by mergeBlockRangesSafely, not by this scanner.
  */
 export function scanParagraphBlocks(doc: ParsedDocument): ComplexBlockScanResult {
   const blocks: ComplexBlockInfo[] = [];
@@ -723,7 +791,14 @@ export function scanParagraphBlocks(doc: ParsedDocument): ComplexBlockScanResult
     const owner = doc.lineToOwningNodeId[idx];
     if (owner) {
       const ownerNode = doc.nodes.get(owner);
-      if (ownerNode && ownerNode.type === "list") return false;
+      if (ownerNode && isListNode(ownerNode)) {
+        // 5P-1: only a line indented far enough to reach the item's own
+        // content-start column becomes that item's CHILD paragraph. A line
+        // owned by the item but indented less than that stays invisible —
+        // it is the item's own continuation text, unchanged from Phase 5C.
+        const col = indentColumnsOf(leadingWhitespace(line));
+        return col >= listItemContentColumn(doc, ownerNode);
+      }
     }
     return true;
   };
@@ -769,7 +844,7 @@ export function scanParagraphBlocks(doc: ParsedDocument): ComplexBlockScanResult
       childIds: [],
       editability: "read-only",
       reason:
-        "paragraph blocks are recognized for diagnostics only; Phase 5C adds no paragraph structural-edit target (see docs/mixed-structure-spec.md §6)",
+        "paragraph blocks carry range/parent/depth information only in Phase 5P-1; no structural-edit operation is authorized for this instance yet (see docs/mixed-structure-spec.md §6, docs/phase5p_paragraph-block-foundation-plan.md)",
     });
   }
 

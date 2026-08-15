@@ -13,6 +13,7 @@ import { parseDocument } from "../src/parser/parseDocument";
 import { BlockNode, isListNode, isSectionNode, ParsedDocument, SectionBlockNode } from "../src/model/block";
 import { ComplexBlockInfo } from "../src/model/complexBlock";
 import {
+  complexBlockDepth,
   describeComplexBlockRejection,
   mergeBlockRangesSafely,
   scanBlockquoteBlocks,
@@ -387,7 +388,20 @@ describe("scanThematicBreakBlocks", () => {
 });
 
 // ---------------------------------------------------------------------
-// Paragraph (diagnostic-only; never "supported")
+// Paragraph — Phase 5P-1: range/parent/depth contract (never "supported")
+//
+// Phase 5C originally excluded EVERY line owned by a list node from
+// scanParagraphBlocks entirely. Phase 5P-1 (docs/phase5p_paragraph-block-
+// foundation-plan.md §5) narrows that: a continuation line indented AT
+// LEAST as far as the owning list item's own content-start column
+// (contentColumn) is now recognized as that item's CHILD paragraph, with
+// parentId set to the list item's id. A line owned by the item but indented
+// LESS than contentColumn remains fully invisible, exactly as Phase 5C
+// originally treated ALL list-owned lines — it is genuinely the item's own
+// single continuation text, not an independently addressable unit. No
+// paragraph instance's editability changes as a result of any of this: it
+// is always "read-only" or "ambiguous", never "supported" (5P-1 authorizes
+// no operation — see that plan doc's §3/§7).
 // ---------------------------------------------------------------------
 describe("scanParagraphBlocks", () => {
   it("recognizes a section's body paragraph as read-only, never supported", () => {
@@ -410,18 +424,113 @@ describe("scanParagraphBlocks", () => {
     expect(blocks[0].editability).toBe("read-only");
   });
 
-  it("does NOT claim a list item's own continuation text as an independent paragraph", () => {
+  it("(Phase 5P-1 contract change) a continuation line indented to the list item's own content column IS now recognized as that item's child paragraph — was fully invisible under Phase 5C", () => {
     const text = ["- item1", "  continuation of item1", "- item2"].join("\n");
+    const doc = parseDocument(text);
+    const { blocks } = scanParagraphBlocks(doc);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].range).toEqual({ startLine: 1, endLine: 1 });
+    expect(blocks[0].parentId).toBe(listIdOf(doc, "item1"));
+    expect(blocks[0].editability).toBe("read-only");
+  });
+
+  it("a continuation line indented LESS than the item's content column stays invisible (still the item's own continuation text, unchanged from Phase 5C)", () => {
+    // "  - item1" -> marker at column 2, content column 4. A line indented
+    // to column 3 is still owned by item1 (parseDocument.ts keeps the item
+    // open for any col > item.indentColumns) but does not reach contentColumn.
+    const text = ["  - item1", "   under-indented continuation", "  - item2"].join("\n");
     const doc = parseDocument(text);
     expect(scanParagraphBlocks(doc).blocks).toEqual([]);
   });
 
-  it("never produces editability 'supported' for any paragraph, across mixed scenarios", () => {
-    const text = ["# H", "Body one.", "", "- item", "", "Body two after the list."].join("\n");
+  it("contentColumn-based recognition also works for ordered list markers", () => {
+    const text = ["1. item1", "   child paragraph of item1", "2. item2"].join("\n");
+    const doc = parseDocument(text);
+    const { blocks } = scanParagraphBlocks(doc);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].parentId).toBe(listIdOf(doc, "item1"));
+  });
+
+  it("an unindented paragraph following a list (blank line in between) is a section sibling, NOT the last list item's child", () => {
+    const text = ["# H", "- item1", "- item2", "", "Trailing paragraph."].join("\n");
+    const doc = parseDocument(text);
+    const { blocks } = scanParagraphBlocks(doc);
+    const trailing = blocks.find((b) => doc.lines[b.range.startLine] === "Trailing paragraph.")!;
+    expect(trailing.parentId).toBe(sectionIdOf(doc, "H"));
+    expect(trailing.parentId).not.toBe(listIdOf(doc, "item2"));
+  });
+
+  it("an unindented paragraph immediately after a list (no blank line) is also a section sibling, not the list item's child", () => {
+    const text = ["# H", "- item1", "Not indented."].join("\n");
+    const doc = parseDocument(text);
+    const { blocks } = scanParagraphBlocks(doc);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].parentId).toBe(sectionIdOf(doc, "H"));
+  });
+
+  it("a list-item-child paragraph and a section-level paragraph in the same document resolve to different, non-cross-contaminated parentIds", () => {
+    const text = [
+      "# H",
+      "Section-level paragraph.",
+      "- item1",
+      "  Child paragraph of item1.",
+      "- item2",
+    ].join("\n");
+    const doc = parseDocument(text);
+    const { blocks } = scanParagraphBlocks(doc);
+    const sectionLevel = blocks.find((b) => doc.lines[b.range.startLine] === "Section-level paragraph.")!;
+    const listChild = blocks.find((b) => doc.lines[b.range.startLine] === "  Child paragraph of item1.")!;
+    expect(sectionLevel.parentId).toBe(sectionIdOf(doc, "H"));
+    expect(listChild.parentId).toBe(listIdOf(doc, "item1"));
+    expect(listChild.parentId).not.toBe(sectionLevel.parentId);
+  });
+
+  it("never produces editability 'supported' for any paragraph, across mixed scenarios including list-item-child paragraphs", () => {
+    const text = [
+      "# H",
+      "Body one.",
+      "",
+      "- item",
+      "  Child of item, indented to content column.",
+      "",
+      "Body two after the list.",
+    ].join("\n");
     const doc = parseDocument(text);
     const { blocks } = scanParagraphBlocks(doc);
     expect(blocks.length).toBeGreaterThan(0);
     for (const b of blocks) expect(b.editability).not.toBe("supported");
+  });
+});
+
+// ---------------------------------------------------------------------
+// complexBlockDepth — Phase 5P-1's "正しい深さ" contract element.
+// ---------------------------------------------------------------------
+describe("complexBlockDepth", () => {
+  it("is 0 for a top-level (no enclosing section/list) parentId", () => {
+    const doc = parseDocument("Leading paragraph.");
+    expect(complexBlockDepth(doc, null)).toBe(0);
+  });
+
+  it("is one deeper than the enclosing section's own depth", () => {
+    const text = ["# H", "## Sub", "Body under Sub."].join("\n");
+    const doc = parseDocument(text);
+    const subId = sectionIdOf(doc, "Sub");
+    expect(complexBlockDepth(doc, subId)).toBe(doc.nodes.get(subId)!.depth + 1);
+  });
+
+  it("is one deeper than the enclosing list item's own depth, for a list-item-child paragraph", () => {
+    const text = ["- item1", "  - nested", "    Child of nested.", "- item2"].join("\n");
+    const doc = parseDocument(text);
+    const { blocks } = scanParagraphBlocks(doc);
+    const child = blocks.find((b) => doc.lines[b.range.startLine].includes("Child of nested"))!;
+    const nestedId = listIdOf(doc, "nested");
+    expect(child.parentId).toBe(nestedId);
+    expect(complexBlockDepth(doc, child.parentId)).toBe(doc.nodes.get(nestedId)!.depth + 1);
+  });
+
+  it("falls back to 0 for a parentId that does not resolve to any node (defensive)", () => {
+    const doc = parseDocument("Leading paragraph.");
+    expect(complexBlockDepth(doc, "does-not-exist")).toBe(0);
   });
 });
 

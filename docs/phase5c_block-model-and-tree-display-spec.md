@@ -102,13 +102,16 @@ inline rename（§2.2）で確立した rename トリガー層に、モバイル
 
 上記のいずれも、着手前に本ドキュメントと同様の設計メモ・承認プロセスを経ること。
 
-## 4. paragraph の扱い（確定方針）
+## 4. paragraph の扱い（Phase 5P へ移管、2026-08-15）
 
-paragraph は `docs/mixed-structure-spec.md` §6（Phase 4D で既に確定した「段落専用ノードを追加しない」という方針）を Phase 5C でも踏襲する。
+paragraph の基盤整備は、本ドキュメント（5C）でも Phase 5D でもなく、独立した別系統 **Phase 5P**（`docs/phase5p_paragraph-block-foundation-plan.md`）が正である。本節は歴史的経緯の記録として残すが、現行の契約は必ず `docs/phase5p_paragraph-block-foundation-plan.md` と `docs/mixed-structure-spec.md` §6（Phase 5P-0 で改訂済み）を参照すること。
 
-- `editability` は常に `"read-only"` または `"ambiguous"` であり、`"supported"` になることはない（`scanParagraphBlocks` のテストで横断的に検証済み）。
-- Tree からの表示・選択・追加対象には含めない。Phase 5D 以降でこの方針を変更する場合は、`docs/mixed-structure-spec.md` §6 を明示的に改訂したうえで、別途設計判断を経ること。
-- 現状の用途は BlockIndex や診断ビューのための range 情報提供に限る。
+5C 時点で確定していた方針（参考。Phase 5P-0 により意味が narrow 化された部分がある）：
+
+- `editability` は常に `"read-only"` または `"ambiguous"` であり、`"supported"` になることはない（`scanParagraphBlocks` のテストで横断的に検証済み。Phase 5P-1 時点でも変わらず、いかなる paragraph インスタンスも `"supported"` にはならない）。ただし `"read-only"` の意味そのものは、5C 時点の「この KIND に対する構造操作は永久に非対象」から、Phase 5P-0 以降は「このインスタンスに対する操作は現時点で未許可」へと narrow 化されている——将来 5P のサブフェーズが特定の操作を許可した場合、その許可済みインスタンスは `"supported"` になりうる。
+- Tree からの常時表示・選択・追加対象には含めない（Phase 5P-1 時点でも変わらず）。任意表示（設定オン時のみ）は Phase 5P-3 が個別に設計・実装する。
+- Phase 5P-1（2026-08-15 実装）により、`scanParagraphBlocks` は「list item の本文開始列まで字下げされた段落を、その list item の子として parentId 解決する」契約を追加した——これは Tree 表示や編集対象化ではなく、range/parentId/depth という認識レイヤーの拡張に限られる。詳細は `docs/phase5p_paragraph-block-foundation-plan.md` §5、`src/parser/complexBlocks.ts` の `scanParagraphBlocks` doc comment を参照。
+- 現状の用途は BlockIndex や診断ビュー、および Phase 5P の後続サブフェーズ（カーソル解決・ホイスト等）のための range/parentId/depth 情報提供に限る。
 
 ## 5. fenced-code の境界方針（暫定）
 

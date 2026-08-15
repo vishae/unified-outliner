@@ -83,12 +83,21 @@ export type ComplexBlockKind =
  *   model (no embedded/nested callout-like structure it doesn't decompose).
  *   A FUTURE phase (5D onward) may treat this as an operable unit. Phase 5C
  *   itself performs no operations regardless of this value.
- * - "read-only": the boundary is confidently determined, but this KIND is a
- *   permanent, deliberate non-goal for structural operations — not a
- *   "not yet implemented" placeholder. Only "paragraph" ever gets this
- *   value in Phase 5C, matching docs/mixed-structure-spec.md §6's existing
- *   decision ("段落専用ノードの追加...(段落を独立したdrag&drop/Partial Edit
- *   Pane対象にはしない)").
+ * - "read-only": the boundary is confidently determined, but no operation is
+ *   authorized for THIS instance yet. Only "paragraph" ever gets this value,
+ *   and its meaning was narrowed by Phase 5P-0 (2026-08-15): originally (5C)
+ *   it meant "permanent, deliberate non-goal for structural operations on
+ *   this whole kind"; docs/mixed-structure-spec.md §6 and
+ *   docs/phase5c_block-model-and-tree-display-spec.md §4 now instead frame
+ *   it as "not yet authorized" — a future 5P sub-phase (see
+ *   docs/phase5p_paragraph-block-foundation-plan.md) may authorize specific
+ *   operations (cursor resolution, hoist, optional Tree display, adjacent
+ *   swap) for paragraph, at which point THOSE authorized instances would use
+ *   "supported" instead. As of Phase 5P-1, no paragraph instance is ever
+ *   "supported" — parser/complexBlocks.ts's scanner still always assigns
+ *   "read-only" or "ambiguous" to every paragraph it recognizes; only the
+ *   WORDING of what "read-only" implies for paragraph going forward has
+ *   changed, not the observable behavior.
  * - "unsupported": the block's OWN boundary (start/end line range) IS
  *   confidently known, but its INTERNAL content contains structure this
  *   phase does not decompose or model — e.g. a callout containing a nested

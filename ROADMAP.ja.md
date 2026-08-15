@@ -20,6 +20,7 @@ Unified Outliner は、単一のMarkdownノート内で意味のまとまりを�
 - ノード内のリンクと添付ファイルの一覧。
 - sectionまたはlist subtree単位でのCanvas連携。
 - ステータスやタグなどの局所メタデータ。
+- 見出しのない本文段落を基本ブロックとして扱う基盤（Phase 5P。5C/5Dとは別系統）。方針改訂と範囲・親・深さの認識契約（5P-0/5P-1）は完了済み、カーソル解決・ホイスト・任意Tree表示・隣接交換（5P-2〜5P-4）は今後。詳細は `docs/phase5p_paragraph-block-foundation-plan.md`。
 - ノート横断のブロック分類・検索（Phase 6: BlockIndexによるYAML継承・inline property統合）。
 - 構造図とダイアログによる編集（Phase 7）。
 
