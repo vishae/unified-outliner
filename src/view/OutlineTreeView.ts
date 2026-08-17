@@ -179,6 +179,7 @@ import {
   isOutlineCompositeNode,
   isOutlineComplexMemberNode,
   isOutlineListNode,
+  isOutlineParagraphNode,
   isOutlineSectionNode,
   listItemDisplayText,
   OutlineTreeNode,
@@ -647,6 +648,18 @@ export class OutlineTreeView extends ItemView {
       // `complexScan.blocks` list down to callout/blockquote +
       // editability "supported" + not-already-a-composite-member itself.
       standaloneComplexBlocks: { blocks: complexScan.blocks },
+      // Phase 5P-3 ("本文 paragraph の任意 Outline Tree 表示", design doc
+      // §1/§3): "presence of the option is the gate" — same pattern as
+      // standaloneComplexBlocks above, no separate boolean flag inside
+      // BuildOutlineTreeOptions itself. When the setting is off, `undefined`
+      // is passed and buildOutlineTree.ts never even adds a paragraph node
+      // to its internal grouping map, so paragraph rows are not merely
+      // hidden — they never exist in the projection model at all. Reuses
+      // the SAME complexScan.blocks already computed above for
+      // standaloneComplexBlocks (one scan, both projections read from it).
+      paragraphs: this.plugin.settings.showParagraphsInOutline
+        ? { blocks: complexScan.blocks }
+        : undefined,
       // UXP-04 (2026-08-15, "Configurable List Marker Prefix Display"):
       // resolved once here at build time — see
       // BuildOutlineTreeOptions.listPrefixStyle's own doc comment for why
@@ -1220,7 +1233,31 @@ export class OutlineTreeView extends ItemView {
         });
       }
       innerEl.createSpan({ cls: "unified-outliner-complex-member-label", text: node.label });
+    } else if (isOutlineParagraphNode(node)) {
+      // Phase 5P-3 (design doc §4): "¶ " is a fixed, hardcoded symbol — NOT
+      // read from headingPrefixStyle/listPrefixStyle or any other existing
+      // prefix setting (those are section/list-specific display concerns;
+      // conflating paragraph's marker with them was explicitly rejected by
+      // the design). node.label is already the fully-resolved, truncated,
+      // whitespace-normalized display text (tree/buildOutlineTree.ts's
+      // paragraphTreeLabel) — this branch does no further text processing.
+      const innerEl = selfEl.createDiv({
+        cls: "tree-item-inner unified-outliner-paragraph-text",
+      });
+      innerEl.createSpan({
+        cls: "unified-outliner-paragraph-prefix",
+        text: "¶ ",
+      });
+      innerEl.createSpan({ cls: "unified-outliner-paragraph-label", text: node.label });
     }
+    // Phase 5P-3 (design doc §6): deliberately NO further else branch here
+    // (matches the pre-existing lack of a final else for composite/
+    // complex-member above) — a paragraph row's label is rendered by the
+    // branch just above, and its read-only status (readOnly, computed
+    // above from collectReadOnlyOutlineNodeIds's explicit "paragraph"
+    // inclusion) already gates it out of every rename/drag/context-menu/
+    // mobile-long-press attachment point below without needing its own
+    // exclusion at each site.
 
     selfEl.addEventListener("click", () => {
       // Mobile gesture layer, tier 1/3 of 3 (see the "Mobile gesture" block

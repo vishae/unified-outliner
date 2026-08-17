@@ -291,3 +291,43 @@ describe("settingsDefaults: listPrefixStyle (UXP-04)", () => {
     expect(isValidListPrefixStyle(null)).toBe(false);
   });
 });
+
+/**
+ * Phase 5P-3 ("本文 paragraph の任意 Outline Tree 表示"): showParagraphsInOutline
+ * is a top-level SCALAR BOOLEAN, same shape as syncOutlineTreeFoldingToEditor
+ * / showListItemsInOutline above (not nested like treeKindHighlight, and not
+ * a string enum like language/outlineTreeSidebarPosition/listPrefixStyle) —
+ * so, like those two boolean fields, it relies on mergeSettings's existing
+ * shallow Object.assign alone (no extra re-validation branch): there is no
+ * "corrupted enum value" failure mode a boolean can hit that Object.assign's
+ * "missing key -> default" fallback doesn't already handle.
+ */
+describe("settingsDefaults: showParagraphsInOutline (Phase 5P-3)", () => {
+  it("defaults to false (paragraph Tree display is opt-in, matching showListItemsInOutline's own off-by-default precedent)", () => {
+    expect(DEFAULT_SETTINGS.showParagraphsInOutline).toBe(false);
+  });
+
+  it("mergeSettings resolves to false when raw omits the key entirely (pre-existing data.json written before this field existed)", () => {
+    const merged = mergeSettings({ allowCrossSectionListMove: false });
+    expect(merged.showParagraphsInOutline).toBe(false);
+  });
+
+  it("mergeSettings preserves an explicit true from a raw settings object", () => {
+    expect(mergeSettings({ showParagraphsInOutline: true }).showParagraphsInOutline).toBe(true);
+  });
+
+  it("mergeSettings preserves an explicit false from a raw settings object", () => {
+    expect(mergeSettings({ showParagraphsInOutline: false }).showParagraphsInOutline).toBe(false);
+  });
+
+  it("mergeSettings never mutates the shared DEFAULT_SETTINGS object", () => {
+    const before = { ...DEFAULT_SETTINGS };
+    mergeSettings({ showParagraphsInOutline: true });
+    expect(DEFAULT_SETTINGS).toEqual(before);
+    expect(DEFAULT_SETTINGS.showParagraphsInOutline).toBe(false);
+  });
+
+  it("a completely empty raw object (fresh install) resolves showParagraphsInOutline to false via mergeSettings({})", () => {
+    expect(mergeSettings({}).showParagraphsInOutline).toBe(false);
+  });
+});

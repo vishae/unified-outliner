@@ -32,6 +32,7 @@ import {
   SectionBlockNode,
 } from "../model/block";
 import { ComplexBlockInfo, ComplexBlockKind } from "../model/complexBlock";
+import { complexBlockDepth } from "../parser/complexBlocks";
 import {
   compositeBlockDisplayLabel,
   CompositeBlockInfo,
@@ -182,11 +183,72 @@ export interface OutlineTreeComplexMemberNode {
   children: OutlineTreeNode[];
 }
 
+/**
+ * Phase 5P-3 (docs/phase5p3d_paragraph-tree-display-design.md): a read-only,
+ * navigation-only Tree row for a plain Markdown paragraph
+ * (parser/complexBlocks.ts's ComplexBlockInfo, kind "paragraph"), projected
+ * ONLY when `BuildOutlineTreeOptions.paragraphs` is passed (in practice,
+ * only when settings.showParagraphsInOutline is on — see
+ * view/OutlineTreeView.ts's refresh()).
+ *
+ * Deliberately a NEW, independent node kind — never `"complex-member"`,
+ * even though a paragraph is projected via the same "group by resolved
+ * parent, sort by line" shape `standaloneComplexBlocks` already uses (see
+ * groupParagraphBlocks/buildParagraphTreeNode below). Reusing
+ * `"complex-member"` would make a paragraph row match
+ * view/OutlineTreeView.ts's `isComplexMember && node.isStandalone` branch,
+ * which attaches a context menu with an "Open in Partial Edit" item — that
+ * would silently open a NEW, Tree-triggered entry point into paragraph
+ * Partial Edit, defeating Phase 5P-2's explicit "cursor-only" contract
+ * (design doc §5-2). A distinct kind makes that impossible by construction:
+ * no existing branch in this codebase's kind-based dispatch (row rendering,
+ * context menu attachment, rename allowlist, drag & drop) matches
+ * `"paragraph"` unless a NEW branch is deliberately added for it.
+ *
+ * `id` is NEVER the underlying ComplexBlockInfo's own scan-local
+ * `complexBlockId` (parser/complexBlocks.ts's per-call `paragraph-N`
+ * sequence) — see paragraphViewId() below. It is a temporary,
+ * render-pass-scoped view identity: unique within one buildOutlineTree()
+ * call, in a namespace (`tree-paragraph:N`) that can never collide with any
+ * other node kind's id format (`sec-N`, `li-N`, or a raw dash-based
+ * ComplexBlockInfo id reused verbatim by a composite/complex-member row).
+ * It is never written to `persistence/foldStateStore.ts` (a paragraph node
+ * is never given a `tree/foldIdentity.ts` identity at all — see that
+ * module's own `"paragraph"` case) and never treated as a stable key across
+ * refreshes: `view/OutlineTreeView.ts`'s existing `ensureSelection()`
+ * fallback (exact id match -> highlightedId -> first visible node) is left
+ * completely unchanged, so a paragraph selection that fails to re-resolve
+ * after a re-parse simply degrades to that same existing fallback, never a
+ * crash or a wrong-content selection — see design doc §4-2/§4-3.
+ */
+export interface OutlineTreeParagraphNode {
+  kind: "paragraph";
+  /** Temporary view identity — see this interface's own doc comment. Never persisted, never reused as a fold/selection key across refreshes. */
+  id: string;
+  /** 0-based start line of the paragraph's own range (matches `line` below). */
+  rangeStart: number;
+  /** 0-based end line (inclusive) of the paragraph's own range. */
+  rangeEnd: number;
+  /** The enclosing section id, the owning list item id, or null (headingless top-level) — parser/complexBlocks.ts's own resolveParentId contract (Phase 5P-1/5P-1R), unchanged here. */
+  parentId: string | null;
+  depth: number;
+  label: string;
+  /** Always true — a paragraph row is read-only navigation only (design doc §6). Also present in `collectReadOnlyOutlineNodeIds`'s output for the same reason; kept as an explicit field too so a consumer that only has one node in hand (not the whole readOnlyNodeIds Set) can still tell. */
+  isReadOnly: true;
+  /** Always true — a paragraph never has Tree children and is never fold-capable (design doc §4-2). */
+  isLeaf: true;
+  /** 0-based line of the paragraph's own first line (jump target) — always equal to `rangeStart`. */
+  line: number;
+  /** Always [] — see `isLeaf`. */
+  children: OutlineTreeNode[];
+}
+
 export type OutlineTreeNode =
   | OutlineTreeSectionNode
   | OutlineTreeListNode
   | OutlineTreeCompositeNode
-  | OutlineTreeComplexMemberNode;
+  | OutlineTreeComplexMemberNode
+  | OutlineTreeParagraphNode;
 
 export interface BuildOutlineTreeOptions {
   /**
@@ -281,7 +343,38 @@ export interface BuildOutlineTreeOptions {
    * i.e. the pre-UXP-04 tree shape.
    */
   listPrefixStyle?: ListPrefixStyle;
+  /**
+   * Phase 5P-3 (docs/phase5p3d_paragraph-tree-display-design.md): project
+   * paragraph ComplexBlockInfo entries (kind "paragraph", editability
+   * "supported") as OutlineTreeParagraphNode leaf rows. Omit this option
+   * entirely (the default for every caller) to get byte-identical output to
+   * before this phase — this is the "don't project when the setting is
+   * off" design (§2-3): there is no separate on/off flag inside this
+   * option, its mere PRESENCE is the gate, mirroring how
+   * `standaloneComplexBlocks` above already works.
+   *
+   * `blocks` is typically the caller's own already-computed
+   * `scanComplexBlocks(doc).blocks` — same convention as
+   * `standaloneComplexBlocks.blocks`; this function filters to paragraph +
+   * "supported" itself, so passing the full unfiltered scan result is both
+   * simplest and safest for the caller.
+   */
+  paragraphs?: {
+    blocks: ComplexBlockInfo[];
+  };
 }
+
+/**
+ * Phase 5P-3: shorthand for groupParagraphBlocks' return type, threaded
+ * through buildChildren/buildListNode/buildCompositeNode/buildMemberNode
+ * exactly like `standaloneByParentId`'s own (inline) map type, kept as a
+ * named alias purely so each of those signatures doesn't repeat the full
+ * three-field object type.
+ */
+type ParagraphByParentId = Map<
+  string | null,
+  { info: ComplexBlockInfo; label: string; viewId: string }[]
+>;
 
 /** Threaded through the recursive build below only when `options.composites` is set — see BuildOutlineTreeOptions.composites's doc comment. */
 interface CompositeProjectionContext {
@@ -314,6 +407,13 @@ export function isOutlineComplexMemberNode(
   node: OutlineTreeNode
 ): node is OutlineTreeComplexMemberNode {
   return node.kind === "complex-member";
+}
+
+/** Phase 5P-3: see OutlineTreeParagraphNode's own doc comment. */
+export function isOutlineParagraphNode(
+  node: OutlineTreeNode
+): node is OutlineTreeParagraphNode {
+  return node.kind === "paragraph";
 }
 
 const LIST_ITEM_TEXT_RE = /^[ \t]*(?:[-*+]|\d+[.)])(?:[ \t]+(.*))?$/;
@@ -648,6 +748,129 @@ export function standaloneComplexBlockLabel(
 }
 
 /**
+ * Phase 5P-3: maximum length (in characters) of a paragraph Tree label
+ * before truncation with a trailing "…" — the same 60-character budget
+ * design doc §3-3 fixes (deliberately independent of
+ * STANDALONE_COMPLEX_LABEL_MAX_LENGTH's 80, and of
+ * resolver/resolveParagraphAtCursor.ts's own PREVIEW_MAX_LENGTH, which
+ * happens to also be 60 but is a SEPARATE constant for a SEPARATE purpose —
+ * see paragraphTreeLabel's own doc comment for why these two 60s are not
+ * the same value merely coinciding).
+ */
+export const PARAGRAPH_LABEL_MAX_LENGTH = 60;
+
+/**
+ * Phase 5P-3: collapses every run of whitespace — including embedded
+ * newlines, per this ticket's explicit "改行・連続空白は単一空白へ正規化す
+ * る" requirement — into a single space, and trims the result. A Tree row
+ * is one line; a multi-line paragraph's raw text cannot be shown as-is
+ * without visually breaking the row.
+ */
+function normalizeParagraphLabelText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Phase 5P-3: true when `s` contains at least one letter or digit (any
+ * script — `\p{L}`/`\p{N}` are Unicode property escapes, not
+ * ASCII-only), i.e. `s` is neither empty nor made up only of punctuation/
+ * symbols/whitespace. Used to decide whether a normalized preview is
+ * "worth showing" or should fall through to the `段落 N` fallback — per
+ * this ticket's explicit "空白だけの内容、記号だけの内容、ラベル抽出不能
+ * 時は「段落 N」にフォールバックする" requirement.
+ */
+function isParagraphLabelWorthy(s: string): boolean {
+  return /[\p{L}\p{N}]/u.test(s);
+}
+
+function truncateParagraphLabel(label: string): string {
+  if (label.length <= PARAGRAPH_LABEL_MAX_LENGTH) return label;
+  return label.slice(0, PARAGRAPH_LABEL_MAX_LENGTH - 1).trimEnd() + "…";
+}
+
+/**
+ * Phase 5P-3: display label for a paragraph Tree row. Deliberately a NEW
+ * function, not a reuse of resolver/resolveParagraphAtCursor.ts's own
+ * (unexported) buildPreview — that helper only looks at a paragraph's
+ * FIRST LINE (a Partial Edit Pane title has no room for more and no
+ * newline-collapsing need, since it's read from `text.split("\n", 1)[0]`),
+ * whereas a Tree label must first collapse a multi-line paragraph's
+ * embedded newlines/runs of whitespace into one line (this ticket's own
+ * normalization requirement) — a genuinely different rule, not just a
+ * different call site for the same one. Two different 60-character caps
+ * that happen to share the same number is coincidence, not a shared
+ * constant, since the two functions round/trim different source text
+ * (first line only vs. the whole normalized paragraph).
+ *
+ * This function's output is DISPLAY-ONLY: it is never read back by
+ * resolver/resolveParagraphAtCursor.ts or edit/paragraphPartialEdit.ts —
+ * paragraph identity/Apply safety is entirely independent of this label
+ * (design doc §3-3's own "preview の表示は Tree 専用であり、5P-2 の Apply
+ * anchor / paragraph 同一性判定には使わない" requirement), and this
+ * function never mutates or returns anything derived that could
+ * accidentally be mistaken for editable body text.
+ *
+ * `<!-- uo-title: ... -->` is deliberately NOT read here — see
+ * docs/phase5p3d_paragraph-tree-display-design.md §3-2. Under the current
+ * parser/complexBlocks.ts boundary rules (scanParagraphBlocks' `isCandidate`
+ * treats an HTML comment line exactly like any other body line), a
+ * uo-title comment placed immediately above a paragraph with no blank-line
+ * separator MERGES into that paragraph's own text range rather than
+ * staying a separate, safely associable title line — so honoring it here
+ * would either display the paragraph's own body text as if it were a
+ * distinct title, or misattribute an unrelated stray HTML comment that
+ * happens to precede unrelated text as that paragraph's "title". 5P-3D
+ * concluded there is no safe association rule available without changing
+ * scanParagraphBlocks' boundary contract, which is out of this phase's
+ * scope (5P-1/5P-1R's boundary rules are a separately-reviewed, tested
+ * contract) — so this function always starts at label priority tier 2
+ * (normalized preview), falling through to tier 3 (`段落 N`) only when
+ * tier 2 has nothing label-worthy.
+ */
+export function paragraphTreeLabel(text: string, ordinal: number, t: Translator): string {
+  const normalized = normalizeParagraphLabelText(text);
+  if (isParagraphLabelWorthy(normalized)) {
+    return truncateParagraphLabel(normalized);
+  }
+  return t("tree.paragraphFallback", { n: ordinal });
+}
+
+/**
+ * Phase 5P-3: `id` is NEVER the underlying ComplexBlockInfo's own
+ * scan-local `complexBlockId` — see OutlineTreeParagraphNode.id's own doc
+ * comment. `n` is `paragraphOrdinalById`'s already-unique, document-order
+ * ordinal (see buildParagraphOrdinals below), so `tree-paragraph:${n}` is
+ * guaranteed unique within one buildOutlineTree() call without any
+ * separately-threaded mutable counter, and the colon-based format can never
+ * collide with any other node kind's own id format in this file
+ * (`sec-N`/`li-N`, or a raw dash-based ComplexBlockInfo id reused verbatim
+ * by a composite/complex-member row).
+ */
+function paragraphViewId(n: number): string {
+  return `tree-paragraph:${n}`;
+}
+
+/**
+ * Phase 5P-3: `段落 N` fallback numbering is a DOCUMENT-WIDE ordinal — "the
+ * Nth eligible paragraph in the whole document, in document order" — not
+ * scoped per parent group, so a paragraph's fallback number stays stable
+ * (until the document's own paragraph count/order actually changes)
+ * regardless of which section/list item it happens to land under. This is
+ * also reused, unchanged, as the numeric suffix of paragraphViewId's view
+ * identity (see that function's own doc comment) — one pass serves both
+ * needs.
+ */
+function buildParagraphOrdinals(blocks: ComplexBlockInfo[]): Map<string, number> {
+  const eligible = blocks
+    .filter((b) => b.kind === "paragraph" && b.editability === "supported")
+    .slice()
+    .sort((a, b) => a.range.startLine - b.range.startLine);
+  const map = new Map<string, number>();
+  eligible.forEach((info, idx) => map.set(info.id, idx + 1));
+  return map;
+}
+
+/**
  * Phase 5C-2: `info.kind` is callout/blockquote AND `info.editability ===
  * "supported"` — the ONLY ComplexBlockInfo values this ticket ever
  * projects as a standalone Tree row. "read-only"/"unsupported"/"ambiguous"
@@ -817,6 +1040,94 @@ function buildStandaloneComplexNode(
 }
 
 /**
+ * Phase 5P-3: paragraph counterpart of groupStandaloneComplexBlocks above —
+ * deliberately a SEPARATE function (not a generalization of that one), per
+ * docs/phase5p3d_paragraph-tree-display-design.md §5-1's explicit
+ * "paragraph 用の専用分岐または明示的な kind 分岐として実装すること"
+ * instruction: a paragraph must never be merged into the SAME candidate
+ * pool as callout/blockquote, because that pool feeds
+ * buildStandaloneComplexNode, which unconditionally tags every entry
+ * `kind: "complex-member"` — see OutlineTreeParagraphNode's own doc comment
+ * for why a paragraph must never carry that kind. Reusing
+ * resolveStandaloneGroupKey itself (not the whole grouping function) is
+ * fine: that helper is generic over any ComplexBlockInfo's own `parentId`,
+ * with no complex-block-specific knowledge of its own — reusing it here is
+ * exactly the "share the small pure parentId-resolution helper, keep the
+ * node-kind-specific parts independent" split the design doc calls for.
+ *
+ * Unlike groupStandaloneComplexBlocks, there is no
+ * disambiguateStandaloneLabels step here: the `段落 N` fallback label is
+ * already a document-wide, globally unique ordinal (paragraphOrdinalById —
+ * see buildParagraphOrdinals), so it can never collide with another
+ * paragraph's fallback label regardless of grouping. Two paragraphs CAN
+ * still end up with the identical label if their own PREVIEW text
+ * genuinely is byte-identical — that is accepted as a purely cosmetic
+ * consequence (design doc §4: paragraph identity never depends on its
+ * label), not a disambiguation this phase needs to add.
+ */
+function groupParagraphBlocks(
+  doc: ParsedDocument,
+  blocks: ComplexBlockInfo[],
+  paragraphOrdinalById: Map<string, number>,
+  t: Translator
+): Map<string | null, { info: ComplexBlockInfo; label: string; viewId: string }[]> {
+  const byParentKey = new Map<string | null, ComplexBlockInfo[]>();
+  for (const info of blocks) {
+    if (info.kind !== "paragraph" || info.editability !== "supported") continue;
+    const groupKey = resolveStandaloneGroupKey(doc, info.parentId);
+    const list = byParentKey.get(groupKey) ?? [];
+    list.push(info);
+    byParentKey.set(groupKey, list);
+  }
+
+  const result = new Map<string | null, { info: ComplexBlockInfo; label: string; viewId: string }[]>();
+  for (const [groupKey, infos] of byParentKey) {
+    infos.sort((a, b) => a.range.startLine - b.range.startLine);
+    result.set(
+      groupKey,
+      infos.map((info) => {
+        const text = doc.lines.slice(info.range.startLine, info.range.endLine + 1).join("\n");
+        const ordinal = paragraphOrdinalById.get(info.id) ?? 0;
+        return {
+          info,
+          label: paragraphTreeLabel(text, ordinal, t),
+          viewId: paragraphViewId(ordinal),
+        };
+      })
+    );
+  }
+  return result;
+}
+
+/**
+ * Phase 5P-3: projects one paragraph ComplexBlockInfo into an
+ * OutlineTreeParagraphNode. `label`/`viewId` are already fully resolved
+ * (groupParagraphBlocks, above, calls paragraphTreeLabel/paragraphViewId
+ * before this is ever called) — this function does no label/id computation
+ * of its own, mirroring buildStandaloneComplexNode's own shape.
+ */
+function buildParagraphTreeNode(
+  doc: ParsedDocument,
+  info: ComplexBlockInfo,
+  label: string,
+  viewId: string
+): OutlineTreeParagraphNode {
+  return {
+    kind: "paragraph",
+    id: viewId,
+    rangeStart: info.range.startLine,
+    rangeEnd: info.range.endLine,
+    parentId: info.parentId,
+    depth: complexBlockDepth(doc, info.parentId),
+    label,
+    isReadOnly: true,
+    isLeaf: true,
+    line: info.range.startLine,
+    children: [],
+  };
+}
+
+/**
  * Phase 5D-0.3: projects one CompositeBlockMember into an OutlineTreeNode.
  * A "list"/"single-line-list" member reuses buildListNode verbatim (same
  * id, same recursive nested-list handling, including further nested
@@ -834,12 +1145,13 @@ function buildMemberNode(
   member: CompositeBlockMember,
   ctx: CompositeProjectionContext,
   standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>,
-  listPrefixStyle: ListPrefixStyle = "none"
+  listPrefixStyle: ListPrefixStyle = "none",
+  paragraphByParentId?: ParagraphByParentId
 ): OutlineTreeNode {
   if (member.kind === "list" || member.kind === "single-line-list") {
     const node = doc.nodes.get(member.id);
     if (node && isListNode(node)) {
-      return buildListNode(doc, node, ctx, standaloneByParentId, listPrefixStyle);
+      return buildListNode(doc, node, ctx, standaloneByParentId, listPrefixStyle, paragraphByParentId);
     }
   }
   const info = ctx.complexBlocksById.get(member.id);
@@ -889,7 +1201,8 @@ function buildCompositeNode(
   composite: CompositeBlockInfo,
   ctx: CompositeProjectionContext,
   standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>,
-  listPrefixStyle: ListPrefixStyle = "none"
+  listPrefixStyle: ListPrefixStyle = "none",
+  paragraphByParentId?: ParagraphByParentId
 ): OutlineTreeCompositeNode {
   const rule = getCompositeBlockRuleById(ctx.rules, composite.ruleId);
   return {
@@ -900,7 +1213,7 @@ function buildCompositeNode(
     prefix: rule?.prefix ?? "",
     line: composite.range.startLine,
     children: composite.members.map((m) =>
-      buildMemberNode(doc, m, ctx, standaloneByParentId, listPrefixStyle)
+      buildMemberNode(doc, m, ctx, standaloneByParentId, listPrefixStyle, paragraphByParentId)
     ),
   };
 }
@@ -928,7 +1241,8 @@ function buildListNode(
   item: ListBlockNode,
   ctx?: CompositeProjectionContext,
   standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>,
-  listPrefixStyle: ListPrefixStyle = "none"
+  listPrefixStyle: ListPrefixStyle = "none",
+  paragraphByParentId?: ParagraphByParentId
 ): OutlineTreeListNode {
   const withLine: Array<{ node: OutlineTreeNode; line: number }> = [];
   for (const id of item.childIds) {
@@ -943,13 +1257,25 @@ function buildListNode(
     const composite = ctx?.firstMemberIdToComposite.get(child.id);
     withLine.push({
       node: composite
-        ? buildCompositeNode(doc, composite, ctx!, standaloneByParentId, listPrefixStyle)
-        : buildListNode(doc, child, ctx, standaloneByParentId, listPrefixStyle),
+        ? buildCompositeNode(doc, composite, ctx!, standaloneByParentId, listPrefixStyle, paragraphByParentId)
+        : buildListNode(doc, child, ctx, standaloneByParentId, listPrefixStyle, paragraphByParentId),
       line: child.range.startLine,
     });
   }
   for (const { info, label } of standaloneByParentId?.get(item.id) ?? []) {
     withLine.push({ node: buildStandaloneComplexNode(info, label), line: info.range.startLine });
+  }
+  // Phase 5P-3: paragraph children of THIS list item (a paragraph indented
+  // to the item's own content-start column — Phase 5P-1's contract),
+  // merged in exactly like the standalone-complex-block merge just above —
+  // see groupParagraphBlocks' own doc comment for why this is a separate
+  // loop over a separate map rather than folding paragraph into the
+  // standalone loop above.
+  for (const { info, label, viewId } of paragraphByParentId?.get(item.id) ?? []) {
+    withLine.push({
+      node: buildParagraphTreeNode(doc, info, label, viewId),
+      line: info.range.startLine,
+    });
   }
   withLine.sort((a, b) => a.line - b.line);
   return {
@@ -969,7 +1295,8 @@ function buildSectionNode(
   includeLists: boolean,
   ctx?: CompositeProjectionContext,
   standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>,
-  listPrefixStyle: ListPrefixStyle = "none"
+  listPrefixStyle: ListPrefixStyle = "none",
+  paragraphByParentId?: ParagraphByParentId
 ): OutlineTreeSectionNode {
   return {
     kind: "section",
@@ -984,7 +1311,8 @@ function buildSectionNode(
       section.id,
       ctx,
       standaloneByParentId,
-      listPrefixStyle
+      listPrefixStyle,
+      paragraphByParentId
     ),
   };
 }
@@ -1029,7 +1357,8 @@ function buildChildren(
   sectionId: string | null,
   ctx?: CompositeProjectionContext,
   standaloneByParentId?: Map<string | null, { info: ComplexBlockInfo; label: string }[]>,
-  listPrefixStyle: ListPrefixStyle = "none"
+  listPrefixStyle: ListPrefixStyle = "none",
+  paragraphByParentId?: ParagraphByParentId
 ): OutlineTreeNode[] {
   const withLine: Array<{ node: OutlineTreeNode; line: number }> = [];
   for (const id of ids) {
@@ -1037,7 +1366,15 @@ function buildChildren(
     if (!child) continue;
     if (isSectionNode(child)) {
       withLine.push({
-        node: buildSectionNode(doc, child, includeLists, ctx, standaloneByParentId, listPrefixStyle),
+        node: buildSectionNode(
+          doc,
+          child,
+          includeLists,
+          ctx,
+          standaloneByParentId,
+          listPrefixStyle,
+          paragraphByParentId
+        ),
         line: child.range.startLine,
       });
       continue;
@@ -1046,18 +1383,28 @@ function buildChildren(
     const composite = ctx?.firstMemberIdToComposite.get(child.id);
     if (composite) {
       withLine.push({
-        node: buildCompositeNode(doc, composite, ctx!, standaloneByParentId, listPrefixStyle),
+        node: buildCompositeNode(doc, composite, ctx!, standaloneByParentId, listPrefixStyle, paragraphByParentId),
         line: composite.range.startLine,
       });
     } else if (includeLists) {
       withLine.push({
-        node: buildListNode(doc, child, ctx, standaloneByParentId, listPrefixStyle),
+        node: buildListNode(doc, child, ctx, standaloneByParentId, listPrefixStyle, paragraphByParentId),
         line: child.range.startLine,
       });
     }
   }
   for (const { info, label } of standaloneByParentId?.get(sectionId) ?? []) {
     withLine.push({ node: buildStandaloneComplexNode(info, label), line: info.range.startLine });
+  }
+  // Phase 5P-3: paragraph children whose resolved group key IS this section
+  // (or null, at the top level) — same shape as the standalone-complex-block
+  // merge just above, kept as its own loop over its own map (see
+  // groupParagraphBlocks' own doc comment for why).
+  for (const { info, label, viewId } of paragraphByParentId?.get(sectionId) ?? []) {
+    withLine.push({
+      node: buildParagraphTreeNode(doc, info, label, viewId),
+      line: info.range.startLine,
+    });
   }
   withLine.sort((a, b) => a.line - b.line);
   return withLine.map((x) => x.node);
@@ -1190,6 +1537,23 @@ export function buildOutlineTree(
     ? groupStandaloneComplexBlocks(doc, options.standaloneComplexBlocks.blocks, consumedComplexBlockIds, t)
     : undefined;
   const listPrefixStyle = options?.listPrefixStyle ?? "none";
+  // Phase 5P-3: options.paragraphs is the ENTIRE gate — its mere presence
+  // (not a separate on/off flag inside it) decides whether ANY paragraph
+  // node is ever produced. When absent (every pre-Phase-5P-3 caller, and
+  // view/OutlineTreeView.ts's own refresh() when
+  // settings.showParagraphsInOutline is false), paragraphByParentId stays
+  // undefined and buildChildren/buildListNode's own `paragraphByParentId?.get(...) ?? []`
+  // merges in nothing — i.e. paragraph is never even considered, not
+  // "considered and filtered out" — matching design doc §2-3's "don't
+  // project when off" decision exactly.
+  const paragraphByParentId = options?.paragraphs
+    ? groupParagraphBlocks(
+        doc,
+        options.paragraphs.blocks,
+        buildParagraphOrdinals(options.paragraphs.blocks),
+        t
+      )
+    : undefined;
   return buildChildren(
     doc,
     doc.topLevelIds,
@@ -1197,7 +1561,8 @@ export function buildOutlineTree(
     null,
     ctx,
     standaloneByParentId,
-    listPrefixStyle
+    listPrefixStyle,
+    paragraphByParentId
   );
 }
 
@@ -1233,8 +1598,17 @@ export function collectReadOnlyOutlineNodeIds(tree: OutlineTreeNode[]): Set<stri
   const readOnlyIds = new Set<string>();
   const walk = (nodes: OutlineTreeNode[], inheritedReadOnly: boolean): void => {
     for (const node of nodes) {
+      // Phase 5P-3 (design doc §6 #1/#3/#6): paragraph is read-only-
+      // navigation-only in the Tree — rename/delete/insert/drag/indent-
+      // outdent/Move/CompositeBlock-edit/context-menu-edit must all be
+      // rejected for it, the same way they already are for composite and
+      // complex-member. Adding it here is an explicit allowlist inclusion
+      // (not reliance on an accidental "unimplemented" gap).
       const readOnly =
-        inheritedReadOnly || node.kind === "composite" || node.kind === "complex-member";
+        inheritedReadOnly ||
+        node.kind === "composite" ||
+        node.kind === "complex-member" ||
+        node.kind === "paragraph";
       if (readOnly) readOnlyIds.add(node.id);
       walk(node.children, readOnly);
     }

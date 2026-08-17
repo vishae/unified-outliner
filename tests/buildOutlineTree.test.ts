@@ -19,11 +19,14 @@ import {
   isOutlineCompositeNode,
   isOutlineComplexMemberNode,
   isOutlineListNode,
+  isOutlineParagraphNode,
   isOutlineSectionNode,
   listItemDisplayText,
   listPrefixText,
   nodeDisplayLabel,
   OutlineTreeNode,
+  PARAGRAPH_LABEL_MAX_LENGTH,
+  paragraphTreeLabel,
   standaloneComplexBlockLabel,
   STANDALONE_BLOCKQUOTE_PREFIX,
   STANDALONE_CALLOUT_PREFIX,
@@ -1068,5 +1071,302 @@ describe("standaloneComplexBlockLabel (Phase 5C-2, ラベル生成)", () => {
   it("STANDALONE_CALLOUT_PREFIX / STANDALONE_BLOCKQUOTE_PREFIX are fixed display constants, not i18n keys", () => {
     expect(STANDALONE_CALLOUT_PREFIX).toBe("▣ ");
     expect(STANDALONE_BLOCKQUOTE_PREFIX).toBe("❝ ");
+  });
+});
+
+/**
+ * Phase 5P-3 ("本文 paragraph の任意 Outline Tree 表示"): builds a tree WITH
+ * paragraph projection, using the real scan pipeline (same
+ * `paragraphs: { blocks: complexScan.blocks }` shape
+ * view/OutlineTreeView.ts's refresh() passes when settings.
+ * showParagraphsInOutline is on). `includeLists` defaults to true here
+ * (unlike treeWithStandalone's false) because most of this describe block's
+ * fixtures need list-item-child placement to be exercisable at all.
+ */
+function treeWithParagraphs(text: string, includeLists = true) {
+  const doc = parseDocument(text);
+  const complexScan = scanComplexBlocks(doc);
+  const tree = buildOutlineTree(doc, {
+    includeLists,
+    paragraphs: { blocks: complexScan.blocks },
+    t: createTranslator("en"),
+  });
+  return { doc, complexScan, tree };
+}
+
+describe("buildOutlineTree (Phase 5P-3: paragraph projection, showParagraphsInOutline)", () => {
+  it("projects NO paragraph nodes at all when the `paragraphs` option is omitted (default off — matches settings.showParagraphsInOutline defaulting to false)", () => {
+    const text = ["# H", "a plain paragraph"].join("\n");
+    const doc = parseDocument(text);
+    const tree = buildOutlineTree(doc, { includeLists: true, t: createTranslator("en") });
+    expect(flattenOutlineTree(tree).some(isOutlineParagraphNode)).toBe(false);
+  });
+
+  it("produces the EXACT SAME tree shape (node-for-node, by kind) as the pre-5P-3 baseline when `paragraphs` is omitted — off means paragraph never enters the projection model, not merely 'hidden'", () => {
+    const text = ["# H", "- item one", "  continuation text", "another paragraph"].join("\n");
+    const doc = parseDocument(text);
+    const complexScan = scanComplexBlocks(doc);
+    const baseline = buildOutlineTree(doc, { includeLists: true, t: createTranslator("en") });
+    const withUndefinedParagraphs = buildOutlineTree(doc, {
+      includeLists: true,
+      standaloneComplexBlocks: { blocks: complexScan.blocks },
+      t: createTranslator("en"),
+    });
+    const kindsOf = (nodes: OutlineTreeNode[]): string[] =>
+      flattenOutlineTree(nodes).map((n) => n.kind);
+    expect(kindsOf(withUndefinedParagraphs)).toEqual(kindsOf(baseline));
+  });
+
+  it("projects a section-direct paragraph as a leaf child of its enclosing section, labeled with a fixed '¶ ' style marker via node.label (prefix itself is applied only at render time in view/OutlineTreeView.ts)", () => {
+    const text = ["# H", "a section-direct paragraph"].join("\n");
+    const { tree } = treeWithParagraphs(text);
+    const section = tree[0];
+    if (!isOutlineSectionNode(section)) throw new Error("expected section");
+    expect(section.children).toHaveLength(1);
+    const [row] = section.children;
+    if (!isOutlineParagraphNode(row)) throw new Error("expected paragraph");
+    expect(row.label).toBe("a section-direct paragraph");
+    expect(row.isLeaf).toBe(true);
+    expect(row.isReadOnly).toBe(true);
+    expect(row.children).toEqual([]);
+    expect(row.parentId).toBe(section.id);
+  });
+
+  it("projects a list-item-child paragraph (Phase 5P-1 continuation) as a child of that list item, not of the enclosing section", () => {
+    const text = ["# H", "- item text", "  continuation paragraph"].join("\n");
+    const { tree } = treeWithParagraphs(text, true);
+    const section = tree[0];
+    if (!isOutlineSectionNode(section)) throw new Error("expected section");
+    expect(section.children.map((n) => n.kind)).toEqual(["list"]);
+    const [listNode] = section.children;
+    if (!isOutlineListNode(listNode)) throw new Error("expected list");
+    expect(listNode.children).toHaveLength(1);
+    const [paraNode] = listNode.children;
+    if (!isOutlineParagraphNode(paraNode)) throw new Error("expected paragraph");
+    expect(paraNode.label).toBe("continuation paragraph");
+    expect(paraNode.parentId).toBe(listNode.id);
+  });
+
+  it("projects a headingless-note top-level paragraph as a root-level node, alongside any other root-level rows", () => {
+    const text = ["a top-level paragraph with no heading above it"].join("\n");
+    const { tree } = treeWithParagraphs(text);
+    expect(tree).toHaveLength(1);
+    const [row] = tree;
+    if (!isOutlineParagraphNode(row)) throw new Error("expected paragraph");
+    expect(row.parentId).toBeNull();
+    expect(row.label).toBe("a top-level paragraph with no heading above it");
+  });
+
+  it("a non-indented paragraph following a list is never misprojected as that list item's child — it stays a sibling under the enclosing section", () => {
+    const text = ["# H", "- item", "", "not indented, a new paragraph"].join("\n");
+    const { tree } = treeWithParagraphs(text, true);
+    const section = tree[0];
+    if (!isOutlineSectionNode(section)) throw new Error("expected section");
+    expect(section.children.map((n) => n.kind)).toEqual(["list", "paragraph"]);
+    const paraNode = section.children[1];
+    if (!isOutlineParagraphNode(paraNode)) throw new Error("expected paragraph");
+    expect(paraNode.parentId).toBe(section.id);
+    expect(paraNode.label).toBe("not indented, a new paragraph");
+  });
+
+  it("preserves relative Markdown document order among paragraph/list/callout/blockquote siblings under the same section", () => {
+    // A blank line separates the blockquote from "last paragraph" —
+    // without it, scanParagraphBlocks' own contiguous-candidate-run scan
+    // (parser/complexBlocks.ts) would merge the blockquote's line into the
+    // SAME paragraph candidate run as "last paragraph" (no intervening
+    // blank line to break the run), which mergeBlockRangesSafely then
+    // downgrades to "ambiguous" (overlapping a higher-priority accepted
+    // blockquote) — correct "refuse rather than guess" behavior, but not
+    // what this test means to exercise (ordering among fully independent,
+    // "supported" siblings).
+    const text = [
+      "# H",
+      "first paragraph",
+      "- a list item",
+      "> quoted blockquote",
+      "",
+      "last paragraph",
+    ].join("\n");
+    const doc = parseDocument(text);
+    const complexScan = scanComplexBlocks(doc);
+    const tree = buildOutlineTree(doc, {
+      includeLists: true,
+      standaloneComplexBlocks: { blocks: complexScan.blocks },
+      paragraphs: { blocks: complexScan.blocks },
+      t: createTranslator("en"),
+    });
+    const section = tree[0];
+    if (!isOutlineSectionNode(section)) throw new Error("expected section");
+    expect(section.children.map((n) => n.kind)).toEqual([
+      "paragraph",
+      "list",
+      "complex-member",
+      "paragraph",
+    ]);
+    expect(section.children.map((n) => n.line)).toEqual([1, 2, 3, 5]);
+  });
+
+  it("does not change any existing section/list/CompositeBlock/standalone-complex-block parent-child relationship when paragraph projection is added on top", () => {
+    const text = ["- ![[scan.png]]", "> [!ocr]", "> body"].join("\n");
+    const doc = parseDocument(text);
+    const complexScan = scanComplexBlocks(doc);
+    const infos = matchCompositeBlocks(doc, complexScan, DEFAULT_COMPOSITE_BLOCK_RULES);
+    const complexBlocksById = new Map(complexScan.blocks.map((b) => [b.id, b]));
+    const withoutParagraphs = buildOutlineTree(doc, {
+      includeLists: true,
+      composites: { infos, complexBlocksById, rules: DEFAULT_COMPOSITE_BLOCK_RULES },
+      t: createTranslator("en"),
+    });
+    const withParagraphs = buildOutlineTree(doc, {
+      includeLists: true,
+      composites: { infos, complexBlocksById, rules: DEFAULT_COMPOSITE_BLOCK_RULES },
+      paragraphs: { blocks: complexScan.blocks },
+      t: createTranslator("en"),
+    });
+    const shapeOf = (nodes: OutlineTreeNode[]): unknown =>
+      nodes.map((n) => ({ kind: n.kind, id: n.id, children: shapeOf(n.children) }));
+    expect(shapeOf(withParagraphs)).toEqual(shapeOf(withoutParagraphs));
+  });
+
+  it("a paragraph is never inserted into ParsedDocument.nodes, even when projected into the Tree", () => {
+    const text = ["# H", "a plain paragraph"].join("\n");
+    const { doc, complexScan } = treeWithParagraphs(text);
+    const paraInfo = complexScan.blocks.find((b) => b.kind === "paragraph");
+    expect(paraInfo).toBeDefined();
+    expect(doc.nodes.get(paraInfo!.id)).toBeUndefined();
+  });
+
+  it("toggling paragraphs on -> off -> on repeatedly never perturbs existing section/list node ids or structure", () => {
+    const text = ["# H", "- item", "a paragraph"].join("\n");
+    const doc = parseDocument(text);
+    const complexScan = scanComplexBlocks(doc);
+    const on1 = buildOutlineTree(doc, {
+      includeLists: true,
+      paragraphs: { blocks: complexScan.blocks },
+      t: createTranslator("en"),
+    });
+    const off = buildOutlineTree(doc, { includeLists: true, t: createTranslator("en") });
+    const on2 = buildOutlineTree(doc, {
+      includeLists: true,
+      paragraphs: { blocks: complexScan.blocks },
+      t: createTranslator("en"),
+    });
+    const sectionAndListIds = (nodes: OutlineTreeNode[]): string[] =>
+      flattenOutlineTree(nodes)
+        .filter((n) => n.kind === "section" || n.kind === "list")
+        .map((n) => n.id);
+    expect(sectionAndListIds(on1)).toEqual(sectionAndListIds(off));
+    expect(sectionAndListIds(on2)).toEqual(sectionAndListIds(off));
+  });
+});
+
+describe("paragraphTreeLabel (Phase 5P-3, ラベル生成)", () => {
+  const en = createTranslator("en");
+
+  it("uses the paragraph's own normalized text when it has letter/digit content", () => {
+    expect(paragraphTreeLabel("hello world", 1, en)).toBe("hello world");
+  });
+
+  it("collapses embedded newlines and consecutive whitespace into a single space", () => {
+    expect(paragraphTreeLabel("line one\nline   two\n\nline three", 1, en)).toBe(
+      "line one line two line three"
+    );
+  });
+
+  it("trims leading/trailing whitespace after normalization", () => {
+    expect(paragraphTreeLabel("   padded text   ", 1, en)).toBe("padded text");
+  });
+
+  it("truncates to PARAGRAPH_LABEL_MAX_LENGTH (60) characters with a trailing ellipsis", () => {
+    const longText = "x".repeat(120);
+    const label = paragraphTreeLabel(longText, 1, en);
+    expect(label.length).toBe(PARAGRAPH_LABEL_MAX_LENGTH);
+    expect(label.endsWith("…")).toBe(true);
+    expect(label.startsWith("x".repeat(PARAGRAPH_LABEL_MAX_LENGTH - 1))).toBe(true);
+  });
+
+  it("falls back to the '段落 N' style fallback (via i18n tree.paragraphFallback) when the text is whitespace-only", () => {
+    expect(paragraphTreeLabel("   \n  \n  ", 7, en)).toBe("Paragraph 7");
+  });
+
+  it("falls back when the text is symbol-only (no letters or digits in any script)", () => {
+    expect(paragraphTreeLabel("*** --- ...", 3, en)).toBe("Paragraph 3");
+  });
+
+  it("falls back for an entirely empty string", () => {
+    expect(paragraphTreeLabel("", 2, en)).toBe("Paragraph 2");
+  });
+
+  it("uses the ja fallback text via the ja translator", () => {
+    const ja = createTranslator("ja");
+    expect(paragraphTreeLabel("", 5, ja)).toBe("段落 5");
+  });
+
+  it("never treats a leading '<!-- uo-title: ... -->' comment as a distinct title — it is normalized/previewed like any other text, never stripped or promoted", () => {
+    const withComment = "<!-- uo-title: My Title -->\nactual body text";
+    const label = paragraphTreeLabel(withComment, 1, en);
+    // The comment is part of the normalized preview, not adopted as a
+    // separate label — see this function's own doc comment (design doc
+    // §3-2) for why uo-title association is deliberately NOT implemented
+    // in 5P-3.
+    expect(label).toContain("uo-title");
+    expect(label).not.toBe("My Title");
+  });
+});
+
+describe("OutlineTreeParagraphNode identity (Phase 5P-3)", () => {
+  it("a paragraph node's Tree id is NEVER identical to the underlying ComplexBlockInfo's own scan-local id", () => {
+    const text = ["# H", "a plain paragraph"].join("\n");
+    const { tree, complexScan } = treeWithParagraphs(text);
+    const paraInfo = complexScan.blocks.find((b) => b.kind === "paragraph")!;
+    const paraNode = flattenOutlineTree(tree).find(isOutlineParagraphNode)!;
+    expect(paraNode.id).not.toBe(paraInfo.id);
+  });
+
+  it("multiple paragraphs in one build get distinct, non-colliding ids", () => {
+    const text = ["# H", "first paragraph", "", "second paragraph", "", "third paragraph"].join(
+      "\n"
+    );
+    const { tree } = treeWithParagraphs(text);
+    const ids = flattenOutlineTree(tree).filter(isOutlineParagraphNode).map((n) => n.id);
+    expect(ids).toHaveLength(3);
+    expect(new Set(ids).size).toBe(3);
+  });
+
+  it("a paragraph node's id never collides with any section/list/complex-block id in the same tree", () => {
+    const text = ["- ![[scan.png]]", "> [!ocr]", "> body", "", "a paragraph"].join("\n");
+    const doc = parseDocument(text);
+    const complexScan = scanComplexBlocks(doc);
+    const infos = matchCompositeBlocks(doc, complexScan, DEFAULT_COMPOSITE_BLOCK_RULES);
+    const complexBlocksById = new Map(complexScan.blocks.map((b) => [b.id, b]));
+    const tree = buildOutlineTree(doc, {
+      includeLists: true,
+      composites: { infos, complexBlocksById, rules: DEFAULT_COMPOSITE_BLOCK_RULES },
+      paragraphs: { blocks: complexScan.blocks },
+      t: createTranslator("en"),
+    });
+    const allIds = flattenOutlineTree(tree).map((n) => n.id);
+    expect(new Set(allIds).size).toBe(allIds.length);
+  });
+});
+
+describe("collectReadOnlyOutlineNodeIds (Phase 5P-3: paragraph)", () => {
+  it("marks every paragraph node's id as read-only", () => {
+    const text = ["# H", "a plain paragraph", "- item", "  continuation paragraph"].join("\n");
+    const { tree } = treeWithParagraphs(text, true);
+    const readOnly = collectReadOnlyOutlineNodeIds(tree);
+    const paraNodes = flattenOutlineTree(tree).filter(isOutlineParagraphNode);
+    expect(paraNodes.length).toBeGreaterThan(0);
+    for (const p of paraNodes) {
+      expect(readOnly.has(p.id)).toBe(true);
+    }
+  });
+
+  it("does not mark a paragraph's own section/list ancestor as read-only merely because a paragraph sits under it (read-only propagates DOWN from composite/complex-member, never UP from a paragraph)", () => {
+    const text = ["# H", "a plain paragraph"].join("\n");
+    const { tree } = treeWithParagraphs(text);
+    const readOnly = collectReadOnlyOutlineNodeIds(tree);
+    const section = tree[0];
+    expect(readOnly.has(section.id)).toBe(false);
   });
 });

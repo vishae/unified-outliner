@@ -3,7 +3,13 @@ import { parseDocument } from "../src/parser/parseDocument";
 import { scanComplexBlocks } from "../src/parser/complexBlocks";
 import { matchCompositeBlocks } from "../src/parser/compositeBlocks";
 import { DEFAULT_COMPOSITE_BLOCK_RULES } from "../src/model/compositeBlock";
-import { buildOutlineTree, OutlineTreeNode } from "../src/tree/buildOutlineTree";
+import {
+  buildOutlineTree,
+  flattenOutlineTree,
+  isOutlineParagraphNode,
+  OutlineTreeNode,
+} from "../src/tree/buildOutlineTree";
+import { createTranslator } from "../src/i18n";
 import { buildNodeIdentityMap } from "../src/tree/foldIdentity";
 
 function tree(text: string): OutlineTreeNode[] {
@@ -244,5 +250,67 @@ describe("buildNodeIdentityMap (Phase 5D-0.3: composite / complex-member)", () =
     const idAfter = buildNodeIdentityMap(treeAfter).get(listAfter.id);
     expect(idBefore).toBe(idAfter);
     expect(idBefore).toBe("section:H/list:![[scan.png]]");
+  });
+});
+
+/** Same paragraph-projection pipeline as buildOutlineTree.test.ts's treeWithParagraphs. */
+function treeWithParagraphs(text: string): OutlineTreeNode[] {
+  const doc = parseDocument(text);
+  const complexScan = scanComplexBlocks(doc);
+  return buildOutlineTree(doc, {
+    includeLists: true,
+    paragraphs: { blocks: complexScan.blocks },
+    t: createTranslator("en"),
+  });
+}
+
+describe("buildNodeIdentityMap (Phase 5P-3: paragraph)", () => {
+  it("never assigns a fold identity to a paragraph node — it is absent from the identity map entirely, even though it IS present in the tree", () => {
+    const text = ["# H", "a plain paragraph", "## H2", "another one"].join("\n");
+    const t = treeWithParagraphs(text);
+    const paraNodes = flattenOutlineTree(t).filter(isOutlineParagraphNode);
+    expect(paraNodes.length).toBeGreaterThan(0);
+    const map = buildNodeIdentityMap(t);
+    for (const p of paraNodes) {
+      expect(map.has(p.id)).toBe(false);
+    }
+  });
+
+  it("a paragraph's presence never perturbs a sibling section's own identity or a sibling list item's occurrence-disambiguation count", () => {
+    const withoutParagraph = ["# H", "- dup", "- dup"].join("\n");
+    const withParagraph = ["# H", "a plain paragraph", "- dup", "- dup"].join("\n");
+
+    const docWithout = parseDocument(withoutParagraph);
+    const treeWithout = buildOutlineTree(docWithout, { includeLists: true });
+    const mapWithout = buildNodeIdentityMap(treeWithout);
+
+    const treeWith = treeWithParagraphs(withParagraph);
+    const mapWith = buildNodeIdentityMap(treeWith);
+
+    const sectionWithout = treeWithout[0];
+    const sectionWith = treeWith.find((n) => n.kind === "section")!;
+    expect(mapWith.get(sectionWith.id)).toBe(mapWithout.get(sectionWithout.id));
+
+    const dupIdentitiesWithout = sectionWithout.children.map((n) => mapWithout.get(n.id));
+    const dupItemsWith = sectionWith.children.filter((n) => n.kind === "list");
+    const dupIdentitiesWith = dupItemsWith.map((n) => mapWith.get(n.id));
+    expect(dupIdentitiesWith).toEqual(dupIdentitiesWithout);
+  });
+
+  it("toggling paragraph projection on/off never changes an existing section/list node's own identity string", () => {
+    const text = ["# H", "- item", "a paragraph"].join("\n");
+    const doc = parseDocument(text);
+    const complexScan = scanComplexBlocks(doc);
+    const off = buildOutlineTree(doc, { includeLists: true });
+    const on = buildOutlineTree(doc, {
+      includeLists: true,
+      paragraphs: { blocks: complexScan.blocks },
+      t: createTranslator("en"),
+    });
+    const mapOff = buildNodeIdentityMap(off);
+    const mapOn = buildNodeIdentityMap(on);
+    const listOff = off[0].children.find((n) => n.kind === "list")!;
+    const listOn = on[0].children.find((n) => n.kind === "list")!;
+    expect(mapOn.get(listOn.id)).toBe(mapOff.get(listOff.id));
   });
 });

@@ -195,6 +195,29 @@ export class UnifiedOutlinerSettingTab extends PluginSettingTab {
           })
       );
 
+    // Phase 5P-3 ("本文 paragraph の任意 Outline Tree 表示"): same on/off ->
+    // refreshOutlineTreeViews() shape as showListItemsInOutline just above,
+    // so every already-open Outline Tree View leaf immediately reflects the
+    // change in either direction (paragraph nodes appearing, or fully
+    // disappearing — see tree/buildOutlineTree.ts's BuildOutlineTreeOptions
+    // .paragraphs / view/OutlineTreeView.ts's refresh() for how the mere
+    // presence/absence of that option is what gates paragraph projection).
+    // The description string (i18n.ts) explicitly says this is read-only
+    // navigation display only — it does not enable editing, adding,
+    // deleting, or moving a paragraph from the Tree.
+    new Setting(containerEl)
+      .setName(this.plugin.t("settings.showParagraphsInOutline.name"))
+      .setDesc(this.plugin.t("settings.showParagraphsInOutline.desc"))
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.showParagraphsInOutline)
+          .onChange(async (v) => {
+            this.plugin.settings.showParagraphsInOutline = v;
+            await this.plugin.saveSettings();
+            this.plugin.refreshOutlineTreeViews();
+          })
+      );
+
     new Setting(containerEl)
       .setName(this.plugin.t("settings.followKeyboardSelectionIntoBody.name"))
       .setDesc(this.plugin.t("settings.followKeyboardSelectionIntoBody.desc"))

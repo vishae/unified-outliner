@@ -94,6 +94,13 @@ function nodeLabel(node: OutlineTreeNode): string {
     case "composite":
     case "complex-member":
       return node.label;
+    case "paragraph":
+      // Phase 5P-3 (design doc §4-2): paragraph never gets a fold identity
+      // (see buildNodeIdentityMap's "paragraph" case below, which never
+      // calls appendSegment/nodeLabel for it) — this branch exists purely
+      // to keep this switch exhaustive over OutlineTreeNode["kind"]; it is
+      // never actually reached at runtime.
+      return node.label;
   }
 }
 
@@ -187,6 +194,18 @@ export function buildNodeIdentityMap(tree: OutlineTreeNode[]): Map<string, strin
           const path = appendSegment(sectionPath, node, pools.complexMember);
           map.set(node.id, path);
           // No children (OutlineTreeComplexMemberNode.children is always []).
+          break;
+        }
+        case "paragraph": {
+          // Phase 5P-3 (design doc §2-2/§4-2): paragraph is a leaf that
+          // deliberately gets NO fold identity at all — no map.set(), no
+          // appendSegment() call, no occurrence-pool entry, and no
+          // recursion (children is always [] anyway). Fold-state
+          // persistence (persistence/foldStateStore.ts) must never see a
+          // paragraph id or path; this is what guarantees that. Toggling
+          // showParagraphsInOutline on/off cannot perturb any other node's
+          // identity or occurrence count, since paragraph never
+          // participates in any pool.
           break;
         }
       }

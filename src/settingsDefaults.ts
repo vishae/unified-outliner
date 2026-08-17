@@ -155,6 +155,32 @@ export interface UnifiedOutlinerSettings {
    * 永続値が入っていた場合も、安全に none へ正規化してください" requirement.
    */
   listPrefixStyle: ListPrefixStyle;
+  /**
+   * Phase 5P-3 ("本文 paragraph の任意 Outline Tree 表示"): show a body
+   * paragraph (parser/complexBlocks.ts's "paragraph" ComplexBlockInfo kind,
+   * the same population Phase 5P-2's cursor-based Partial Edit hoist reads
+   * from) as its own leaf node — `¶ {label}` — in the Outline Tree. Off by
+   * default, mirroring showListItemsInOutline's own "opt-in, tree stays
+   * heading/list-only by default" precedent: an existing installs'
+   * data.json (or one written before this field existed at all) has this
+   * key absent, and the shallow Object.assign in mergeSettings already
+   * resolves a missing top-level scalar boolean to this default with no
+   * extra migration code needed (same treatment as showListItemsInOutline
+   * itself — no explicit re-validation branch below, since any truthy/
+   * falsy raw value is already a valid boolean-ish outcome and there is no
+   * "corrupted enum" failure mode a scalar boolean can hit).
+   *
+   * This is READ-ONLY NAVIGATION ONLY (design doc §5/§6): turning it on
+   * never enables editing, adding, deleting, indenting, or moving a
+   * paragraph from the Tree — see tree/buildOutlineTree.ts's
+   * OutlineTreeParagraphNode (`isReadOnly: true`, `isLeaf: true`, never a
+   * CompositeBlock member, never inserted into ParsedDocument.nodes) and
+   * collectReadOnlyOutlineNodeIds's explicit `"paragraph"` inclusion. See
+   * settings.ts's corresponding toggle control, whose onChange (like
+   * showListItemsInOutline's) calls refreshOutlineTreeViews() so every open
+   * Outline Tree View leaf re-renders immediately in either direction.
+   */
+  showParagraphsInOutline: boolean;
 }
 
 /** See UnifiedOutlinerSettings.headingPrefixStyle's doc comment. */
@@ -259,6 +285,7 @@ export const DEFAULT_SETTINGS: UnifiedOutlinerSettings = {
   headingPrefixStyle: "none",
   outlineTreeSidebarPosition: "right",
   listPrefixStyle: "none",
+  showParagraphsInOutline: false,
 };
 
 /**
