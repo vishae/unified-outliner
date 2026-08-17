@@ -166,6 +166,10 @@ const en = {
   "command.insertChildListItem": "Insert child list item",
   "command.openOutlineTreeView": "Open outline tree view",
   "command.openPartialEditPane": "Open partial edit pane for current section",
+  // Phase 5P-2: cursor-triggered paragraph hoist — see main.ts's
+  // openParagraphPartialEditForCursor and view/PartialEditView.ts's
+  // requestLoadParagraphAtCursor.
+  "command.editParagraphAtCursor": "Edit paragraph at cursor",
   "command.ribbonTooltip": "Open Unified Outliner outline",
 
   // ---- Notices (main.ts, non-reason) ------------------------------------
@@ -247,6 +251,10 @@ const en = {
   "partialEdit.kindSection": "Section",
   "partialEdit.kindCallout": "Callout",
   "partialEdit.kindBlockquote": "Quote",
+  // Phase 5P-2: the pane title's {kind} label for a paragraph loaded via
+  // requestLoadParagraphAtCursor — see view/PartialEditView.ts's
+  // renderLoadedState.
+  "partialEdit.kindParagraph": "Paragraph",
   "partialEdit.close": "Close",
   "partialEdit.emptyPlaceholder":
     "Right-click a node in the Outline Tree View and choose “Open partial edit pane” / “Edit list subtree in pane” to load something here.",
@@ -258,6 +266,9 @@ const en = {
   "partialEdit.couldNotApplyEdit": "Unified Outliner: could not apply this edit.",
   "partialEdit.listSubtreeUpdated": "Unified Outliner: list subtree updated.",
   "partialEdit.sectionUpdated": "Unified Outliner: section updated.",
+  // Phase 5P-2: Apply-success notice for a paragraph loaded via
+  // requestLoadParagraphAtCursor — see view/PartialEditView.ts's applyEdit.
+  "partialEdit.paragraphUpdated": "Unified Outliner: paragraph updated.",
   "partialEdit.unsavedChangesTitle": "Unified Outliner: unsaved changes",
   "partialEdit.unsavedChangesBody":
     "This node has unapplied edits. Apply them before switching, discard them, or stay here.",
@@ -426,6 +437,24 @@ const en = {
     "Unified Outliner: the active note is different from the one this edit was loaded from — apply was cancelled to avoid changing the wrong note.",
   "reason.partialEditSourceNoteUnknown":
     "Unified Outliner: could not confirm which note this edit belongs to — apply was cancelled for safety.",
+
+  // ---- Phase 5P-2: paragraph Partial Edit hoist reasons ------------------
+  // resolver/resolveParagraphAtCursor.ts's NoParagraphResolutionReason
+  // ("out-of-range" is shared with other cursor-resolution reason types in
+  // this codebase — e.g. resolver/resolveCurrentBlock.ts,
+  // move/resolveMoveTarget.ts — and gets one shared, generic key here) and
+  // edit/paragraphPartialEdit.ts's NoParagraphApplyReason
+  // ("resolve-failed" is reused as-is from the existing key above —
+  // already generic/operation-neutral wording that fits this case too).
+  "reason.out-of-range": "Unified Outliner: cursor position is out of range.",
+  "reason.no-paragraph":
+    "Unified Outliner: no paragraph at the cursor. Place the cursor inside a plain paragraph — not a heading, list marker, blank line, callout, blockquote, code block, table, or thematic break.",
+  "reason.boundary-ambiguous":
+    "Unified Outliner: this paragraph's boundary could not be confidently determined, so it can't be opened for editing.",
+  "reason.identity-changed":
+    "Unified Outliner: this paragraph's position in the note changed, so the edit was not applied safely. Reopen it and try again.",
+  "reason.content-changed":
+    "Unified Outliner: the note changed, so the safe update to this paragraph was cancelled. Check the content and reopen it.",
 } as const;
 
 export type TranslationKey = keyof typeof en;
@@ -528,6 +557,7 @@ const ja: Record<TranslationKey, string> = {
   "command.insertChildListItem": "子リスト項目を挿入",
   "command.openOutlineTreeView": "アウトラインツリービューを開く",
   "command.openPartialEditPane": "現在のセクションの部分編集ペインを開く",
+  "command.editParagraphAtCursor": "カーソル位置の段落を編集",
   "command.ribbonTooltip": "Unified Outliner のアウトラインを開く",
 
   // ---- 通知（main.ts、reason に基づかないもの） -------------------------
@@ -604,6 +634,7 @@ const ja: Record<TranslationKey, string> = {
   "partialEdit.kindSection": "セクション",
   "partialEdit.kindCallout": "コールアウト",
   "partialEdit.kindBlockquote": "引用",
+  "partialEdit.kindParagraph": "段落",
   "partialEdit.close": "閉じる",
   "partialEdit.emptyPlaceholder":
     "アウトラインツリービューでノードを右クリックし、「部分編集ペインを開く」／「リストサブツリーをペインで編集」を選ぶとここに読み込まれる。",
@@ -615,6 +646,7 @@ const ja: Record<TranslationKey, string> = {
   "partialEdit.couldNotApplyEdit": "Unified Outliner: この編集を適用できなかった。",
   "partialEdit.listSubtreeUpdated": "Unified Outliner: リストサブツリーを更新した。",
   "partialEdit.sectionUpdated": "Unified Outliner: セクションを更新した。",
+  "partialEdit.paragraphUpdated": "Unified Outliner: 段落を更新した。",
   "partialEdit.previousSibling": "前へ",
   "partialEdit.nextSibling": "次へ",
   "partialEdit.noPreviousSibling": "前の兄弟がない",
@@ -773,6 +805,17 @@ const ja: Record<TranslationKey, string> = {
     "Unified Outliner: この編集を読み込んだノートと現在アクティブなノートが異なるため、誤ったノートを変更しないようApplyを中止した。",
   "reason.partialEditSourceNoteUnknown":
     "Unified Outliner: この編集がどのノートに属するか確認できなかったため、安全のためApplyを中止した。",
+
+  // ---- Phase 5P-2: 段落 Partial Edit hoist の理由キー --------------------
+  "reason.out-of-range": "Unified Outliner: カーソル位置が範囲外である。",
+  "reason.no-paragraph":
+    "Unified Outliner: カーソル位置に段落がない。見出し・リストマーカー・空行・コールアウト・引用・コードブロック・表・区切り線ではない、通常の段落内にカーソルを置くこと。",
+  "reason.boundary-ambiguous":
+    "Unified Outliner: この段落の境界を安全に確定できないため、編集を開けない。",
+  "reason.identity-changed":
+    "Unified Outliner: この段落の文書内での位置が変化したため、安全に適用できなかった。開き直してもう一度試すこと。",
+  "reason.content-changed":
+    "Unified Outliner: 本文が変更されたため、段落への安全な反映を中止した。内容を確認してもう一度開くこと。",
 };
 
 const DICTIONARIES: Record<SupportedLocale, Record<TranslationKey, string>> = {

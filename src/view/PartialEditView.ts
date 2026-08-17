@@ -104,6 +104,29 @@
  * view/partialEditSourceNoteCheck.ts's own doc comment for the full
  * rationale (popout makes "switch notes in the other window, then Apply"
  * an easier mistake to make than it was while the pane was always docked).
+ *
+ * Phase 5P-2 (2026-08-17, paragraph Partial Edit hoist): adds a SECOND,
+ * parallel "what is loaded" identity — `paragraphAnchor` — alongside the
+ * existing `nodeId`/`nodeKind` pair above, rather than folding a paragraph
+ * into the nodeId-based model. A paragraph has no BlockNode/ComplexBlockInfo
+ * id known in advance (the only entry point is a body-editor cursor line —
+ * resolver/resolveParagraphAtCursor.ts) and its Apply-time safety contract
+ * needs extra parentId/depth re-verification callout/blockquote's existing
+ * id-only path has no equivalent for (see edit/paragraphPartialEdit.ts's own
+ * doc comment) — reusing extractSubtreeText/applySubtreeEdit's contract
+ * as-is would silently drop that extra check. Exactly one of `nodeId` /
+ * `paragraphAnchor` is ever non-null at a time (both loadNodeInternal and
+ * loadParagraphInternal below clear the other). A loaded paragraph
+ * deliberately shows none of the breadcrumb / sibling-nav / Subtree
+ * Navigator rows — `ancestors`/`directChildren`/`siblingState` all stay at
+ * their empty-state values (mirroring the existing standalone
+ * callout/blockquote path, which also leaves them empty), and
+ * renderSiblingNav's own visibility check already hinges on `nodeId`
+ * specifically (null for a loaded paragraph), so it stays hidden with no
+ * further change needed. This is intentional, approved 5P-2 scope — no
+ * Tree-based paragraph selection, no always-on Tree display, no paragraph
+ * D&D/rename/insert/delete; see resolver/resolveParagraphAtCursor.ts's own
+ * doc comment for the full non-goal list.
  */
 import { App, ItemView, Menu, Modal, Notice, WorkspaceLeaf, setIcon, setTooltip } from "obsidian";
 import type UnifiedOutlinerPlugin from "../main";
@@ -117,6 +140,8 @@ import { SiblingNavigationState, getSiblingNavigationState } from "../tree/sibli
 import { applyLineEditOutcome } from "../commands/applyLineEditOutcome";
 import { checkPartialEditSourceNote } from "./partialEditSourceNoteCheck";
 import { TranslationKey } from "../i18n";
+import { resolveParagraphAtCursor } from "../resolver/resolveParagraphAtCursor";
+import { applyParagraphEdit, ParagraphEditAnchor } from "../edit/paragraphPartialEdit";
 
 export const PARTIAL_EDIT_VIEW_TYPE = "unified-outliner-partial-edit";
 
@@ -135,7 +160,14 @@ export class PartialEditView extends ItemView {
   }
 
   private nodeId: string | null = null;
-  private nodeKind: SubtreeKind | null = null;
+  private nodeKind: SubtreeKind | "paragraph" | null = null;
+  /**
+   * Phase 5P-2: set instead of (never alongside) `nodeId` when the pane is
+   * currently showing a paragraph loaded via requestLoadParagraphAtCursor —
+   * see this class's own doc comment for why this is a separate field
+   * rather than an extension of nodeId's own contract.
+   */
+  private paragraphAnchor: ParagraphEditAnchor | null = null;
   private label = "";
   /** The pane's "before editing" snapshot — see edit/partialEdit.ts's applySubtreeEdit doc comment. */
   private originalText = "";
@@ -430,6 +462,32 @@ export class PartialEditView extends ItemView {
   }
 
   /**
+   * Phase 5P-2: the paragraph counterpart to requestLoadNode above — the
+   * sole external entry point for loading a paragraph into this pane
+   * (main.ts's activatePartialEditViewForParagraph, itself called from the
+   * "Edit paragraph at cursor" command). Same unsaved-edit guard
+   * (Apply/Discard/Cancel), reusing the exact same DiscardChangesModal —
+   * deliberately not a second modal/flow.
+   */
+  requestLoadParagraphAtCursor(cursorLine: number): void {
+    if (!this.isDirty()) {
+      this.loadParagraphInternal(cursorLine);
+      return;
+    }
+    new DiscardChangesModal(this.app, this.plugin, (choice) => {
+      if (choice === "cancel") return;
+      if (choice === "discard") {
+        this.loadParagraphInternal(cursorLine);
+        return;
+      }
+      // choice === "apply"
+      if (this.applyEdit()) {
+        this.loadParagraphInternal(cursorLine);
+      }
+    }).open();
+  }
+
+  /**
    * Load `nodeId` (a section OR a list item id) from the currently active
    * note into this pane, replacing whatever was loaded before (the pane
    * always holds at most one node — see the "reuse, don't multiply" leaf
@@ -487,6 +545,10 @@ export class PartialEditView extends ItemView {
 
     this.nodeId = nodeId;
     this.nodeKind = extracted.kind;
+    // Phase 5P-2: clear any previously-loaded paragraph identity — exactly
+    // one of nodeId/paragraphAnchor is ever active at a time (see this
+    // class's own doc comment).
+    this.paragraphAnchor = null;
     this.originalText = extracted.text;
     this.label = label;
     // Phase 5C-4: recorded fresh on every load, from the SAME `view` this
@@ -512,6 +574,59 @@ export class PartialEditView extends ItemView {
     this.renderLoadedState();
   }
 
+  /**
+   * Phase 5P-2: paragraph counterpart to loadNodeInternal above — loads the
+   * SINGLE paragraph at `cursorLine` in the currently active note into this
+   * pane. Deliberately NOT a branch inside loadNodeInternal itself: a
+   * paragraph has no BlockNode/ComplexBlockInfo id known in advance (the
+   * caller only has a cursor line, resolved here via
+   * resolver/resolveParagraphAtCursor.ts), and its Apply-time
+   * re-resolution needs parentId/depth captured alongside the usual id +
+   * "before editing" snapshot — see edit/paragraphPartialEdit.ts's own doc
+   * comment for why that extra bookkeeping can't reuse
+   * extractSubtreeText/applySubtreeEdit's existing id-only contract as-is.
+   */
+  private loadParagraphInternal(cursorLine: number): void {
+    const view = this.activeMarkdownView.get();
+    if (!view) {
+      new Notice(this.plugin.t("partialEdit.noActiveNote"));
+      return;
+    }
+
+    const doc = parseDocument(view.editor.getValue());
+    const resolved = resolveParagraphAtCursor(doc, cursorLine);
+    if (!resolved.paragraph) {
+      const reasonKey = ("reason." + (resolved.reason ?? "no-paragraph")) as TranslationKey;
+      new Notice(this.plugin.t(reasonKey));
+      return;
+    }
+    const paragraph = resolved.paragraph;
+
+    this.nodeId = null;
+    this.paragraphAnchor = {
+      complexBlockId: paragraph.complexBlockId,
+      parentId: paragraph.parentId,
+      depth: paragraph.depth,
+      originalText: paragraph.text,
+    };
+    this.nodeKind = "paragraph";
+    this.originalText = paragraph.text;
+    this.label = paragraph.preview;
+    // Phase 5C-4 convention, reused as-is: recorded fresh on every load,
+    // from the SAME `view` this method already resolved `doc` from above.
+    this.sourcePath = view.file?.path ?? null;
+    // Phase 5P-2 explicit scope: no breadcrumb / sibling nav / Subtree
+    // Navigator for a paragraph — see this class's own doc comment.
+    // renderSiblingNav's own visibility check hinges on `this.nodeId`
+    // (null here), so it stays hidden with no further change needed;
+    // renderBreadcrumb/renderSubtreeNavigator hide themselves whenever
+    // their backing arrays are empty, which they are here too.
+    this.ancestors = [];
+    this.directChildren = [];
+    this.siblingState = { previous: null, next: null };
+    this.renderLoadedState();
+  }
+
   private renderEmptyState(): void {
     this.titleEl.setText(this.plugin.t("partialEdit.viewName"));
     this.textareaEl.value = "";
@@ -525,6 +640,10 @@ export class PartialEditView extends ItemView {
     // Phase 5C-4: reset alongside the other per-load fields above — see
     // the class field's own doc comment.
     this.sourcePath = null;
+    // Phase 5P-2: reset alongside nodeId/nodeKind — this method already
+    // implicitly leaves nodeId/nodeKind at their initial null values (never
+    // set here), so paragraphAnchor is cleared explicitly to match.
+    this.paragraphAnchor = null;
     this.renderBreadcrumb();
     this.renderSiblingNav();
     this.renderSubtreeNavigator();
@@ -549,6 +668,8 @@ export class PartialEditView extends ItemView {
           return this.plugin.t("partialEdit.kindCallout");
         case "blockquote":
           return this.plugin.t("partialEdit.kindBlockquote");
+        case "paragraph":
+          return this.plugin.t("partialEdit.kindParagraph");
         case "section":
         default:
           return this.plugin.t("partialEdit.kindSection");
@@ -828,7 +949,7 @@ export class PartialEditView extends ItemView {
 
   /** Revert unsaved edits in the textarea — does not close the pane or change which node is loaded. */
   private cancelEdit(): void {
-    if (!this.nodeId) return;
+    if (!this.nodeId && !this.paragraphAnchor) return;
     this.textareaEl.value = this.originalText;
     this.updateDirtyState();
   }
@@ -851,7 +972,7 @@ export class PartialEditView extends ItemView {
    * save.
    */
   private applyEdit(): boolean {
-    if (!this.nodeId) {
+    if (!this.nodeId && !this.paragraphAnchor) {
       new Notice(this.plugin.t("partialEdit.noNodeLoaded"));
       return false;
     }
@@ -888,8 +1009,53 @@ export class PartialEditView extends ItemView {
     }
 
     const doc = parseDocument(editor.getValue());
-    const outcome = applySubtreeEdit(doc, this.nodeId, this.originalText, this.textareaEl.value);
-    const node = doc.nodes.get(this.nodeId);
+
+    // Phase 5P-2: a loaded paragraph is a fully separate re-resolution path
+    // — see edit/paragraphPartialEdit.ts's own doc comment for why it
+    // cannot reuse applySubtreeEdit's id-only contract (a paragraph also
+    // needs parentId/depth re-verified, not just its scan-local id and
+    // content). This branch never touches this.nodeId/applySubtreeEdit
+    // below, and the reverse is equally true — exactly one of
+    // nodeId/paragraphAnchor is ever set (see this class's own doc
+    // comment), so the two paths cannot interfere with each other.
+    if (this.paragraphAnchor) {
+      const outcome = applyParagraphEdit(doc, this.paragraphAnchor, this.textareaEl.value);
+      if (!outcome.changed) {
+        const reasonKey = ("reason." + (outcome.reason ?? "resolve-failed")) as TranslationKey;
+        new Notice(this.plugin.t(reasonKey));
+        return false;
+      }
+
+      applyLineEditOutcome(
+        editor,
+        { line: outcome.newStartLine, ch: 0 },
+        outcome.newStartLine,
+        doc.lines,
+        outcome,
+        () => {}
+      );
+
+      this.originalText = this.textareaEl.value;
+      // The paragraph's own identity (complexBlockId/parentId/depth) does
+      // not change just because its TEXT did — re-anchor with the same
+      // identity fields and only the refreshed "before editing" snapshot,
+      // so a SECOND Apply within the same pane session re-resolves against
+      // the just-applied text rather than the stale pre-edit snapshot.
+      this.paragraphAnchor = { ...this.paragraphAnchor, originalText: this.textareaEl.value };
+      this.updateDirtyState();
+
+      const lineLen = editor.getLine(outcome.newStartLine)?.length ?? 0;
+      editor.scrollIntoView(
+        { from: { line: outcome.newStartLine, ch: 0 }, to: { line: outcome.newStartLine, ch: lineLen } },
+        true
+      );
+
+      new Notice(this.plugin.t("partialEdit.paragraphUpdated"));
+      return true;
+    }
+
+    const outcome = applySubtreeEdit(doc, this.nodeId!, this.originalText, this.textareaEl.value);
+    const node = doc.nodes.get(this.nodeId!);
     const startLine = node ? node.range.startLine : 0;
 
     if (!outcome.changed) {
@@ -954,7 +1120,10 @@ export class PartialEditView extends ItemView {
    * so it lives in one place instead of being duplicated inline.
    */
   private isDirty(): boolean {
-    return this.nodeId !== null && this.textareaEl.value !== this.originalText;
+    return (
+      (this.nodeId !== null || this.paragraphAnchor !== null) &&
+      this.textareaEl.value !== this.originalText
+    );
   }
 
   /**

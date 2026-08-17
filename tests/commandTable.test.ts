@@ -98,6 +98,7 @@ describe("main.ts command table (static source check)", () => {
       "insert-child-list-item",
       "open-outline-tree-view",
       "open-partial-edit-pane",
+      "edit-paragraph-at-cursor",
     ]);
   });
 

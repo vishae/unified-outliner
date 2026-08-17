@@ -1,6 +1,7 @@
 import { Editor, getLanguage, Notice, Plugin, TFile, WorkspaceLeaf } from "obsidian";
 import { parseDocument } from "./parser/parseDocument";
 import { resolveCurrentBlock } from "./resolver/resolveCurrentBlock";
+import { resolveParagraphAtCursor } from "./resolver/resolveParagraphAtCursor";
 import { ParsedDocument } from "./model/block";
 import { MoveDirection } from "./move/findMoveTarget";
 import { moveBlock } from "./move/moveBlock";
@@ -372,6 +373,11 @@ export default class UnifiedOutlinerPlugin extends Plugin {
         translationKey: "command.openPartialEditPane",
         editorCallback: (editor) => this.openPartialEditForCursor(editor),
       },
+      {
+        id: "edit-paragraph-at-cursor",
+        translationKey: "command.editParagraphAtCursor",
+        editorCallback: (editor) => this.openParagraphPartialEditForCursor(editor),
+      },
     ];
   }
 
@@ -716,6 +722,7 @@ export default class UnifiedOutlinerPlugin extends Plugin {
    * console.error + Notice pattern as every other failure path in this
    * method, never left to escape as an unhandled exception from a UI
    * callback.
+   *
    */
   async activatePartialEditView(
     nodeId: string,
@@ -795,6 +802,91 @@ export default class UnifiedOutlinerPlugin extends Plugin {
   }
 
   /**
+   * Phase 5P-2: paragraph counterpart to activatePartialEditView above.
+   * Deliberately a fully independent, self-contained method with its own
+   * copy of the leaf-open/reveal logic (reuse an existing pane leaf,
+   * split-placement, optional popout) rather than sharing an extracted
+   * helper with activatePartialEditView — activatePartialEditView's own
+   * body is relied on verbatim by
+   * tests/partialEditPanePlacementUiWiring.test.ts's static source-text
+   * check, and 5P-2's own instructions explicitly forbid refactoring the
+   * existing Partial Edit foundation, so this method duplicates rather
+   * than extracts. Hands the cursor line to
+   * PartialEditView.requestLoadParagraphAtCursor — the paragraph
+   * counterpart of requestLoadNode, with the same unsaved-edit guard.
+   * Called from openParagraphPartialEditForCursor below (the "Edit
+   * paragraph at cursor" command's editorCallback), which resolves the
+   * paragraph FIRST and shows a Notice + never opens the pane at all if
+   * nothing resolves — this method itself does not re-resolve; it only
+   * opens/reveals the pane and hands off the cursor line, letting
+   * PartialEditView do its own independent re-resolution (every layer
+   * re-verifies against current ground truth, matching this whole
+   * plugin's established convention — see edit/deleteCompositeBlock.ts's
+   * own top doc comment for the same principle stated explicitly).
+   */
+  async activatePartialEditViewForParagraph(
+    cursorLine: number,
+    options?: { openInNewWindow?: boolean }
+  ): Promise<void> {
+    const { workspace } = this.app;
+
+    this.activeMarkdownView.get();
+
+    const existing = workspace.getLeavesOfType(PARTIAL_EDIT_VIEW_TYPE);
+    let leaf: WorkspaceLeaf;
+
+    if (options?.openInNewWindow) {
+      try {
+        if (existing.length > 0) {
+          leaf = existing[0];
+          workspace.moveLeafToPopout(leaf);
+        } else {
+          leaf = workspace.openPopoutLeaf();
+          await leaf.setViewState({ type: PARTIAL_EDIT_VIEW_TYPE, active: true });
+        }
+      } catch (error) {
+        console.error(
+          "Unified Outliner: failed to open the partial edit pane in a new window.",
+          error
+        );
+        new Notice(this.t("notice.couldNotOpenPartialEditPaneNewWindow"));
+        return;
+      }
+    } else if (existing.length > 0) {
+      leaf = existing[0];
+    } else {
+      const openWithoutSplit = hasOutlineTreeLeafInLeftSidebar(
+        workspace.getLeavesOfType(OUTLINE_TREE_VIEW_TYPE),
+        workspace.leftSplit
+      );
+      const newLeaf = openWithoutSplit ? workspace.getRightLeaf(false) : workspace.getRightLeaf(true);
+      if (!newLeaf) {
+        new Notice(this.t("notice.couldNotOpenRightSidebar"));
+        return;
+      }
+      leaf = newLeaf;
+      try {
+        await leaf.setViewState({ type: PARTIAL_EDIT_VIEW_TYPE, active: true });
+      } catch (error) {
+        console.error("Unified Outliner: failed to open the partial edit pane.", error);
+        new Notice(this.t("notice.couldNotOpenPartialEditPane"));
+        return;
+      }
+    }
+
+    try {
+      await workspace.revealLeaf(leaf);
+    } catch (error) {
+      console.error("Unified Outliner: failed to open the partial edit pane.", error);
+      new Notice(this.t("notice.couldNotOpenPartialEditPane"));
+      return;
+    }
+    if (leaf.view instanceof PartialEditView) {
+      leaf.view.requestLoadParagraphAtCursor(cursorLine);
+    }
+  }
+
+  /**
    * Body-editor-side entry point for the Partial Edit Pane: resolves
    * "current section" via the same resolveCurrentBlock every other
    * body-editor command uses, then hands its id to
@@ -825,6 +917,38 @@ export default class UnifiedOutlinerPlugin extends Plugin {
     // produce an unhandled rejection; `void` documents that at the call
     // site.
     void this.activatePartialEditView(resolved.node.id);
+  }
+
+  /**
+   * Phase 5P-2: body-editor-side entry point for "Edit paragraph at
+   * cursor". Resolves the paragraph FIRST, purely (resolveParagraphAtCursor
+   * has no Obsidian/DOM dependency), and shows a Notice + returns WITHOUT
+   * ever opening/revealing the Partial Edit Pane when nothing resolves —
+   * mirroring openPartialEditForCursor's own "resolve before opening"
+   * shape above. Only on success does it hand off the cursor line to
+   * activatePartialEditViewForParagraph, which opens/reveals the pane and
+   * lets PartialEditView re-resolve independently.
+   */
+  private openParagraphPartialEditForCursor(editor: Editor): void {
+    if (editor.listSelections().length > 1) {
+      this.notice(this.t("notice.multipleCursors"));
+      return;
+    }
+
+    const cursor = editor.getCursor();
+    const doc = parseDocument(editor.getValue());
+    const resolved = resolveParagraphAtCursor(doc, cursor.line);
+    if (!resolved.paragraph) {
+      this.notice(this.reasonText(resolved.reason ?? "no-paragraph"));
+      return;
+    }
+
+    // See activatePartialEditView's doc comment (activatePartialEditViewForParagraph
+    // above mirrors it): it catches its own failures internally and
+    // reports them via Notice, so this floating call (editorCallback has
+    // nothing to await it from) can no longer produce an unhandled
+    // rejection; `void` documents that at the call site.
+    void this.activatePartialEditViewForParagraph(cursor.line);
   }
 
   /**
