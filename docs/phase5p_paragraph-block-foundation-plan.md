@@ -1,18 +1,20 @@
 # Unified Outliner — 段落ブロック基盤 実装計画（Phase 5P）
 
 作成日: 2026-08-15
-状態: **5P-0（方針改訂）・5P-1（範囲・親・深さの契約）・5P-1R（editability 訂正・Move block 適用範囲の固定）・5P-2（カーソル解決・安全なホイスト）実装完了、5P-3D（任意 Tree 表示の設計固定）完了**（2026-08-17）。5P-3 本実装以降は未着手 — 5P-3D の承認と実装範囲確認を経てから着手する。
+状態: **Phase 5P 全体（5P-0〜5P-4）完了（2026-08-17）。** 5P-0（方針改訂）・5P-1（範囲・親・深さの契約）・5P-1R（editability 訂正・Move block 適用範囲の固定）・5P-2（カーソル解決・安全なホイスト）・5P-3D（任意 Tree 表示の設計固定）・5P-3（任意 Tree 表示 実装）・5P-4（隣接交換の契約化）のすべてを実装完了として承認済み。後続は独立系統 **Phase 5T（Tree Interaction / Tree Move）** へ引き継ぐ — §12 参照。
 対象リポジトリ: `/Users/kazumikaizuka/Obsidian/unified-outliner-public`
-関連: `docs/mixed-structure-spec.md` §6（5P-0で改訂済み）、`docs/phase5c_block-model-and-tree-display-spec.md` §4（5P-0で移管済み）、`docs/統合実装ロードマップ_2026-08-05.md` §3.8（実装記録の正）、`docs/phase5p3d_paragraph-tree-display-design.md`（5P-3 の確定設計。§6「5P-3 — 任意 Tree 表示」の詳細はこちらを正とする）
+関連: `docs/mixed-structure-spec.md` §6（5P-0で改訂済み）、`docs/phase5c_block-model-and-tree-display-spec.md` §4（5P-0で移管済み）、`docs/統合実装ロードマップ_2026-08-05.md` §3.8（実装記録の正）、`docs/phase5p3d_paragraph-tree-display-design.md`（5P-3 の確定設計。§6「5P-3 — 任意 Tree 表示」の詳細はこちらを正とする）、`docs/phase5t_tree-interaction-move-design.md`（Phase 5T-0。5P 完了後の Tree 発火 move / D&D 設計）
 
-## 実装状況（2026-08-17）
+## 実装状況（2026-08-17、Phase 5P 完了時点）
 
 - **5P-0**: 本ドキュメント§3の改訂を`docs/mixed-structure-spec.md` §6、`docs/phase5c_block-model-and-tree-display-spec.md` §4、`docs/統合実装ロードマップ_2026-08-05.md`に反映した。本番コードの変更はなし。
 - **5P-1**: `src/parser/complexBlocks.ts`の`scanParagraphBlocks`を、本ドキュメント§5の境界規則・親子規則に沿って拡張した。新規の純粋関数`complexBlockDepth`（同ファイル）で深さ契約をテスト固定した。`tests/complexBlocks.test.ts`に境界・親子・深さの新規テストケースを追加し、`npm test`（949件）・`tsc`・`npm run lint`・`npm run build`すべて成功を確認済み。実装の詳細・変更ファイル一覧・回帰確認の要点は`docs/統合実装ロードマップ_2026-08-05.md` §3.8を正とする。
 - **5P-1R**: paragraph の editability 訂正（Option A採用、paragraph の supported 化）と、Move block の意図しない適用拡大の防止を実施。コミット `fcd1128`。
 - **5P-2**: カーソル位置の段落を一意に解決する純粋 resolver（`src/resolver/resolveParagraphAtCursor.ts`）と、Apply 時に parentId/depth/内容完全一致を再確認する安全な Partial Edit hoist（`src/edit/paragraphPartialEdit.ts`）を実装した。コミット `b0b7f02`。テスト1002件・tsc・lint・build すべて成功。
 - **5P-3D**: paragraph を設定オン時のみ Outline Tree に読み取り専用の葉ノードとして表示するための設計を固定した。詳細は `docs/phase5p3d_paragraph-tree-display-design.md` を参照。本番コードの変更はなし。
-- **5P-3〜5P-4**: 5P-3 は 5P-3D の承認後に本実装へ進む。5P-4 は §6 記載のとおり、着手前に個別の設計承認プロセスを経ること。
+- **5P-3**: `showParagraphsInOutline`設定（既定オフ）を追加し、オン時のみ paragraph を Outline Tree に読み取り専用・fold不可の葉ノードとして投影した。コミット `a7e0bcf`。テスト1045件・tsc・lint・build すべて成功。
+- **5P-4**: 5P-1R が Move block に設けていた狭い例外を、本文カーソル起点・同一 parentId 限定の正式な「隣接交換」契約として固定した。paragraph↔list・section越境は意図的に対象外。コミット `6ecafa0`。テスト1069件・tsc・lint・build すべて成功。
+- **Phase 5P 完了承認**: 上記全サブフェーズの実装報告・実機確認をもって、Phase 5P（5P-0〜5P-4）は2026-08-17に完了として承認された。完了範囲の確定リストは §12 を参照。
 
 ## 0. なぜ別系統か
 
@@ -171,7 +173,7 @@ Tree に出す場合の既定記号は `¶` とする。設定で空文字にで
 
 **目的**: 設定がオンのときだけ、段落を Outline Tree に出せる。
 
-**設計状況（2026-08-17）**: 5P-3D で確定設計を `docs/phase5p3d_paragraph-tree-display-design.md` にまとめた。以下はその要旨であり、詳細・根拠・比較検討は同文書を正とする。
+**実装状況（2026-08-17完了、コミット `a7e0bcf`）**: 5P-3D で確定設計を `docs/phase5p3d_paragraph-tree-display-design.md` にまとめ、その設計どおりに実装完了した。以下はその要旨であり、詳細・根拠・比較検討は同文書を正とする。
 
 **実施内容**
 
@@ -192,6 +194,8 @@ Tree に出す場合の既定記号は `¶` とする。設定で空文字にで
 ### 5P-4 — 隣接交換の契約化
 
 **目的**: 既にある Move block の狭い例外を、5P の正式操作として固定する。
+
+**実装状況（2026-08-17完了、コミット `6ecafa0`）**: 以下の実施内容・完了条件どおりに実装完了した。
 
 **実施内容**
 
@@ -276,3 +280,40 @@ Phase 5C（拡張ブロック基盤、5C-5 まで完了扱い）
 - paragraph を CompositeBlock の member にも、拡張ブロックの一種にもしない
 - テストは Obsidian 非依存の純粋関数を先に厚くする
 - Method Vault の実機確認は、見出しなしの連続本文ノートを必須ケースにする
+
+## 12. Phase 5P 完了範囲の確定と Phase 5T への引き継ぎ（2026-08-17）
+
+Phase 5P（5P-0〜5P-4）は、2026-08-17 に完了として承認された。完了範囲は次のとおり確定する。
+
+- paragraph の範囲・親・深さ・editability 契約の固定（5P-1）
+- カーソル位置からの paragraph 解決（5P-2、`resolver/resolveParagraphAtCursor.ts`）
+- paragraph の安全な Partial Edit / hoist（5P-2、`edit/paragraphPartialEdit.ts`）
+- 設定既定オフの Outline Tree 表示（5P-3、`showParagraphsInOutline`）
+- Tree 上の paragraph を read-only な葉ノードとして扱うこと（5P-3、`collectReadOnlyOutlineNodeIds`・`isLeaf: true`）
+- 本文カーソル起点での、同一親・隣接 block に限った安全な交換（5P-4、`move/resolveMoveTarget.ts`）
+- paragraph ↔ list、および section 越境を意図的に未対応とすること（5P-1〜5P-4 一貫方針）
+- Tree 起点の move / drag & drop / context menu edit を意図的に未対応とすること（5P-3、5P-4 とも）
+
+次に検討すべきは、Tree 上でのマウス操作による移動、ならびに context menu からの移動である。ただし、これは 5P-4 の UI を追加するだけの作業ではなく、paragraph を Tree 上の read-only node として扱う契約・drag/drop の意味論・Tree 選択と本文カーソルの同期・drop target の妥当性・cross-model move・Markdown の安全な書き戻しを同時に扱う独立の設計課題である。したがって、この検討は本計画（Phase 5P）の対象外とし、独立系統 **Phase 5T（Tree Interaction / Tree Move Design）** として切り出す。5T-0（設計のみ）の内容は `docs/phase5t_tree-interaction-move-design.md` を正とする。
+
+Phase 5P は、本ドキュメント §8 の関係図における「5P-4 隣接交換の契約化」で完結し、以降の Tree 発火操作の検討は 5T 側の責任とする。§8 の関係図を以下のとおり更新する。
+
+```
+Phase 5C（拡張ブロック基盤、5C-5 まで完了扱い）
+        │
+        ├─ 進行中: 5C-1 CompositeBlock 編集、5U UI 仕上げ
+        │
+        └─ Phase 5P（本計画。基本本文単位。5P-0〜5P-4 完了）
+                 5P-0 方針改訂
+                 5P-1 範囲・親・深さ
+                 5P-2 カーソル解決・ホイスト
+                 5P-3 任意 Tree 表示
+                 5P-4 隣接交換の契約化
+                        │
+                        ├─→ Phase 5D（拡張ブロック個別編集。混ぜない）
+                        ├─→ Phase 6（分類。メタデータ付き段落だけ索引）
+                        └─→ Phase 5T（Tree Interaction / Tree Move。5T-0 で設計中）
+                                 5T-0 設計（本番コード変更なし）
+                                 5T-1 候補: Tree context menu 上下移動
+                                 5T-2 候補: Tree D&D 隣接交換、その他調査事項
+```
