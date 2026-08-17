@@ -252,6 +252,15 @@ const en = {
   "tree.menu.standaloneMoveUp": "Move up",
   "tree.menu.standaloneMoveDown": "Move down",
 
+  // Phase 5T-1 ("Outline Tree の paragraph context menu からの安全な上下移
+  // 動"): a paragraph row's own move menu items — deliberately NEW, dedicated
+  // keys rather than reusing tree.menu.standaloneMoveUp/Down above, matching
+  // this codebase's own established precedent (see that pair's own comment)
+  // of never reusing another feature's menu-label keys even when the wording
+  // happens to coincide today.
+  "tree.menu.paragraphMoveUp": "Move up",
+  "tree.menu.paragraphMoveDown": "Move down",
+
   // ---- Partial Edit Pane --------------------------------------------------
   "partialEdit.viewName": "Unified Outliner: Partial Edit",
   "partialEdit.noActiveNote": "Unified Outliner: no active note to load a node from.",
@@ -465,6 +474,25 @@ const en = {
     "Unified Outliner: this paragraph's position in the note changed, so the edit was not applied safely. Reopen it and try again.",
   "reason.content-changed":
     "Unified Outliner: the note changed, so the safe update to this paragraph was cancelled. Check the content and reopen it.",
+
+  // Phase 5T-1: paragraph Tree context-menu move (edit/paragraphTreeMove.ts)
+  // rejection reasons. Deliberately NEW, dedicated keys rather than reusing
+  // reason.identity-changed/reason.content-changed above — those two are
+  // worded for the Partial Edit Pane's "apply" flow specifically ("...the
+  // edit was not applied safely. Reopen it and try again." / "...Check the
+  // content and reopen it.") and would be misleading for a move command,
+  // which has no "reopen" step at all. "no-sibling"/"boundary-unknown" are
+  // NOT duplicated here — this feature reuses those two existing keys
+  // as-is (see edit/paragraphTreeMove.ts), since their wording is already
+  // move-specific and operation-neutral.
+  "reason.paragraphTreeMoveResolveFailed":
+    "Unified Outliner: this paragraph could not be safely re-resolved (the note may have changed).",
+  "reason.paragraphTreeMoveIdentityChanged":
+    "Unified Outliner: this paragraph's position in the note changed, so the move was cancelled.",
+  "reason.paragraphTreeMoveContentChanged":
+    "Unified Outliner: the note changed, so the move was cancelled.",
+  "reason.paragraphTreeMoveAmbiguous":
+    "Unified Outliner: this paragraph could not be uniquely identified, so the move was cancelled.",
 } as const;
 
 export type TranslationKey = keyof typeof en;
@@ -638,6 +666,8 @@ const ja: Record<TranslationKey, string> = {
   "tree.menu.compositeMoveDown": "拡張ブロックを下へ移動",
   "tree.menu.standaloneMoveUp": "上へ移動",
   "tree.menu.standaloneMoveDown": "下へ移動",
+  "tree.menu.paragraphMoveUp": "上へ移動",
+  "tree.menu.paragraphMoveDown": "下へ移動",
 
   // ---- 部分編集ペイン -------------------------------------------------------
   "partialEdit.viewName": "Unified Outliner: 部分編集",
@@ -830,6 +860,15 @@ const ja: Record<TranslationKey, string> = {
     "Unified Outliner: この段落の文書内での位置が変化したため、安全に適用できなかった。開き直してもう一度試すこと。",
   "reason.content-changed":
     "Unified Outliner: 本文が変更されたため、段落への安全な反映を中止した。内容を確認してもう一度開くこと。",
+
+  "reason.paragraphTreeMoveResolveFailed":
+    "Unified Outliner: この段落を安全に再解決できなかった（ノートが変更された可能性がある）。",
+  "reason.paragraphTreeMoveIdentityChanged":
+    "Unified Outliner: この段落の文書内での位置が変化したため、移動を取り消した。",
+  "reason.paragraphTreeMoveContentChanged":
+    "Unified Outliner: 本文が変更されたため、移動を取り消した。",
+  "reason.paragraphTreeMoveAmbiguous":
+    "Unified Outliner: この段落を一意に特定できなかったため、移動を取り消した。",
 };
 
 const DICTIONARIES: Record<SupportedLocale, Record<TranslationKey, string>> = {

@@ -207,6 +207,13 @@ import {
   StandaloneComplexBlockSnapshot,
   standaloneComplexBlockMoveReasonText,
 } from "../edit/moveStandaloneComplexBlock";
+import {
+  buildParagraphMoveAnchor,
+  moveParagraphFromAnchor,
+  ParagraphMoveAnchor,
+  paragraphTreeMoveReasonText,
+} from "../edit/paragraphTreeMove";
+import { findComplexSiblingTarget, ResolvedMoveUnit } from "../move/resolveMoveTarget";
 import { getEnabledCompositeBlockRules } from "../settingsDefaults";
 import { resolveHighlightedNodeId } from "../tree/resolveHighlightedSectionId";
 import {
@@ -222,7 +229,7 @@ import {
   exceedsLongPressMoveThreshold,
   LONG_PRESS_DURATION_MS,
 } from "../tree/longPressGesture";
-import { findMoveTarget } from "../move/findMoveTarget";
+import { findMoveTarget, MoveDirection } from "../move/findMoveTarget";
 import { findIndentTarget } from "../move/findIndentTarget";
 import { findNodeOnlyMoveTarget } from "../move/findNodeOnlyMoveTarget";
 import { findNodeOnlyLevelTarget } from "../level/findNodeOnlyLevelTarget";
@@ -996,6 +1003,10 @@ export class OutlineTreeView extends ItemView {
     const isSection = isOutlineSectionNode(node);
     const isComposite = isOutlineCompositeNode(node);
     const isComplexMember = isOutlineComplexMemberNode(node);
+    // Phase 5T-1: used only to decide whether to attach the paragraph-only
+    // context-menu listener below — never a source of move-time safety
+    // itself (see showParagraphMoveMenu's own doc comment).
+    const isParagraph = isOutlineParagraphNode(node);
     // Phase 5D-0.3 approval §1: a CompositeBlock's row itself, EVERY one of
     // its descendant rows (list items nested inside it, callout/blockquote
     // members), and — transitively — any FURTHER nested list item under one
@@ -1357,6 +1368,22 @@ export class OutlineTreeView extends ItemView {
       selfEl.addEventListener("contextmenu", (evt) => {
         evt.preventDefault();
         this.showStandaloneComplexBlockMenu(evt, node.id);
+      });
+    } else if (isParagraph) {
+      // Phase 5T-1 ("Outline Tree の paragraph context menu からの安全な上下
+      // 移動"): a FOURTH, separate menu path — for a paragraph row only.
+      // Deliberately NOT gated by `!readOnly`, same reasoning as the
+      // composite/standalone branches above (paragraph rows are always in
+      // readOnlyNodeIds — see collectReadOnlyOutlineNodeIds — and stay that
+      // way; this menu is an explicit, narrow exception layered on top of
+      // that read-only contract, not a relaxation of it). Unlike the other
+      // three menus, this one has no delete/Partial-Edit/rename item at
+      // all — see showParagraphMoveMenu's own doc comment — and, like
+      // showCompositeCommandMenu, shows NO menu at all (not even an empty
+      // one) when neither direction is currently eligible.
+      selfEl.addEventListener("contextmenu", (evt) => {
+        evt.preventDefault();
+        this.showParagraphMoveMenu(evt, node.id);
       });
     }
 
@@ -2545,6 +2572,145 @@ export class OutlineTreeView extends ItemView {
       text.split("\n"),
       outcome,
       () => this.notify(standaloneComplexBlockMoveReasonText((k) => this.plugin.t(k), outcome.reason))
+    );
+
+    if (changed) {
+      const cur = editor.getCursor();
+      const lineLen = editor.getLine(cur.line)?.length ?? 0;
+      editor.scrollIntoView(
+        { from: { line: cur.line, ch: 0 }, to: { line: cur.line, ch: lineLen } },
+        true
+      );
+      this.refresh();
+    }
+    return changed;
+  }
+
+  /**
+   * Phase 5T-1: a paragraph row's own, deliberately narrow right-click
+   * menu — "Move up"/"Move down" only. No delete, no rename, no Partial
+   * Edit/hoist entry point of any kind (ticket §1: paragraph stays
+   * read-only; Tree 起点の Partial Edit is never added). Never attached at
+   * all unless `isOutlineParagraphNode(node)` is true (see renderNode's own
+   * context-menu chain above), and a paragraph Tree node only ever exists
+   * in `this.currentTree` when `settings.showParagraphsInOutline` is true
+   * (tree/buildOutlineTree.ts's own "never even considered when off"
+   * design, confirmed unchanged by Phase 5P-3) — so this method needs no
+   * separate settings check of its own.
+   *
+   * `this.currentDoc`/`this.currentComplexScan` (refresh()-time cached
+   * values) are used ONLY to decide which move items to show and to build
+   * `anchor` — exactly like showCompositeCommandMenu's/
+   * showStandaloneComplexBlockMenu's own use of the same fields, never
+   * treated as move-time safety themselves. Actual move safety is entirely
+   * edit/paragraphTreeMove.ts#moveParagraphFromAnchor's own re-parse/
+   * re-scan/three-stage-re-verification job, run against the editor's
+   * CURRENT content at the moment "Move up"/"Move down" is actually
+   * clicked (see dispatchAndApplyParagraphMove below).
+   *
+   * Like showCompositeCommandMenu (and UNLIKE showStandaloneComplexBlockMenu,
+   * which always has its unconditional Partial-Edit items to fall back on),
+   * this method shows NO menu at all — not even an empty one — when
+   * neither direction is currently eligible: there is no unconditional
+   * item here for an empty menu to degrade to.
+   *
+   * `findComplexSiblingTarget` (move/resolveMoveTarget.ts, Phase 5P-4) is
+   * reused verbatim here purely to decide menu-time ELIGIBILITY (which
+   * items to show) — the exact same function
+   * edit/paragraphTreeMove.ts#moveParagraphFromAnchor calls again,
+   * independently, at click time. No new adjacency/eligibility logic is
+   * written in this file.
+   */
+  private showParagraphMoveMenu(evt: MouseEvent, nodeId: string): void {
+    const doc = this.currentDoc;
+    const complexScan = this.currentComplexScan;
+    const target = complexScan?.blocks.find((b) => b.id === nodeId && b.kind === "paragraph");
+    if (!doc || !complexScan || !target) return;
+
+    const anchor = buildParagraphMoveAnchor(doc, target);
+    if (!anchor) return;
+
+    const unit: ResolvedMoveUnit = {
+      kind: "paragraph",
+      range: target.range,
+      parentId: target.parentId,
+      complexBlockId: target.id,
+    };
+    const upEligible = findComplexSiblingTarget(doc, unit, "up", complexScan).kind === "swap";
+    const downEligible = findComplexSiblingTarget(doc, unit, "down", complexScan).kind === "swap";
+    if (!upEligible && !downEligible) return;
+
+    const menu = new Menu();
+    if (upEligible) {
+      menu.addItem((item) =>
+        item
+          .setTitle(this.plugin.t("tree.menu.paragraphMoveUp"))
+          .setIcon("arrow-up")
+          .onClick(() => this.dispatchAndApplyParagraphMove(anchor, "up"))
+      );
+    }
+    if (downEligible) {
+      menu.addItem((item) =>
+        item
+          .setTitle(this.plugin.t("tree.menu.paragraphMoveDown"))
+          .setIcon("arrow-down")
+          .onClick(() => this.dispatchAndApplyParagraphMove(anchor, "down"))
+      );
+    }
+
+    this.showTrackedMenu(menu, evt);
+  }
+
+  /**
+   * Phase 5T-1: dedicated, thin dispatch for a paragraph Tree-triggered
+   * move — mirrors dispatchAndApplyCompositeMove/
+   * dispatchAndApplyStandaloneComplexBlockMove exactly (same multi-cursor
+   * guard, same "read the editor's CURRENT text and hand it to the pure
+   * function along with the menu-time anchor" shape, same
+   * applyLineEditOutcome/scroll/refresh tail). All re-parsing, the
+   * three-stage re-verification, and the actual swap are
+   * edit/paragraphTreeMove.ts#moveParagraphFromAnchor's job — nothing here
+   * duplicates any of it.
+   *
+   * `anchor` reaches this function only via a closure captured at
+   * menu-build time (showParagraphMoveMenu -> here) — never a bare
+   * scan-local id, for the same reason the composite/standalone dispatch
+   * methods' own doc comments explain. Per Phase 5C-3's own accepted
+   * limitation (re-affirmed here for paragraph): Tree row selection
+   * follow-through after a successful move is not guaranteed — the
+   * cursor-follow resolver only understands BlockNode ids (section/list),
+   * so `this.refresh()` below may leave Tree selection on the moved
+   * paragraph's enclosing container rather than the paragraph row itself.
+   * This is an accepted, pre-existing limitation shared with every other
+   * ComplexBlockKind move, not something this ticket introduces or is
+   * required to fix (5T-1 ticket §6: "Tree の paragraph selection を無理に
+   * 復元しない"). Body-editor cursor scroll (below) is unaffected by this
+   * limitation, since it never depends on Tree node resolution at all.
+   */
+  private dispatchAndApplyParagraphMove(
+    anchor: ParagraphMoveAnchor,
+    direction: MoveDirection
+  ): boolean {
+    const view = this.activeMarkdownView.get();
+    if (!view) return false;
+    const editor: Editor = view.editor;
+
+    if (editor.listSelections().length > 1) {
+      this.notify(this.plugin.t("notice.multipleCursors"));
+      return false;
+    }
+
+    const text = editor.getValue();
+    const outcome = moveParagraphFromAnchor(text, anchor, direction);
+
+    const cursor = { line: anchor.rangeStart, ch: 0 };
+    const changed = applyLineEditOutcome(
+      editor,
+      cursor,
+      anchor.rangeStart,
+      text.split("\n"),
+      outcome,
+      () => this.notify(paragraphTreeMoveReasonText((k) => this.plugin.t(k), outcome.reason))
     );
 
     if (changed) {
