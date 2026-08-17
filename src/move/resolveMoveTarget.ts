@@ -39,23 +39,62 @@
  * isSafeToMoveComplexBlock's doc comment for the precise safety gate this
  * introduces.
  *
- * Phase 5P-1R correction (2026-08-17): Phase 5P-1 made paragraphs owned by a
- * list item (indented to the item's own content-start column) newly
- * recognizable by parser/complexBlocks.ts's scanParagraphBlocks. Because
- * this module's ORIGINAL safety gate keyed only on editability (any
- * confidently-bounded paragraph was move-safe, regardless of what owns it),
- * that Phase 5P-1 recognition change would have silently WIDENED Move
- * block's existing surface to include list-item-child paragraphs — a
- * capability Phase 5P explicitly reserves for a later, separately-approved
- * sub-phase (5P-4, "隣接交換の正式契約化" — see
- * docs/phase5p_paragraph-block-foundation-plan.md §6). isSafeToMoveComplexBlock
- * below now explicitly excludes any paragraph whose parentId resolves to a
- * list-typed node, restoring Move block's paragraph surface to EXACTLY what
- * it was before Phase 5P-1 (a paragraph owned by a section, or by nothing —
- * never by a list item), independent of Phase 5P-1R's separate
- * "read-only" → "supported" editability change (see
- * parser/complexBlocks.ts's scanParagraphBlocks doc comment) for confidently-
- * bounded paragraphs.
+ * Phase 5P-1R correction (2026-08-17, SUPERSEDED by Phase 5P-4 below): Phase
+ * 5P-1 made paragraphs owned by a list item (indented to the item's own
+ * content-start column) newly recognizable by parser/complexBlocks.ts's
+ * scanParagraphBlocks. Because this module's ORIGINAL safety gate keyed only
+ * on editability (any confidently-bounded paragraph was move-safe,
+ * regardless of what owns it), that Phase 5P-1 recognition change would have
+ * silently WIDENED Move block's existing surface to include list-item-child
+ * paragraphs — a capability Phase 5P explicitly reserved for a later,
+ * separately-approved sub-phase. isSafeToMoveComplexBlock used to explicitly
+ * exclude any paragraph whose parentId resolved to a list-typed node here,
+ * restoring Move block's paragraph surface to EXACTLY what it was before
+ * Phase 5P-1 (a paragraph owned by a section, or by nothing — never by a
+ * list item).
+ *
+ * Phase 5P-4 ("paragraph の安全な隣接交換", 2026-08-17): that exclusion is now
+ * lifted. isSafeToMoveComplexBlock no longer special-cases list-owned
+ * paragraphs at all — every ComplexBlockKind, including a list-item-child
+ * paragraph, is move-safe whenever its own boundary was confidently
+ * determined (editability === "supported"). List-item-boundary safety for
+ * the newly-enabled case is never this function's job: it is enforced
+ * entirely by findComplexSiblingTarget's own `b.parentId !== unit.parentId`
+ * filter (below), which already guarantees any accepted swap partner is a
+ * child of the EXACT SAME list item — never a different item, never content
+ * outside any list, never across a section boundary — the identical
+ * guarantee this module already relied on for a section-parented
+ * paragraph's siblings before this phase; Phase 5P-4 simply lets that same
+ * guarantee also apply when parentId happens to be a list item's id instead
+ * of a section's or null. Because swapBlocks (move/moveBlock.ts) is a pure,
+ * verbatim line-range swap that never rewrites a single character of
+ * either block's own text, no separate "would this require an indentation
+ * change" check is needed either: each block's leading whitespace travels
+ * with it unchanged, so two blocks that were each independently confirmed
+ * to belong to the SAME list item before the swap are still both
+ * byte-identical (and therefore still both correctly indented) after it.
+ *
+ * The one other piece Phase 5P-4 needed is a separate, paragraph-only
+ * change to resolveMoveUnit's list-node branch below: a cursor sitting on a
+ * list item's own recognized child paragraph now resolves to that
+ * PARAGRAPH specifically, not the whole list subtree (previously — and
+ * still, for every OTHER kind nested in a list item's continuation, such as
+ * a callout or blockquote — rule 2's "cursor anywhere in a list item -> the
+ * whole list subtree" always won). See that branch's own doc comment for
+ * the exact scope of this carve-out.
+ *
+ * Out of scope for Phase 5P-4, deliberately: swapping a paragraph with an
+ * entire LIST item/subtree as a "sibling" (a genuine BlockNode, not a
+ * ComplexBlockInfo). findComplexSiblingTarget's candidate pool is, and
+ * remains, drawn exclusively from scanComplexBlocks(doc).blocks — it has
+ * never searched section/list BlockNodes as candidates, at either the
+ * section level or the list-item level, and this phase does not change
+ * that. Doing so would require an entirely new cross-model swap (different
+ * id space, different depth/indent semantics, ordered-list renumbering
+ * concerns via move/moveBlock.ts's own normalizeOrderedLists step) that
+ * cannot be proven byte-safe within this phase's "prove the current
+ * Markdown is handled safely, don't speculate" mandate — a candidate for a
+ * later phase, not this one.
  */
 import {
   BlockNode,
@@ -65,7 +104,7 @@ import {
   ParsedDocument,
 } from "../model/block";
 import { ComplexBlockInfo, ComplexBlockKind } from "../model/complexBlock";
-import { scanComplexBlocks } from "../parser/complexBlocks";
+import { complexBlockDepth, scanComplexBlocks } from "../parser/complexBlocks";
 import { isBlankLine } from "../parser/parseDocument";
 import { resolveCurrentBlock } from "../resolver/resolveCurrentBlock";
 import { defaultTranslator, Translator } from "../i18n";
@@ -103,38 +142,21 @@ export interface ResolveMoveUnitResult {
   reason?: ResolveMoveUnitReason;
 }
 
-function isSafeToMoveComplexBlock(
-  doc: ParsedDocument,
-  block: ComplexBlockInfo
-): boolean {
-  // Phase 5P-1R: paragraph editability "supported" now means only "boundary/
-  // parent/depth confidently resolved" — it does NOT by itself mean "safe to
-  // move" (see this module's top doc comment and model/complexBlock.ts's
-  // BlockEditability doc comment). A paragraph is safe to relocate as a
-  // whole via Move block only when BOTH:
-  //   (a) its boundary was confidently determined at all (editability ===
-  //       "supported"; an "ambiguous" paragraph — boundary genuinely
-  //       uncertain, e.g. it crosses an existing section/list boundary — is
-  //       never safe, matching the ticket's
-  //       "境界を安全に確定できない場合は移動を拒否"), AND
-  //   (b) it is NOT owned by a list item. List-item-child paragraphs only
-  //       became recognizable in Phase 5P-1; moving them via this command is
-  //       explicitly deferred to Phase 5P-4 ("隣接交換の正式契約化"). This
-  //       restores Move block's paragraph surface to exactly what it was
-  //       before Phase 5P-1 (a paragraph owned by a section, or by nothing —
-  //       never by a list item).
-  if (block.kind === "paragraph") {
-    if (block.editability !== "supported") return false;
-    if (block.parentId) {
-      const parent = doc.nodes.get(block.parentId);
-      if (parent && isListNode(parent)) return false;
-    }
-    return true;
-  }
-  // callout/blockquote/fenced-code/table: only the scanner's strongest
-  // confidence level is safe to move — "unsupported" (unmodeled nested
-  // structure) and "ambiguous" (boundary itself uncertain) are both
-  // rejected, per model/complexBlock.ts's BlockEditability doc comment.
+/**
+ * Phase 5P-1R originally special-cased "paragraph" here to exclude any
+ * list-owned instance (see this module's top doc comment for the full
+ * history). Phase 5P-4 lifted that exclusion: every ComplexBlockKind,
+ * paragraph included, is move-safe under the exact same single condition —
+ * its own boundary was confidently determined at all. An "ambiguous" block
+ * (boundary genuinely uncertain — e.g. it crosses an existing section/list
+ * boundary) is never safe, matching this ticket's own "境界を安全に確定でき
+ * ない場合は移動を拒否"; "unsupported" (unmodeled internal structure, e.g. a
+ * nested callout) is likewise never safe. Which specific block ends up
+ * paired with which via a swap — same-list-item boundaries, same-section
+ * boundaries, no cross-boundary hop — is entirely findComplexSiblingTarget's
+ * job (via its own parentId-equality filter), never this function's.
+ */
+function isSafeToMoveComplexBlock(block: ComplexBlockInfo): boolean {
   return block.editability === "supported";
 }
 
@@ -149,7 +171,7 @@ function resolveComplexUnitAt(
   if (!block) {
     return { unit: null, reason: "no-block" };
   }
-  if (!isSafeToMoveComplexBlock(doc, block)) {
+  if (!isSafeToMoveComplexBlock(block)) {
     return { unit: null, reason: "boundary-unknown" };
   }
   return {
@@ -230,20 +252,65 @@ export function resolveMoveUnit(
   }
 
   // List node (marker line or continuation line — either way the whole
-  // subtree is the minimal safe unit, unchanged from the existing
-  // move/indent model). Deliberately does NOT dig further into a complex
-  // block that might be nested inside this item's own continuation text
-  // (e.g. "- item\n  > a blockquote inside the list item") — rule 2 in this
-  // module's top doc comment ("カーソルが list item の marker または本文にある
-  // なら list subtree") takes priority over rules 3/4 by the ticket's own
-  // stated rule ORDER, and list continuation text is already established
-  // (docs/mixed-structure-spec.md, parser/complexBlocks.ts's
-  // scanParagraphBlocks doc comment) as belonging to its owning list item
-  // rather than being independently addressable. findComplexSiblingTarget
-  // below still correctly HANDLES a complex block whose parentId is a list
-  // item (model/complexBlock.ts documents this as a real, scanner-level
-  // case), so this scope decision only affects cursor-based RESOLUTION —
-  // nothing else in this module assumes complex blocks are section-only.
+  // subtree is the minimal safe unit for every kind EXCEPT one deliberate,
+  // paragraph-only carve-out — see immediately below). Deliberately does
+  // NOT dig further into a complex block that might be nested inside this
+  // item's own continuation text (e.g. "- item\n  > a blockquote inside the
+  // list item") — rule 2 in this module's top doc comment ("カーソルが list
+  // item の marker または本文にあるなら list subtree") takes priority over
+  // rules 3/4 by the ticket's own stated rule ORDER, and list continuation
+  // text is already established (docs/mixed-structure-spec.md,
+  // parser/complexBlocks.ts's scanParagraphBlocks doc comment) as belonging
+  // to its owning list item rather than being independently addressable.
+  // findComplexSiblingTarget below still correctly HANDLES a complex block
+  // whose parentId is a list item (model/complexBlock.ts documents this as
+  // a real, scanner-level case), so this scope decision only affects
+  // cursor-based RESOLUTION — nothing else in this module assumes complex
+  // blocks are section-only. This whole paragraph of doc comment still
+  // describes every kind OTHER than paragraph unchanged — see
+  // tests/resolveMoveTarget.test.ts's "list continuation never digs into a
+  // nested complex block" describe block, which this phase does not touch.
+  //
+  // Phase 5P-4 carve-out ("paragraph の安全な隣接交換"): when the cursor line
+  // itself falls inside a CONFIDENTLY-BOUNDED child paragraph of THIS EXACT
+  // list item — parser/complexBlocks.ts's scanParagraphBlocks, reached only
+  // once a continuation line's own indentation reaches the item's own
+  // content-start column (listItemContentColumn) — Move block now resolves
+  // to that PARAGRAPH alone, not the whole list subtree. This is the one
+  // deliberate exception to the rule-2-always-wins policy above, and it is
+  // paragraph-only by design (see isSafeToMoveComplexBlock's own doc
+  // comment for why the actual SWAP mechanism this feeds is safe): the
+  // marker line itself, and "invisible" continuation text indented LESS
+  // than the item's content-start column, are never covered by any
+  // paragraph candidate at all (scanParagraphBlocks' own isCandidate column
+  // check), so both continue to resolve to the list subtree with no extra
+  // branching needed for them. Resolution here succeeds purely on
+  // structural recognition — independent of whether a safe adjacent swap
+  // partner actually exists in either direction, exactly mirroring how a
+  // section-level (or top-of-document) paragraph has always resolved
+  // regardless of sibling existence; a lone child paragraph with no
+  // eligible sibling still resolves to "paragraph" and then correctly
+  // no-ops later with "no-sibling", rather than silently falling back to
+  // moving the whole list subtree.
+  const listItemId = resolved.node.id;
+  const childParagraph = scanComplexBlocks(doc).blocks.find(
+    (b) =>
+      b.kind === "paragraph" &&
+      b.parentId === listItemId &&
+      cursorLine >= b.range.startLine &&
+      cursorLine <= b.range.endLine
+  );
+  if (childParagraph && isSafeToMoveComplexBlock(childParagraph)) {
+    return {
+      unit: {
+        kind: "paragraph",
+        range: childParagraph.range,
+        parentId: childParagraph.parentId,
+        complexBlockId: childParagraph.id,
+      },
+    };
+  }
+
   return {
     unit: {
       kind: "list",
@@ -340,7 +407,13 @@ export type ComplexSiblingTarget =
  * boundaries the way root list items may (move/findMoveTarget.ts's
  * "insert" cross-section hop) — paragraph/complex-block moves stay within
  * their own container, a narrower and more conservative scope than list
- * moves ever had.
+ * moves ever had. This function's own parentId-equality check is the ONE
+ * place in this whole module that enforces "never cross a list-item
+ * boundary" / "never cross a section boundary" / "never swap with content
+ * outside the same container" for a paragraph unit (Phase 5P-4) — see
+ * isSafeToMoveComplexBlock's own doc comment for why no additional
+ * paragraph-specific restriction is needed here beyond what already
+ * applied to every other ComplexBlockKind.
  */
 export function findComplexSiblingTarget(
   doc: ParsedDocument,
@@ -351,7 +424,22 @@ export function findComplexSiblingTarget(
   const candidates = scan.blocks.filter((b) => {
     if (b.id === unit.complexBlockId) return false;
     if (b.parentId !== unit.parentId) return false;
-    return isSafeToMoveComplexBlock(doc, b);
+    // Defense-in-depth (Phase 5P-4): parentId equality above already
+    // structurally guarantees identical depth — complexBlockDepth derives
+    // depth purely from parentId (parser/complexBlocks.ts), so two
+    // ComplexBlockInfo values sharing a parentId from the SAME
+    // ParsedDocument can never actually diverge here. Re-checked
+    // explicitly anyway, the same "recompute the guarantee rather than
+    // only rely on how it was derived" defensive style already used
+    // elsewhere in this codebase (e.g. evaluateCompositeBlockMovability)
+    // for an analogous invariant — and it is what lets this specific
+    // condition be independently unit-tested against a hand-built,
+    // deliberately-inconsistent fixture rather than only trusted by
+    // construction.
+    if (complexBlockDepth(doc, b.parentId) !== complexBlockDepth(doc, unit.parentId)) {
+      return false;
+    }
+    return isSafeToMoveComplexBlock(b);
   });
 
   let picked: ComplexBlockInfo | null = null;

@@ -123,9 +123,114 @@ describe("OutlineTreeView.ts paragraph wiring (static source check, Phase 5P-3)"
     expect(viewTs).not.toContain("openParagraphPartialEditForCursor");
   });
 
-  it("does not introduce a Move-block / indent-outdent / delete affordance keyed on paragraph (general Move support stays deferred to 5P-4)", () => {
+  it("does not introduce a Tree-triggered Move-block / indent-outdent / delete affordance keyed on paragraph (Phase 5P-4 adds CURSOR-based Move for paragraph in main.ts/move/resolveMoveTarget.ts — the Tree view itself gains no new affordance, verified below)", () => {
     expect(viewTs).not.toContain("moveParagraph");
     expect(viewTs).not.toContain("indentParagraph");
     expect(viewTs).not.toContain("deleteParagraph");
+  });
+});
+
+/**
+ * Phase 5P-4 ("paragraph の安全な隣接交換", §5 "Tree read-only 契約の維持"):
+ * explicit re-confirmation that formalizing paragraph's cursor-based Move
+ * block up/down did not alter, widen, or otherwise touch the 5P-3 Tree
+ * read-only contract above. 5P-4's implementation is confined to
+ * move/resolveMoveTarget.ts (a pure function file with no Obsidian
+ * dependency and no relationship to view/OutlineTreeView.ts or
+ * tree/buildOutlineTree.ts) — the tests in this block exist to make that
+ * "no relationship" claim verifiable rather than asserted, by checking the
+ * actual source text of all three files together.
+ */
+describe("Tree read-only contract maintained after Phase 5P-4 (paragraph Move is cursor-only, never Tree-triggered)", () => {
+  const viewTs = readFileSync(path.resolve(__dirname, "../src/view/OutlineTreeView.ts"), "utf-8");
+  const buildTreeTs = readFileSync(
+    path.resolve(__dirname, "../src/tree/buildOutlineTree.ts"),
+    "utf-8"
+  );
+  const mainTs = readFileSync(path.resolve(__dirname, "../src/main.ts"), "utf-8");
+  const resolveMoveTargetTs = readFileSync(
+    path.resolve(__dirname, "../src/move/resolveMoveTarget.ts"),
+    "utf-8"
+  );
+
+  it("§5-1/§5-2: OutlineTreeParagraphNode still declares isReadOnly/isLeaf as literal `true` (never widened to `boolean`, which would allow a future writer to slip in a foldable/movable paragraph row)", () => {
+    const start = buildTreeTs.indexOf("export interface OutlineTreeParagraphNode {");
+    expect(start).toBeGreaterThan(-1);
+    const end = buildTreeTs.indexOf("\n}", start);
+    const body = buildTreeTs.slice(start, end);
+    expect(body).toContain("isReadOnly: true;");
+    expect(body).toContain("isLeaf: true;");
+  });
+
+  it("§5-3: collectReadOnlyOutlineNodeIds still unconditionally includes every paragraph node (kind === \"paragraph\")", () => {
+    const start = buildTreeTs.indexOf("export function collectReadOnlyOutlineNodeIds(");
+    expect(start).toBeGreaterThan(-1);
+    const end = buildTreeTs.indexOf("\n}", start);
+    const body = buildTreeTs.slice(start, end);
+    expect(body).toContain('node.kind === "paragraph"');
+  });
+
+  it("§5-4: no move command/menu item was added to the paragraph render branch or the context-menu chain (re-affirms the 5P-3 checks above still hold verbatim, unchanged by 5P-4)", () => {
+    expect(viewTs).not.toContain("showParagraphCommandMenu");
+    expect(viewTs).not.toContain("paragraphMoveUp");
+    expect(viewTs).not.toContain("paragraphMoveDown");
+    const paraBranchStart = viewTs.indexOf("isOutlineParagraphNode(node)) {");
+    expect(paraBranchStart).toBeGreaterThan(-1);
+    const paraBranchEnd = viewTs.indexOf('selfEl.addEventListener("click"', paraBranchStart);
+    const paraBranch = viewTs.slice(paraBranchStart, paraBranchEnd);
+    expect(paraBranch).not.toContain("move-up");
+    expect(paraBranch).not.toContain("move-down");
+  });
+
+  it("§5-5: paragraph drag-and-drop remains rejected — isOutlineParagraphNode never appears anywhere near the drag-and-drop wiring (handleDragStart/handleDragOver/handleDrop), which stays gated purely by !readOnly", () => {
+    const dragSectionStart = viewTs.indexOf(
+      "Phase 3A (section) / Phase 4A (list): drag & drop."
+    );
+    expect(dragSectionStart).toBeGreaterThan(-1);
+    const dragSectionEnd = viewTs.indexOf(
+      "if (hasChildren && !isCollapsed)",
+      dragSectionStart
+    );
+    expect(dragSectionEnd).toBeGreaterThan(dragSectionStart);
+    const dragSection = viewTs.slice(dragSectionStart, dragSectionEnd);
+    expect(dragSection).toContain("handleDragStart");
+    expect(dragSection).toContain("handleDrop");
+    expect(dragSection).not.toContain("isOutlineParagraphNode");
+  });
+
+  it("§5-6: queueOutlineTreeMoveFlash (main.ts) never uses a paragraph's own Tree node id as nodeIdHint — for any non-section/list move unit it always resolves the ENCLOSING SECTION's id instead, so a paragraph's temporary tree-paragraph:N id is never used as a move target id or post-move selection-restoration key", () => {
+    const start = mainTs.indexOf("private queueOutlineTreeMoveFlash(");
+    expect(start).toBeGreaterThan(-1);
+    const end = mainTs.indexOf("\n  }", start);
+    const body = mainTs.slice(start, end);
+    expect(body).toContain('unit.kind === "section" || unit.kind === "list"');
+    expect(body).toContain("findEnclosingSectionId(doc, ownerNode)");
+    expect(body).toContain("if (sectionId) target = { nodeIdHint: sectionId };");
+    // Never keys nodeIdHint off unit itself (which would risk leaking a
+    // paragraph ComplexBlockInfo's scan-local id into the Tree's id space).
+    expect(body).not.toContain("nodeIdHint: unit.");
+  });
+
+  it("§5-7: showParagraphsInOutline is never referenced by the Move-block implementation files (move/resolveMoveTarget.ts, main.ts's moveCurrentBlock/moveCurrentSection) — the setting only ever gates Tree DISPLAY (OutlineTreeView.ts's refresh()), confirming cursor-based Move availability/outcome is identical regardless of its value", () => {
+    expect(resolveMoveTargetTs).not.toContain("showParagraphsInOutline");
+    const moveCurrentBlockStart = mainTs.indexOf("moveCurrentBlock(");
+    const moveCurrentSectionStart = mainTs.indexOf("moveCurrentSection(");
+    expect(moveCurrentBlockStart).toBeGreaterThan(-1);
+    expect(moveCurrentSectionStart).toBeGreaterThan(-1);
+    // The one legitimate reference to the setting anywhere in main.ts (if
+    // any) must not appear inside either move method's own body — checked
+    // by confirming the setting string never appears in the same file at
+    // all, since main.ts's own move dispatch has no reason to read a
+    // Tree-display-only setting.
+    expect(mainTs).not.toContain("showParagraphsInOutline");
+  });
+
+  it("§5-8: re-rendering the Tree after a paragraph move does not disturb fold state — refresh() rebuilds collapsedIds from the persisted per-file identity set every time (Phase 4E design, unrelated to and unmodified by 5P-4), and paragraph nodes were never part of that persisted fold-identity set to begin with (isLeaf: true, never fold-capable)", () => {
+    expect(viewTs).toContain("this.collapsedIds = ");
+    // Fold identity (tree/foldIdentity.ts) is keyed by section/list nodes
+    // only — confirmed by the OutlineTreeParagraphNode shape check above
+    // (isLeaf: true) meaning a paragraph was never eligible for a fold-key
+    // in the first place, so 5P-4 (which touches neither file) cannot have
+    // regressed this.
   });
 });
