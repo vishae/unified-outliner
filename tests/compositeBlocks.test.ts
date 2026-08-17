@@ -150,6 +150,35 @@ describe("matchCompositeBlocks: image-ocr (OCR use case)", () => {
   });
 });
 
+describe("matchCompositeBlocks: paragraph exclusion (Phase 5P-1R)", () => {
+  // Phase 5P-1R made confidently-bounded paragraphs report editability ===
+  // "supported" (parser/complexBlocks.ts's scanParagraphBlocks doc comment).
+  // CompositeBlock candidate collection used to rely on editability alone
+  // to exclude paragraph; collectCandidates now carries an EXPLICIT
+  // `kind === "paragraph"` guard (see parser/compositeBlocks.ts) so this
+  // stays true even though editability can no longer do that job by
+  // itself. These tests pin that guard down directly, using a synthetic
+  // rule that (if paragraph were ever collected as a candidate) would
+  // otherwise match.
+  it("a 'supported' section-level paragraph is never collected as a CompositeBlock candidate, even for a rule that explicitly asks for 'paragraph'", () => {
+    const text = ["- one", "A trailing paragraph."].join("\n");
+    const paragraphRule: CompositeBlockRule[] = [
+      { id: "list-then-paragraph", kindSequence: ["single-line-list", "paragraph"], prefix: "" },
+    ];
+    const composites = match(text, paragraphRule);
+    expect(composites).toHaveLength(0);
+  });
+
+  it("a 'supported' list-item-child paragraph is also never collected as a CompositeBlock candidate", () => {
+    const text = ["- one", "  child paragraph of one", "- two"].join("\n");
+    const paragraphRule: CompositeBlockRule[] = [
+      { id: "solo-paragraph", kindSequence: ["paragraph"], prefix: "" },
+    ];
+    const composites = match(text, paragraphRule);
+    expect(composites).toHaveLength(0);
+  });
+});
+
 describe("matchCompositeBlocks: rule priority", () => {
   it("when two rules could both start matching at the same candidate, only the higher-priority (earlier array) rule is used", () => {
     // "image-ocr" and "image-quote" can never both match the SAME second

@@ -29,18 +29,33 @@
  *
  * Paragraph-as-move-unit note: docs/mixed-structure-spec.md §6 and
  * parser/complexBlocks.ts's scanParagraphBlocks doc comment establish that
- * paragraphs are NEVER a drag & drop / Partial Edit Pane / Tree-node target
- * ("read-only" editability, a permanent policy for those features). This
- * ticket does not revisit that policy — a paragraph still never becomes a
- * Tree row, is still not addressable by id outside a single Move block
- * invocation, and still cannot be opened in the Partial Edit Pane. "Move
- * block" is a narrower, new capability: cut-and-reinsert a contiguous
+ * paragraphs are NEVER a drag & drop / Partial Edit Pane / Tree-node target.
+ * This ticket does not revisit that policy — a paragraph still never
+ * becomes a Tree row, is still not addressable by id outside a single Move
+ * block invocation, and still cannot be opened in the Partial Edit Pane.
+ * "Move block" is a narrower, new capability: cut-and-reinsert a contiguous
  * paragraph range in place, exactly the same swapBlocks() primitive
  * section/list moves already use — never a per-line splice. See
  * isSafeToMoveComplexBlock's doc comment for the precise safety gate this
- * introduces, which deliberately does NOT just reuse ComplexBlockInfo's
- * `editability` field as-is (that field's "read-only" value has a different,
- * pre-existing meaning for paragraphs specifically).
+ * introduces.
+ *
+ * Phase 5P-1R correction (2026-08-17): Phase 5P-1 made paragraphs owned by a
+ * list item (indented to the item's own content-start column) newly
+ * recognizable by parser/complexBlocks.ts's scanParagraphBlocks. Because
+ * this module's ORIGINAL safety gate keyed only on editability (any
+ * confidently-bounded paragraph was move-safe, regardless of what owns it),
+ * that Phase 5P-1 recognition change would have silently WIDENED Move
+ * block's existing surface to include list-item-child paragraphs — a
+ * capability Phase 5P explicitly reserves for a later, separately-approved
+ * sub-phase (5P-4, "隣接交換の正式契約化" — see
+ * docs/phase5p_paragraph-block-foundation-plan.md §6). isSafeToMoveComplexBlock
+ * below now explicitly excludes any paragraph whose parentId resolves to a
+ * list-typed node, restoring Move block's paragraph surface to EXACTLY what
+ * it was before Phase 5P-1 (a paragraph owned by a section, or by nothing —
+ * never by a list item), independent of Phase 5P-1R's separate
+ * "read-only" → "supported" editability change (see
+ * parser/complexBlocks.ts's scanParagraphBlocks doc comment) for confidently-
+ * bounded paragraphs.
  */
 import {
   BlockNode,
@@ -88,15 +103,34 @@ export interface ResolveMoveUnitResult {
   reason?: ResolveMoveUnitReason;
 }
 
-function isSafeToMoveComplexBlock(block: ComplexBlockInfo): boolean {
-  // Paragraph's "read-only" editability means something narrower than
-  // "unsafe" here — see this module's top doc comment. A paragraph is safe
-  // to relocate as a whole via Move block precisely when its boundary was
-  // confidently determined at all (the ordinary case scanParagraphBlocks
-  // reports as "read-only"); an "ambiguous" paragraph (boundary genuinely
-  // uncertain — e.g. it crosses an existing section/list boundary) is never
-  // safe, matching the ticket's "境界を安全に確定できない場合は移動を拒否".
-  if (block.kind === "paragraph") return block.editability === "read-only";
+function isSafeToMoveComplexBlock(
+  doc: ParsedDocument,
+  block: ComplexBlockInfo
+): boolean {
+  // Phase 5P-1R: paragraph editability "supported" now means only "boundary/
+  // parent/depth confidently resolved" — it does NOT by itself mean "safe to
+  // move" (see this module's top doc comment and model/complexBlock.ts's
+  // BlockEditability doc comment). A paragraph is safe to relocate as a
+  // whole via Move block only when BOTH:
+  //   (a) its boundary was confidently determined at all (editability ===
+  //       "supported"; an "ambiguous" paragraph — boundary genuinely
+  //       uncertain, e.g. it crosses an existing section/list boundary — is
+  //       never safe, matching the ticket's
+  //       "境界を安全に確定できない場合は移動を拒否"), AND
+  //   (b) it is NOT owned by a list item. List-item-child paragraphs only
+  //       became recognizable in Phase 5P-1; moving them via this command is
+  //       explicitly deferred to Phase 5P-4 ("隣接交換の正式契約化"). This
+  //       restores Move block's paragraph surface to exactly what it was
+  //       before Phase 5P-1 (a paragraph owned by a section, or by nothing —
+  //       never by a list item).
+  if (block.kind === "paragraph") {
+    if (block.editability !== "supported") return false;
+    if (block.parentId) {
+      const parent = doc.nodes.get(block.parentId);
+      if (parent && isListNode(parent)) return false;
+    }
+    return true;
+  }
   // callout/blockquote/fenced-code/table: only the scanner's strongest
   // confidence level is safe to move — "unsupported" (unmodeled nested
   // structure) and "ambiguous" (boundary itself uncertain) are both
@@ -115,7 +149,7 @@ function resolveComplexUnitAt(
   if (!block) {
     return { unit: null, reason: "no-block" };
   }
-  if (!isSafeToMoveComplexBlock(block)) {
+  if (!isSafeToMoveComplexBlock(doc, block)) {
     return { unit: null, reason: "boundary-unknown" };
   }
   return {
@@ -317,7 +351,7 @@ export function findComplexSiblingTarget(
   const candidates = scan.blocks.filter((b) => {
     if (b.id === unit.complexBlockId) return false;
     if (b.parentId !== unit.parentId) return false;
-    return isSafeToMoveComplexBlock(b);
+    return isSafeToMoveComplexBlock(doc, b);
   });
 
   let picked: ComplexBlockInfo | null = null;

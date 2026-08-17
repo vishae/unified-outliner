@@ -388,7 +388,8 @@ describe("scanThematicBreakBlocks", () => {
 });
 
 // ---------------------------------------------------------------------
-// Paragraph — Phase 5P-1: range/parent/depth contract (never "supported")
+// Paragraph — Phase 5P-1: range/parent/depth contract, Phase 5P-1R:
+// "supported" editability correction
 //
 // Phase 5C originally excluded EVERY line owned by a list node from
 // scanParagraphBlocks entirely. Phase 5P-1 (docs/phase5p_paragraph-block-
@@ -398,19 +399,30 @@ describe("scanThematicBreakBlocks", () => {
 // parentId set to the list item's id. A line owned by the item but indented
 // LESS than contentColumn remains fully invisible, exactly as Phase 5C
 // originally treated ALL list-owned lines — it is genuinely the item's own
-// single continuation text, not an independently addressable unit. No
-// paragraph instance's editability changes as a result of any of this: it
-// is always "read-only" or "ambiguous", never "supported" (5P-1 authorizes
-// no operation — see that plan doc's §3/§7).
+// single continuation text, not an independently addressable unit.
+//
+// Phase 5P-1R (2026-08-17) correction: a confidently-bounded paragraph (both
+// section-level and list-item-child) now reports editability === "supported"
+// — matching model/complexBlock.ts's own definition of "supported" as
+// "boundary/parent/depth confidently resolved," which Phase 5P-1's original
+// permanent "read-only" contradicted. Critically, "supported" here still
+// authorizes NO structural-edit operation by itself: every command/
+// projection that consumes editability must explicitly allow-list which
+// kinds/instances it accepts (see parser/compositeBlocks.ts's
+// collectCandidates and move/resolveMoveTarget.ts's
+// isSafeToMoveComplexBlock, both of which now carry an explicit paragraph
+// guard rather than relying on editability alone). A genuinely uncertain
+// boundary (crosses an existing section/list boundary, disagreeing owners,
+// etc.) still reports "ambiguous", never "supported".
 // ---------------------------------------------------------------------
 describe("scanParagraphBlocks", () => {
-  it("recognizes a section's body paragraph as read-only, never supported", () => {
+  it("recognizes a section's body paragraph as supported once its boundary is confidently resolved (Phase 5P-1R)", () => {
     const text = ["# H", "Just a paragraph.", "More paragraph."].join("\n");
     const doc = parseDocument(text);
     const { blocks, diagnostics } = scanParagraphBlocks(doc);
     expect(diagnostics).toEqual([]);
     expect(blocks).toHaveLength(1);
-    expect(blocks[0].editability).toBe("read-only");
+    expect(blocks[0].editability).toBe("supported");
     expect(blocks[0].parentId).toBe(sectionIdOf(doc, "H"));
     expect(blocks[0].range).toEqual({ startLine: 1, endLine: 2 });
   });
@@ -421,17 +433,17 @@ describe("scanParagraphBlocks", () => {
     const { blocks } = scanParagraphBlocks(doc);
     expect(blocks).toHaveLength(1);
     expect(blocks[0].parentId).toBeNull();
-    expect(blocks[0].editability).toBe("read-only");
+    expect(blocks[0].editability).toBe("supported");
   });
 
-  it("(Phase 5P-1 contract change) a continuation line indented to the list item's own content column IS now recognized as that item's child paragraph — was fully invisible under Phase 5C", () => {
+  it("(Phase 5P-1 contract change) a continuation line indented to the list item's own content column IS now recognized as that item's child paragraph — was fully invisible under Phase 5C — and reports 'supported' (Phase 5P-1R)", () => {
     const text = ["- item1", "  continuation of item1", "- item2"].join("\n");
     const doc = parseDocument(text);
     const { blocks } = scanParagraphBlocks(doc);
     expect(blocks).toHaveLength(1);
     expect(blocks[0].range).toEqual({ startLine: 1, endLine: 1 });
     expect(blocks[0].parentId).toBe(listIdOf(doc, "item1"));
-    expect(blocks[0].editability).toBe("read-only");
+    expect(blocks[0].editability).toBe("supported");
   });
 
   it("a continuation line indented LESS than the item's content column stays invisible (still the item's own continuation text, unchanged from Phase 5C)", () => {
@@ -485,7 +497,7 @@ describe("scanParagraphBlocks", () => {
     expect(listChild.parentId).not.toBe(sectionLevel.parentId);
   });
 
-  it("never produces editability 'supported' for any paragraph, across mixed scenarios including list-item-child paragraphs", () => {
+  it("(Phase 5P-1R) produces editability 'supported' for every confidently-bounded paragraph, across mixed scenarios including list-item-child paragraphs — but this never widens what any command actually accepts", () => {
     const text = [
       "# H",
       "Body one.",
@@ -498,7 +510,7 @@ describe("scanParagraphBlocks", () => {
     const doc = parseDocument(text);
     const { blocks } = scanParagraphBlocks(doc);
     expect(blocks.length).toBeGreaterThan(0);
-    for (const b of blocks) expect(b.editability).not.toBe("supported");
+    for (const b of blocks) expect(b.editability).toBe("supported");
   });
 });
 
@@ -734,7 +746,7 @@ describe("scanComplexBlocks", () => {
     }
   });
 
-  it("a combined document recognizes one of each kind as supported (or read-only for paragraph), with every kind present", () => {
+  it("a combined document recognizes one of each kind as supported, with every kind present", () => {
     const text = [
       "# H",
       "> [!note]",
@@ -756,18 +768,19 @@ describe("scanComplexBlocks", () => {
     const doc = parseDocument(text);
     const { blocks } = scanComplexBlocks(doc);
 
-    // No block of any kind is ever "supported" for paragraph, and no
-    // recognized block is left as the reserved-but-unused "unsupported"
+    // No recognized block is left as the reserved-but-unused "unsupported"
     // value in this scenario (only ambiguous/unterminated-fence cases use
     // "unsupported", via the nested-callout path — see scanCalloutBlocks).
-    expect(blocks.every((b) => !(b.kind === "paragraph" && b.editability === "supported"))).toBe(true);
+    // Phase 5P-1R: a confidently-bounded paragraph legitimately reports
+    // "supported" too now — see the trailingParagraph assertion below —
+    // this no longer needs (or gets) a special exclusion.
 
     // Exactly one genuinely standalone, non-overlapping block of each kind
-    // is supported/read-only as expected. (The paragraph scanner also
-    // redundantly candidates the callout's, blockquote's, and table's own
-    // lines — see the "...own rows/lines..." tests above for why — those
-    // extra paragraph candidates are present too, but downgraded to
-    // "ambiguous" by merge, never the other way around.)
+    // is supported as expected. (The paragraph scanner also redundantly
+    // candidates the callout's, blockquote's, and table's own lines — see
+    // the "...own rows/lines..." tests above for why — those extra
+    // paragraph candidates are present too, but downgraded to "ambiguous"
+    // by merge, never the other way around.)
     const callout = blocks.find((b) => b.kind === "callout")!;
     const blockquote = blocks.find((b) => b.kind === "blockquote")!;
     const table = blocks.find((b) => b.kind === "table")!;
@@ -779,7 +792,7 @@ describe("scanComplexBlocks", () => {
     expect(blockquote.editability).toBe("supported");
     expect(table.editability).toBe("supported");
     expect(fenced.editability).toBe("supported");
-    expect(trailingParagraph.editability).toBe("read-only");
+    expect(trailingParagraph.editability).toBe("supported");
 
     const kinds = new Set(blocks.map((b) => b.kind));
     expect(kinds).toEqual(new Set(["callout", "blockquote", "fenced-code", "table", "paragraph"]));
@@ -810,7 +823,7 @@ describe("describeComplexBlockRejection", () => {
     expect(describeComplexBlockRejection(result, "does-not-exist")).toEqual({ blocked: false });
   });
 
-  it("reports blocked: true with kind and a reason for a recognized paragraph block", () => {
+  it("reports blocked: true with kind and a reason for a recognized paragraph block (Phase 5P-1R: editability 'supported', still blocked pending an explicit allow-list — see this function's caller-side gating)", () => {
     const doc = parseDocument(["# H", "Just a paragraph."].join("\n"));
     const result = scanComplexBlocks(doc);
     const paragraphId = result.blocks.find((b) => b.kind === "paragraph")!.id;
@@ -818,7 +831,7 @@ describe("describeComplexBlockRejection", () => {
     expect(rejection.blocked).toBe(true);
     if (rejection.blocked) {
       expect(rejection.kind).toBe("paragraph");
-      expect(rejection.editability).toBe("read-only");
+      expect(rejection.editability).toBe("supported");
       expect(rejection.reason.length).toBeGreaterThan(0);
     }
   });

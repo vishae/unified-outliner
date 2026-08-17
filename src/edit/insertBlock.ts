@@ -26,7 +26,8 @@
  */
 
 import { isListNode, ListBlockNode, ParsedDocument } from "../model/block";
-import { indentColumnsOf, leadingWhitespace, TAB_WIDTH } from "../parser/parseDocument";
+import { leadingWhitespace, TAB_WIDTH } from "../parser/parseDocument";
+import { listItemContentColumn as contentColumnOf } from "../parser/listContentColumn";
 import { expandToListRegion } from "../move/moveBlock";
 import { normalizeOrderedMarkers } from "../move/renumber";
 
@@ -218,33 +219,20 @@ export function insertChildListItem(
   };
 }
 
-const LIST_MARKER_PREFIX_RE = /^([ \t]*)([-*+]|\d+[.)])([ \t]*)/;
-
 /**
- * The column at which `item`'s own text content begins — read directly from
- * its actual line text (leading whitespace + marker + separating
- * whitespace), never assumed from a fixed constant. Uses
- * parser/parseDocument.ts's own indentColumnsOf, which already performs
- * correct tab-stop math (a tab snaps to the next multiple of TAB_WIDTH from
- * the CURRENT running column, not a flat +TAB_WIDTH) — calling it on the
- * whole leadWs+marker+gapWs prefix in one pass (rather than summing
- * separately-computed pieces) is what keeps that tab-stop math correct
- * when the separating whitespace itself contains a tab.
- *
- * When the item has no separating whitespace after its marker at all (an
- * empty item, e.g. a bare "-" with nothing following), falls back to
- * exactly one column past the marker as the minimal conventional gap.
- * Exported for tests and for reuse if a future ticket needs the same
- * column for a different purpose.
+ * The column at which `item`'s own text content begins. Phase 5P-1R:
+ * `contentColumnOf` is now an ALIAS of parser/listContentColumn.ts's
+ * `listItemContentColumn` (imported above), which is the SOLE
+ * implementation (see that module's doc comment) — this file no longer
+ * carries its own copy. Re-exported here (rather than only imported) so
+ * every existing external caller/import site (edit/renameBlock.ts,
+ * tests/insertBlock.test.ts) keeps working unchanged by name, while this
+ * module's OWN code (insertChildListItem, above) also has a usable local
+ * binding — a bare `export { x as y } from "…"` re-export does NOT
+ * introduce a local identifier `y`, so importing under the alias first and
+ * re-exporting the resulting local binding is required for both to work.
  */
-export function contentColumnOf(doc: ParsedDocument, item: ListBlockNode): number {
-  const line = doc.lines[item.range.startLine];
-  const m = line.match(LIST_MARKER_PREFIX_RE);
-  if (!m) return item.indentColumns + TAB_WIDTH;
-  const [, leadWs, marker, gapWs] = m;
-  const col = indentColumnsOf(leadWs + marker + gapWs);
-  return gapWs.length === 0 ? col + 1 : col;
-}
+export { contentColumnOf };
 
 /**
  * Build a leading-whitespace string reaching `targetColumns`, choosing tabs

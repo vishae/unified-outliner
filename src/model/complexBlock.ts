@@ -81,23 +81,31 @@ export type ComplexBlockKind =
  *   not conflict with any existing section/list boundary, AND (for callout/
  *   blockquote) its internal content is fully accounted for by this phase's
  *   model (no embedded/nested callout-like structure it doesn't decompose).
- *   A FUTURE phase (5D onward) may treat this as an operable unit. Phase 5C
- *   itself performs no operations regardless of this value.
- * - "read-only": the boundary is confidently determined, but no operation is
- *   authorized for THIS instance yet. Only "paragraph" ever gets this value,
- *   and its meaning was narrowed by Phase 5P-0 (2026-08-15): originally (5C)
- *   it meant "permanent, deliberate non-goal for structural operations on
- *   this whole kind"; docs/mixed-structure-spec.md §6 and
- *   docs/phase5c_block-model-and-tree-display-spec.md §4 now instead frame
- *   it as "not yet authorized" — a future 5P sub-phase (see
- *   docs/phase5p_paragraph-block-foundation-plan.md) may authorize specific
- *   operations (cursor resolution, hoist, optional Tree display, adjacent
- *   swap) for paragraph, at which point THOSE authorized instances would use
- *   "supported" instead. As of Phase 5P-1, no paragraph instance is ever
- *   "supported" — parser/complexBlocks.ts's scanner still always assigns
- *   "read-only" or "ambiguous" to every paragraph it recognizes; only the
- *   WORDING of what "read-only" implies for paragraph going forward has
- *   changed, not the observable behavior.
+ *   A FUTURE phase (5D onward for callout/blockquote/fenced-code/table; 5P-2
+ *   onward for paragraph) MAY treat this as an operable unit, but "supported"
+ *   BY ITSELF never authorizes anything — Phase 5C/5D/5P all perform no
+ *   operation on a block merely because it is "supported"; each individual
+ *   command/projection (Move block, CompositeBlock matching, Partial Edit
+ *   resolution, the Phase 5P-2 paragraph resolver, ...) explicitly
+ *   allow-lists which kinds and which additional conditions (e.g. "not owned
+ *   by a list item") it accepts, and re-derives that allow-list check itself
+ *   rather than trusting this field alone. Phase 5P-1R (2026-08-17)
+ *   established this explicitly for paragraph specifically — see
+ *   parser/complexBlocks.ts's scanParagraphBlocks doc comment — after a
+ *   review found that Phase 5P-1's original choice to keep paragraph
+ *   permanently "read-only" (below) contradicted this very definition once
+ *   a paragraph's boundary/parent/depth were confidently resolved.
+ * - "read-only": the boundary is confidently determined, but this SPECIFIC
+ *   instance is not being offered as a candidate at all — e.g. it lost a
+ *   mergeBlockRangesSafely priority conflict in a way that still leaves its
+ *   OWN boundary certain (rare; most such conflicts downgrade to
+ *   "ambiguous" instead — see that function's doc comment), or a future
+ *   scanner wants to report "boundary known, but I am intentionally not
+ *   offering this as a candidate for any purpose". As of Phase 5P-1R,
+ *   parser/complexBlocks.ts's scanParagraphBlocks no longer assigns this
+ *   value to any paragraph it recognizes (it assigns "supported" or
+ *   "ambiguous" only — see that function's doc comment for why); this value
+ *   remains part of the type for other future uses.
  * - "unsupported": the block's OWN boundary (start/end line range) IS
  *   confidently known, but its INTERNAL content contains structure this
  *   phase does not decompose or model — e.g. a callout containing a nested

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseDocument } from "../src/parser/parseDocument";
+import { scanComplexBlocks } from "../src/parser/complexBlocks";
 import {
   describeMoveUnit,
   findComplexSiblingTarget,
@@ -161,6 +162,132 @@ describe("findComplexSiblingTarget / moveComplexBlock: paragraph & complex-block
     expect(paragraph.kind).toBe("paragraph");
     const target = findComplexSiblingTarget(doc, paragraph, "up");
     expect(target).toEqual({ kind: "none", reason: "no-sibling" });
+  });
+});
+
+describe("Phase 5P-1R: list-item-child paragraph Move block exclusion (A-2)", () => {
+  // Phase 5P-1 made parser/complexBlocks.ts's scanParagraphBlocks newly
+  // recognize a list item's own child paragraph (a continuation line
+  // indented to the item's content-start column) as a ComplexBlockInfo with
+  // parentId set to that list item's id — before 5P-1 such a line was
+  // entirely invisible to the complex-block scanner. Because this module's
+  // ORIGINAL safety gate (isSafeToMoveComplexBlock) keyed only on
+  // editability, that recognition change would have silently WIDENED Move
+  // block's existing surface to include list-item-child paragraphs. These
+  // tests pin the fix down: list-item-child paragraphs stay excluded from
+  // Move block, both as a move UNIT and as a sibling swap TARGET, until
+  // Phase 5P-4 explicitly designs that capability.
+
+  it("resolveMoveUnit's cursor-based resolution never treats a list-item-child paragraph line as a standalone 'paragraph' move unit — rule 2 ('cursor anywhere in a list item -> that list subtree') still wins, exactly as before Phase 5P-1 recognized the line at all", () => {
+    const text = ["- item1", "  Child paragraph of item1.", "- item2"].join("\n");
+    const doc = parseDocument(text);
+    const r = resolveMoveUnit(doc, 1);
+    expect(r.unit?.kind).toBe("list");
+  });
+
+  it("a callout/blockquote nested inside a list item's continuation does NOT newly swap with that same list item's child paragraph, even though both now report editability 'supported' and share the same parentId, separated only by a blank line", () => {
+    // The blank line matters here: scanParagraphBlocks groups contiguous
+    // non-blank owned lines into ONE paragraph candidate regardless of
+    // '>' prefixes, so WITHOUT a blank line separating them, the
+    // blockquote's own text and the child paragraph's text would merge
+    // into a single candidate range that overlaps the blockquote and gets
+    // downgraded to "ambiguous" by mergeBlockRangesSafely — a different
+    // (already-covered) scenario, not the one this test targets. A blank
+    // line breaks that merge while still counting as "adjacent" for
+    // findComplexSiblingTarget's own "nothing but blank lines between
+    // them" rule, and does NOT close the enclosing list item (Phase 5C/
+    // parser/parseDocument.ts: "Blank lines never close items directly").
+    const text = [
+      "- item1",
+      "  > quoted continuation",
+      "",
+      "  Child paragraph of item1.",
+      "- item2",
+    ].join("\n");
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const blockquote = scan.blocks.find((b) => b.kind === "blockquote")!;
+    const childParagraph = scan.blocks.find(
+      (b) => b.kind === "paragraph" && doc.lines[b.range.startLine].includes("Child paragraph")
+    )!;
+    // Sanity: confirm the scenario is real (same parentId, both supported) —
+    // otherwise this test would trivially pass for the wrong reason.
+    expect(childParagraph.parentId).toBe(blockquote.parentId);
+    expect(childParagraph.editability).toBe("supported");
+
+    const unit = {
+      kind: "blockquote" as const,
+      range: blockquote.range,
+      parentId: blockquote.parentId,
+      complexBlockId: blockquote.id,
+    };
+    const target = findComplexSiblingTarget(doc, unit, "down", scan);
+    expect(target).toEqual({ kind: "none", reason: "no-sibling" });
+    const outcome = moveComplexBlock(doc, unit, "down", scan);
+    expect(outcome.changed).toBe(false);
+    expect(outcome.lines).toEqual(doc.lines);
+  });
+
+  it("a section-level paragraph never picks an adjacent list-item-child paragraph as a sibling target (different parentId — section vs. list item)", () => {
+    // A blank line separates the two paragraphs so they scan as two
+    // distinct candidates (see the blockquote/paragraph test above for why
+    // a zero-gap contiguous run would otherwise merge them into one
+    // cross-boundary, ambiguous range instead of exercising the different-
+    // parentId rejection this test targets).
+    const text = [
+      "# H",
+      "- item1",
+      "  Child paragraph of item1.",
+      "",
+      "Trailing section-level paragraph.",
+    ].join("\n");
+    const doc = parseDocument(text);
+    const trailing = resolveMoveUnit(doc, 4).unit!;
+    expect(trailing.kind).toBe("paragraph");
+    const target = findComplexSiblingTarget(doc, trailing, "up");
+    expect(target).toEqual({ kind: "none", reason: "no-sibling" });
+    const outcome = moveComplexBlock(doc, trailing, "up");
+    expect(outcome.changed).toBe(false);
+    expect(outcome.lines).toEqual(doc.lines);
+  });
+
+  it("two sibling list items' own child paragraphs are never offered as swap targets for each other (cross-list-item, different parentId)", () => {
+    const text = [
+      "- item1",
+      "  Child paragraph of item1.",
+      "- item2",
+      "  Child paragraph of item2.",
+    ].join("\n");
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const child1 = scan.blocks.find((b) => doc.lines[b.range.startLine].includes("item1."))!;
+    const child2 = scan.blocks.find((b) => doc.lines[b.range.startLine].includes("item2."))!;
+    expect(child1.parentId).not.toBe(child2.parentId);
+
+    const unit = {
+      kind: "paragraph" as const,
+      range: child1.range,
+      parentId: child1.parentId,
+      complexBlockId: child1.id,
+    };
+    const target = findComplexSiblingTarget(doc, unit, "down", scan);
+    expect(target).toEqual({ kind: "none", reason: "no-sibling" });
+    const outcome = moveComplexBlock(doc, unit, "down", scan);
+    expect(outcome.changed).toBe(false);
+    expect(outcome.lines).toEqual(doc.lines);
+  });
+
+  it("section-level paragraph Move block (the pre-5P-1 approved case) is unaffected — still swaps normally", () => {
+    // Regression pin for "section-level paragraph Move block scope is not
+    // expanded beyond previously-approved cases" — same shape as the
+    // pre-existing 'swaps two adjacent paragraphs under the same section'
+    // test above, kept here as an explicit 5P-1R checkpoint.
+    const doc = parseDocument(["# H", "paragraph A", "", "paragraph B"].join("\n"));
+    const a = resolveMoveUnit(doc, 1).unit!;
+    expect(a.kind).toBe("paragraph");
+    const outcome = moveComplexBlock(doc, a, "down");
+    expect(outcome.changed).toBe(true);
+    expect(outcome.lines).toEqual(["# H", "paragraph B", "", "paragraph A"]);
   });
 });
 

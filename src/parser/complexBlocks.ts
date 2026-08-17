@@ -121,7 +121,7 @@
  * a list item's continuation, which correctly resolves parentId to that
  * list item (the owner need not be a section).
  */
-import { BlockNode, isListNode, ListBlockNode, LineRange, ParsedDocument } from "../model/block";
+import { BlockNode, isListNode, LineRange, ParsedDocument } from "../model/block";
 import {
   BlockDiagnostic,
   ComplexBlockInfo,
@@ -129,7 +129,8 @@ import {
   ComplexBlockRejection,
   ComplexBlockScanResult,
 } from "../model/complexBlock";
-import { indentColumnsOf, isBlankLine, leadingWhitespace, TAB_WIDTH } from "./parseDocument";
+import { indentColumnsOf, isBlankLine, leadingWhitespace } from "./parseDocument";
+import { listItemContentColumn } from "./listContentColumn";
 
 // Intentionally byte-identical to parser/parseDocument.ts's own HEADING_RE /
 // LIST_RE — see this file's top doc comment for why these are duplicated
@@ -152,34 +153,6 @@ const DELIMITER_CELL_RE = /^:?-+:?$/;
 // heading disambiguation described in its own doc comment.
 const THEMATIC_BREAK_RE =
   /^[ ]{0,3}(?:(-)[ \t]*(?:-[ \t]*){2,}|(\*)[ \t]*(?:\*[ \t]*){2,}|(_)[ \t]*(?:_[ \t]*){2,})$/;
-
-// Phase 5P-1: intentionally byte-identical to edit/insertBlock.ts's own
-// LIST_MARKER_PREFIX_RE / contentColumnOf (see listItemContentColumn below).
-// Duplicated — not imported — for the same layering reason HEADING_RE/
-// LIST_RE are duplicated at the top of this file: parser/* must never
-// depend on edit/*, which itself already depends on parser/* (see
-// parser/compositeBlocks.ts's resolveMemberSectionId doc comment for the
-// same rule applied elsewhere in this codebase). Any future change to
-// insertBlock.ts's contentColumnOf MUST be mirrored here.
-const LIST_MARKER_PREFIX_RE = /^([ \t]*)([-*+]|\d+[.)])([ \t]*)/;
-
-/**
- * The column at which `item`'s own text content begins — see
- * edit/insertBlock.ts's contentColumnOf for the full rationale (this is a
- * byte-identical duplicate, not a re-derivation). Used by scanParagraphBlocks
- * (5P-1) to decide whether a continuation line indented AT LEAST this far is
- * that list item's own CHILD paragraph, as opposed to marginal
- * under-indented continuation text that stays fully invisible to this
- * scanner (see scanParagraphBlocks's own doc comment).
- */
-function listItemContentColumn(doc: ParsedDocument, item: ListBlockNode): number {
-  const line = doc.lines[item.range.startLine];
-  const m = line.match(LIST_MARKER_PREFIX_RE);
-  if (!m) return item.indentColumns + TAB_WIDTH;
-  const [, leadWs, marker, gapWs] = m;
-  const col = indentColumnsOf(leadWs + marker + gapWs);
-  return gapWs.length === 0 ? col + 1 : col;
-}
 
 /**
  * Phase 5P-1's "正しい深さ" contract element: the depth a recognized
@@ -734,19 +707,50 @@ export function scanThematicBreakBlocks(doc: ParsedDocument): ComplexBlockScanRe
 
 /**
  * Paragraph recognition — a range/parent/depth supplier for Phase 5P's
- * "basic block" foundation (see docs/phase5p_paragraph-block-foundation-plan.md),
- * inherited unchanged from Phase 5C's original scanner. Paragraph blocks
- * still NEVER get editability "supported" in this phase (5P-1 adds no
- * operation of any kind — see this file's own restraint below) — only
- * "read-only" (boundary confidently known; no operation is authorized for
- * this instance YET, not "permanently forbidden" — the meaning of
- * "read-only" itself was narrowed by Phase 5P-0, see
- * docs/phase5c_block-model-and-tree-display-spec.md §4 and
- * docs/mixed-structure-spec.md §6) or "ambiguous" (boundary genuinely
- * uncertain). Nothing about this function's output is wired into any Tree
- * display, drag & drop, addition/deletion, or Partial Edit path — Phase 5P-1
- * is recognition only; see the plan doc's §7 "意図的な非対象" list for what
- * remains out of scope.
+ * "basic block" foundation (see docs/phase5p_paragraph-block-foundation-plan.md).
+ *
+ * Phase 5P-1R editability correction (2026-08-17): a 5P-1 review found that
+ * pinning paragraph's editability to "read-only" forever, even after its
+ * boundary/parent/depth are confidently resolved, contradicted Phase 5P-0's
+ * own redefinition of what these values mean (model/complexBlock.ts's
+ * BlockEditability doc comment) — "supported" is supposed to mean "boundary
+ * confirmed, MAY become an operable unit once some command explicitly
+ * allow-lists it", which is exactly the state a confidently-resolved
+ * paragraph is in. This function now assigns:
+ *   - "supported": boundary/parent/depth resolved without ambiguity (the
+ *     ordinary case, both for a section/top-level paragraph and for a
+ *     Phase 5P-1 list-item-child paragraph).
+ *   - "ambiguous": boundary genuinely uncertain (crosses an existing
+ *     section/list boundary — see resolveParentId — or lost a
+ *     mergeBlockRangesSafely priority conflict against a higher-priority
+ *     kind, e.g. a table/callout occupying the same lines).
+ * "read-only" is no longer assigned by this function at all (it remains a
+ * valid BlockEditability value for other uses; a caller wanting to reject a
+ * SPECIFIC "supported" paragraph for a specific operation does so via its
+ * own explicit allow-list check, not by reading a different editability
+ * value here — see move/resolveMoveTarget.ts's isSafeToMoveComplexBlock and
+ * parser/compositeBlocks.ts's collectCandidates, both of which now
+ * explicitly gate paragraph rather than relying on this scanner to do it
+ * for them).
+ *
+ * IMPORTANT — "supported" here still authorizes NOTHING by itself. Phase
+ * 5P-1R adds no Tree display, drag & drop, add/delete/rename, indent/
+ * outdent, or general adjacent-swap capability for any paragraph, in either
+ * the section/top-level or the list-item-child case. Every existing
+ * consumer of ComplexBlockScanResult that reacts to `editability ===
+ * "supported"` was individually re-audited for this change:
+ *   - parser/compositeBlocks.ts's collectCandidates now excludes kind
+ *     "paragraph" explicitly (previously this exclusion was an accidental
+ *     side effect of paragraph never reaching "supported" at all).
+ *   - parser/compositeBlocks.ts's deletability/standalone-movability
+ *     evaluators, and edit/partialEdit.ts's extractComplexBlockText, were
+ *     ALREADY kind-gated to callout/blockquote/fenced-code/table before
+ *     touching `editability` — paragraph reaching "supported" changes
+ *     nothing for any of them.
+ *   - move/resolveMoveTarget.ts's isSafeToMoveComplexBlock keeps paragraph
+ *     move-eligibility pinned to exactly its pre-5P-1 surface (a paragraph
+ *     NOT owned by a list item) regardless of this editability change — see
+ *     that function's own doc comment.
  *
  * A candidate line must be: non-blank; not frontmatter; not fenced-code; not
  * a heading line; not a list-marker line. Its treatment then depends on
@@ -756,8 +760,10 @@ export function scanThematicBreakBlocks(doc: ParsedDocument): ComplexBlockScanRe
  *     Phase 5C originally recognized it.
  *   - Owned by a LIST item — Phase 5P-1 narrows the original Phase 5C
  *     blanket exclusion. A line indented AT LEAST as far as the owning list
- *     item's own content-start column (listItemContentColumn, a byte-
- *     identical duplicate of edit/insertBlock.ts's contentColumnOf) is now a
+ *     item's own content-start column (listItemContentColumn,
+ *     parser/listContentColumn.ts — the single shared implementation also
+ *     used by edit/insertBlock.ts's contentColumnOf, extracted in 5P-1R to
+ *     eliminate a prior byte-identical-duplicate drift risk) is now a
  *     candidate, and resolves (via the existing resolveParentId call below,
  *     unchanged) to that list item's own id as parentId — this is the
  *     "list item の子になる paragraph" case docs/phase5p_paragraph-block-
@@ -842,9 +848,9 @@ export function scanParagraphBlocks(doc: ParsedDocument): ComplexBlockScanResult
       range,
       parentId,
       childIds: [],
-      editability: "read-only",
+      editability: "supported",
       reason:
-        "paragraph blocks carry range/parent/depth information only in Phase 5P-1; no structural-edit operation is authorized for this instance yet (see docs/mixed-structure-spec.md §6, docs/phase5p_paragraph-block-foundation-plan.md)",
+        "paragraph blocks' boundary/parent/depth are confidently resolved (Phase 5P-1R), but no structural-edit operation is authorized for this instance yet — each command/projection explicitly allow-lists what it accepts (see docs/mixed-structure-spec.md §6, docs/phase5p_paragraph-block-foundation-plan.md)",
     });
   }
 

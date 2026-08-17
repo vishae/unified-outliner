@@ -12,3 +12,13 @@ coverage/
 .env.*
 !.env.example
 scratch_test.txt
+
+# Phase 5P-1R (A-4): debris left behind by interrupted FUSE-mount git
+# recovery attempts (stale lock-cleanup logs, staging scratch dirs) — never
+# meant to be tracked, now explicitly ignored instead of handled ad hoc.
+add_attempt_*.log
+commit_err*.log
+add_err.log*
+*.stale
+*.stale.*
+_to_delete/

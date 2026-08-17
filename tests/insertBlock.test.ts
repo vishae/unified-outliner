@@ -7,6 +7,7 @@ import {
   insertSiblingListItem,
   insertSiblingSection,
 } from "../src/edit/insertBlock";
+import { listItemContentColumn } from "../src/parser/listContentColumn";
 import { FIX_BASIC } from "./fixtures";
 
 function sectionIdOf(doc: ParsedDocument, headingText: string): string {
@@ -148,6 +149,43 @@ describe("contentColumnOf", () => {
     const doc = parseDocument("-");
     const item = doc.nodes.get(doc.lineToOwningNodeId[0]!);
     expect(contentColumnOf(doc, item as any)).toBe(2);
+  });
+
+  it("accounts for a tab-indented marker, snapping to the correct tab stop", () => {
+    // "\t" -> column 4 (tab stop), "-" -> column 5, " " gap -> column 6.
+    const doc = parseDocument("\t- text");
+    const item = doc.nodes.get(doc.lineToOwningNodeId[0]!);
+    expect(contentColumnOf(doc, item as any)).toBe(6);
+  });
+
+  // Phase 5P-1R (A-3): parser/complexBlocks.ts (list-item-child paragraph
+  // recognition) and this module's insertChildListItem used to carry two
+  // INDEPENDENT, byte-identical copies of this exact computation — a real
+  // drift risk. Both now import the SAME function from the new
+  // parser/listContentColumn.ts (contentColumnOf here is a re-export of it
+  // — see this module's own doc comment), which makes drift structurally
+  // impossible rather than merely tested-against. This contract test still
+  // pins the observable behavior down explicitly, across every marker form
+  // parser/parseDocument.ts's own LIST_RE supports, per the ticket's A-3
+  // requirement.
+  it("(A-3 contract) contentColumnOf (edit layer) and listItemContentColumn (parser layer) are the exact same function and agree on every supported marker form", () => {
+    const cases = [
+      "- text",
+      "-   text",
+      "  - text",
+      "10. text",
+      "123) text",
+      "*   text",
+      "+ text",
+      "-",
+      "\t- text",
+      " \t- text",
+    ];
+    for (const line of cases) {
+      const doc = parseDocument(line);
+      const item = doc.nodes.get(doc.lineToOwningNodeId[0]!) as any;
+      expect(contentColumnOf(doc, item)).toBe(listItemContentColumn(doc, item));
+    }
   });
 });
 

@@ -22,11 +22,17 @@
  *     single-line requirement directly via which of the two kinds it asks
  *     for (Phase 5D-0.3; replaces the earlier requireSingleLineList flag).
  *   - every ComplexBlockInfo in complexScan.blocks with
- *     editability === "supported" — "ambiguous"/"unsupported"/"read-only"
- *     blocks (this always excludes "paragraph", which is never
- *     "supported" — see model/complexBlock.ts) are never composite-block
- *     candidates, matching this whole plugin's "never build on an
- *     uncertain boundary" policy.
+ *     editability === "supported" AND kind !== "paragraph" —
+ *     "ambiguous"/"unsupported" blocks are excluded by the editability
+ *     check, matching this whole plugin's "never build on an uncertain
+ *     boundary" policy. Phase 5P-1R (2026-08-17): confidently-bounded
+ *     paragraph blocks now also report editability === "supported" (see
+ *     parser/complexBlocks.ts's scanParagraphBlocks doc comment) —
+ *     "supported" alone no longer implies "eligible for CompositeBlock
+ *     membership" for every kind, so paragraph is excluded here by an
+ *     EXPLICIT kind check rather than relying on editability to do that
+ *     job. Paragraph/CompositeBlock integration remains out of scope until
+ *     a future phase explicitly designs it.
  * The two pools are merged and sorted by range.startLine into one
  * document-order candidate list.
  *
@@ -138,6 +144,12 @@ function collectCandidates(doc: ParsedDocument, complexScan: ComplexBlockScanRes
   }
   for (const block of complexScan.blocks) {
     if (block.editability !== "supported") continue;
+    // Phase 5P-1R: paragraph blocks can now report "supported" (a
+    // confidently-resolved boundary), but CompositeBlock membership is a
+    // SEPARATE, not-yet-designed capability for paragraph — this explicit
+    // guard is required (see this file's top doc comment) now that
+    // editability alone no longer rules paragraph out.
+    if (block.kind === "paragraph") continue;
     candidates.push({ kind: block.kind, id: block.id, startLine: block.range.startLine, endLine: block.range.endLine });
   }
   candidates.sort((a, b) => a.startLine - b.startLine);
