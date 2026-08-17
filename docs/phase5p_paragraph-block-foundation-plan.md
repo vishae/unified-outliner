@@ -1,15 +1,18 @@
 # Unified Outliner — 段落ブロック基盤 実装計画（Phase 5P）
 
 作成日: 2026-08-15
-状態: **5P-0（方針改訂）・5P-1（範囲・親・深さの契約）実装完了**（2026-08-15）。5P-2（カーソル解決・ホイスト）以降は未着手 — 個別の設計承認を経てから着手する。
+状態: **5P-0（方針改訂）・5P-1（範囲・親・深さの契約）・5P-1R（editability 訂正・Move block 適用範囲の固定）・5P-2（カーソル解決・安全なホイスト）実装完了、5P-3D（任意 Tree 表示の設計固定）完了**（2026-08-17）。5P-3 本実装以降は未着手 — 5P-3D の承認と実装範囲確認を経てから着手する。
 対象リポジトリ: `/Users/kazumikaizuka/Obsidian/unified-outliner-public`
-関連: `docs/mixed-structure-spec.md` §6（5P-0で改訂済み）、`docs/phase5c_block-model-and-tree-display-spec.md` §4（5P-0で移管済み）、`docs/統合実装ロードマップ_2026-08-05.md` §3.8（実装記録の正）
+関連: `docs/mixed-structure-spec.md` §6（5P-0で改訂済み）、`docs/phase5c_block-model-and-tree-display-spec.md` §4（5P-0で移管済み）、`docs/統合実装ロードマップ_2026-08-05.md` §3.8（実装記録の正）、`docs/phase5p3d_paragraph-tree-display-design.md`（5P-3 の確定設計。§6「5P-3 — 任意 Tree 表示」の詳細はこちらを正とする）
 
-## 実装状況（2026-08-15）
+## 実装状況（2026-08-17）
 
 - **5P-0**: 本ドキュメント§3の改訂を`docs/mixed-structure-spec.md` §6、`docs/phase5c_block-model-and-tree-display-spec.md` §4、`docs/統合実装ロードマップ_2026-08-05.md`に反映した。本番コードの変更はなし。
 - **5P-1**: `src/parser/complexBlocks.ts`の`scanParagraphBlocks`を、本ドキュメント§5の境界規則・親子規則に沿って拡張した。新規の純粋関数`complexBlockDepth`（同ファイル）で深さ契約をテスト固定した。`tests/complexBlocks.test.ts`に境界・親子・深さの新規テストケースを追加し、`npm test`（949件）・`tsc`・`npm run lint`・`npm run build`すべて成功を確認済み。実装の詳細・変更ファイル一覧・回帰確認の要点は`docs/統合実装ロードマップ_2026-08-05.md` §3.8を正とする。
-- **5P-2〜5P-4**: 未着手。§6の各サブフェーズ記載のとおり、着手前に個別の設計承認プロセスを経ること。
+- **5P-1R**: paragraph の editability 訂正（Option A採用、paragraph の supported 化）と、Move block の意図しない適用拡大の防止を実施。コミット `fcd1128`。
+- **5P-2**: カーソル位置の段落を一意に解決する純粋 resolver（`src/resolver/resolveParagraphAtCursor.ts`）と、Apply 時に parentId/depth/内容完全一致を再確認する安全な Partial Edit hoist（`src/edit/paragraphPartialEdit.ts`）を実装した。コミット `b0b7f02`。テスト1002件・tsc・lint・build すべて成功。
+- **5P-3D**: paragraph を設定オン時のみ Outline Tree に読み取り専用の葉ノードとして表示するための設計を固定した。詳細は `docs/phase5p3d_paragraph-tree-display-design.md` を参照。本番コードの変更はなし。
+- **5P-3〜5P-4**: 5P-3 は 5P-3D の承認後に本実装へ進む。5P-4 は §6 記載のとおり、着手前に個別の設計承認プロセスを経ること。
 
 ## 0. なぜ別系統か
 
@@ -100,11 +103,11 @@ paragraph は 5C の都合で `ComplexBlockKind` に入っているが、これ�
 
 表示ラベルは、構文上の題がないため次の順とする。
 
-1. 将来の明示タイトル（`<!-- uo-title: ... -->`）。5P ではパースできれば使うが、入力 UI は作らない
+1. ~~将来の明示タイトル（`<!-- uo-title: ... -->`）~~ — **5P-3D で不採用と確定**（`docs/phase5p3d_paragraph-tree-display-design.md` §3-2）。`scanParagraphBlocks` の現行の境界規則では、直前行に空行を挟まないコメント行は段落本文そのものへ合流してしまい、5P-1/5P-1R で固定した境界規則および 5P-2 の Apply 契約と衝突するため、5P-3 では読み取らない
 2. 先頭文のプレビュー
 3. 種別＋通番（`段落 1`）
 
-Tree に出す場合の既定記号は `¶` とする。設定で空文字にできる。
+Tree に出す場合の既定記号は `¶` とする。設定で空文字にできる（5P-3D 時点では固定値、設定の追加自体は5P-3の対象外）。
 
 ## 6. サブフェーズ
 
@@ -168,13 +171,16 @@ Tree に出す場合の既定記号は `¶` とする。設定で空文字にで
 
 **目的**: 設定がオンのときだけ、段落を Outline Tree に出せる。
 
+**設計状況（2026-08-17）**: 5P-3D で確定設計を `docs/phase5p3d_paragraph-tree-display-design.md` にまとめた。以下はその要旨であり、詳細・根拠・比較検討は同文書を正とする。
+
 **実施内容**
 
-- 設定「本文段落も表示」を追加する。既定はオフ
-- 5C-2 / 5D-0.3 の投影経路を再利用し、paragraph ノードを挿入する
-- 表示は `¶` + ラベル。read-only 選択・fold 参加・ジャンプまで
-- 既定オフ時は、ノードを作ってフィルタするか、投影しないかを実装時に決める。fold identity を汚さない方を選ぶ
-- Tree からの rename / delete / insert / drag は出さない
+- 設定 `showParagraphsInOutline`（「本文段落も Outline Tree に表示する」）を追加する。既定はオフ。`showListItemsInOutline` と同型のトップレベル boolean で、マイグレーションコードは不要
+- 5C-2 / 5D-0.3 の standalone 投影経路（グルーピング・`line` ソートによるマージ）をそのまま再利用するが、`complex-member` kind は流用せず、新しい独立した `"paragraph"` kind を追加する（既存の standalone complex-member 用コンテキストメニューへ誤って合流し、Tree から意図せず Partial Edit を起動可能にしてしまうのを避けるため）
+- 表示は `¶` + プレビュー。`<!-- uo-title -->` は 5P-3 では読み取らない（境界規則との衝突のため不採用、上記文書§3-2）
+- paragraph は常に葉ノード・fold 不可とする。fold state・永続 identity を一切持たせない
+- 既定オフ時は、paragraph ノードを Tree モデルへ一切投影しない（「作ってフィルタする」方式は採らない）
+- Tree からの rename / delete / insert / drag / indent-outdent / 一般的な Move block / CompositeBlock 操作は一切許可しない。コンテキストメニュー自体を paragraph 行に構築しないことで到達経路を構造的に断つ
 
 **完了条件**
 
