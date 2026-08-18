@@ -375,3 +375,50 @@ Tree node と `ComplexBlockInfo` が実質的に1対1で同じ scan 呼び出し
   「テスト・型検査・lint・build が green であること」だけを「完了」の根拠
   にしてはならない——実機（Method Vault）での確認を経てから完了報告を出す
   こと。
+
+## 14. Phase 5T-2D: paragraph D&D の設計固定・既存経路監査（追記）
+
+Phase 5T-2D は、Outline Tree 上の paragraph node に対する mouse drag &
+drop（D&D）について、**設計・監査のみを行い、本番実装は行わない**フェー
+ズとして実施した。5T-1R（`859ad17`）を前提として受け入れ、詳細な設計・
+既存コード監査・比較検討・操作契約・実機検証計画は、新設した
+`docs/phase5t2_paragraph-tree-dnd-design.md` に記録した。本セクションは、
+その結論を要約し、当該ドキュメントへの導線とする。
+
+### 14-1. 結論の要約
+
+- 案A（同一 parent の隣接 sibling に対する前後 slot のみ、隣接 swap 限
+  定）が、本ドキュメント §6 で既に最有力候補とされていた方針を、5T-1/
+  5T-1R の実装済みコードに基づいて再確認し、なお最有力候補であると判断
+  した。
+- 案A の範囲に限定すれば、最小実装候補（5T-2）は構造的に安全に実装可能
+  であると判断した。根拠は、drop 実行の最終的な mutation
+  （`swapBlocks`）、source の安全な再解決（`resolveParagraphFromTreeHint`
+  /`buildParagraphMoveAnchor`/`moveParagraphFromAnchor`）が5T-1R時点で
+  既に存在し、新しい書き換えプリミティブの発明が不要なためである。
+- ただし、「hover 中の drop target が、今この瞬間において自分の真の隣接
+  sibling であるか」を確認するロジックは現状存在せず、新設が必要である
+  （既存の `findComplexSiblingTarget` は「自分から見た最寄りの候補」を
+  返すのみで、任意候補との一致確認機能を持たないため）。
+- 既存の section/list D&D（`canDropAny`/`canDropOn`/`canDropListOn`/
+  `dispatchAndApply`/`runRelocateCommand`）は、id 空間・構造モデル・親変
+  更・書き戻し経路のいずれの観点からも paragraph には再利用できない、と
+  判断した（詳細は当該ドキュメント §5 の監査表を正とする）。
+- paragraph ↔ list の cross-model move、任意位置への挿入、child drop
+  は、本ドキュメント §6/§7 の既存結論のとおり、引き続き対象外とする。
+- 5T-2 の実装に着手する前に、Tree 再描画中の drag session の扱い、モバ
+  イル対応の範囲、既存テスト（`tests/paragraphOutlineTreeUiWiring.test.ts`
+  §5-5）の改訂方針について、5T-1/5T-1R と同様にユーザーの承認を得るべき
+  である。
+
+### 14-2. 参照
+
+詳細な A/B/C 比較表、drag 開始・dragover・drop 実行の各契約、既存コード
+の監査表（`OutlineTreeView.ts` の各ハンドラ、`relocateSection.ts`/
+`relocateListSubtree.ts`/`resolveMoveTarget.ts`/`moveBlock.ts`、CSS、テス
+ト等）、最小実装候補5T-2の可否判断、Method Vault 実機検証計画へのリンク
+は、すべて `docs/phase5t2_paragraph-tree-dnd-design.md` を正とする。
+
+本セクションの追加により、本ドキュメント自体は変更していない既存の §1〜
+§13 の内容と矛盾しない——5T-2D は既存結論を上書きするのではなく、5T-1/
+5T-1R の実装済みコードに基づいて再確認・深化したものである。
