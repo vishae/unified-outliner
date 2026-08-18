@@ -48,7 +48,9 @@ import { parseDocument } from "../parser/parseDocument";
 import { MoveDirection } from "../move/findMoveTarget";
 import {
   ComplexSiblingReason,
+  ComplexSiblingTarget,
   ResolvedMoveUnit,
+  findComplexSiblingTarget,
   moveComplexBlock,
 } from "../move/resolveMoveTarget";
 import { LineEditOutcome } from "../commands/applyLineEditOutcome";
@@ -253,44 +255,28 @@ function extractText(doc: ParsedDocument, startLine: number, endLine: number): s
 }
 
 /**
- * Moves the paragraph described by `anchor` one step in `direction`, in
- * `text` — or returns `changed: false` (original `lines` byte-for-byte
- * unchanged) with a stable `reason` when it cannot safely do so.
- *
- * Steps (fixed order, per the 5T-1 ticket §4):
- *
- *   1. Candidate resolution: re-parse `text` fresh and re-scan for
- *      `kind === "paragraph"` / `editability === "supported"` blocks.
- *      `anchor.complexBlockId` narrows this to (at most) ONE id-matched
- *      candidate — used ONLY to narrow, never alone as confirmation (see
- *      `NoParagraphTreeMoveReason`'s own doc comment). No candidate ->
- *      "resolve-failed".
- *   2. Structural match: the id-matched candidate's `parentId` and
- *      `complexBlockDepth` must equal the anchor's. Mismatch ->
- *      "identity-changed".
- *   3. Content match: the candidate's current text, re-extracted from the
- *      fresh `doc.lines`, must equal `anchor.originalText` byte-for-byte.
- *      Mismatch -> "content-changed". Then, independently of the
- *      id-matched candidate, every OTHER currently-recognized paragraph
- *      sharing the same `parentId`/depth/content is checked too — more
- *      than one match anywhere in the document -> "ambiguous-match" (see
- *      that reason's own doc comment for why this is a real, not merely
- *      theoretical, safety gap for a Tree-triggered move specifically).
- *   4. Delegation: build a `ResolvedMoveUnit` from the now-uniquely
- *      re-resolved paragraph and hand it directly to
- *      move/resolveMoveTarget.ts#moveComplexBlock — the SAME function
- *      Phase 5P-4's body-cursor "Move block up/down" already uses. No new
- *      swap/adjacency logic exists in this file; a "no-sibling"/
- *      "boundary-unknown" rejection from that call is returned verbatim.
+ * Result of the shared three-stage anchor re-resolution (below): either a
+ * uniquely-identified, currently-safe-to-touch `ResolvedMoveUnit`, or a
+ * `NoParagraphTreeMoveReason` explaining why none could be produced.
  */
-export function moveParagraphFromAnchor(
-  text: string,
-  anchor: ParagraphMoveAnchor,
-  direction: MoveDirection
-): ParagraphTreeMoveOutcome {
-  const doc: ParsedDocument = parseDocument(text);
-  const lines = doc.lines;
+type ResolveAnchorUnitResult =
+  | { ok: true; doc: ParsedDocument; scan: ComplexBlockScanResult; unit: ResolvedMoveUnit }
+  | { ok: false; reason: NoParagraphTreeMoveReason };
 
+/**
+ * Phase 5T-1's three-stage anchor re-resolution (candidate / structural /
+ * content, see `moveParagraphFromAnchor`'s own doc comment for the full
+ * per-stage rationale), extracted as a shared helper during Phase 5T-2
+ * ("paragraph D&D") so that BOTH `moveParagraphFromAnchor` (the execution
+ * path — Tree context-menu move and D&D drop alike) and
+ * `resolveParagraphDropDirection` (D&D's own dragover-time / drop-time
+ * "is this hover target still my true adjacent sibling" check, see that
+ * function's own doc comment) run the EXACT SAME re-resolution logic
+ * against a freshly re-parsed `doc`, rather than two independently
+ * maintained copies of it. No safety behavior changes here relative to
+ * the pre-5T-2 inline version — this is a pure extraction.
+ */
+function resolveAnchorUnit(doc: ParsedDocument, anchor: ParagraphMoveAnchor): ResolveAnchorUnitResult {
   const scan = scanComplexBlocks(doc);
   const eligibleParagraphs = scan.blocks.filter(
     (b) => b.kind === "paragraph" && b.editability === "supported"
@@ -301,19 +287,19 @@ export function moveParagraphFromAnchor(
   // doc comment).
   const idCandidate = eligibleParagraphs.find((b) => b.id === anchor.complexBlockId);
   if (!idCandidate) {
-    return rejected(lines, "resolve-failed");
+    return { ok: false, reason: "resolve-failed" };
   }
 
   // Stage 2: structural match.
   const idCandidateDepth = complexBlockDepth(doc, idCandidate.parentId);
   if (idCandidate.parentId !== anchor.parentId || idCandidateDepth !== anchor.depth) {
-    return rejected(lines, "identity-changed");
+    return { ok: false, reason: "identity-changed" };
   }
 
   // Stage 3: content match, then a document-wide ambiguity check.
   const idCandidateText = extractText(doc, idCandidate.range.startLine, idCandidate.range.endLine);
   if (idCandidateText !== anchor.originalText) {
-    return rejected(lines, "content-changed");
+    return { ok: false, reason: "content-changed" };
   }
 
   const allStructuralAndContentMatches = eligibleParagraphs.filter((b) => {
@@ -322,21 +308,196 @@ export function moveParagraphFromAnchor(
     return extractText(doc, b.range.startLine, b.range.endLine) === anchor.originalText;
   });
   if (allStructuralAndContentMatches.length > 1) {
-    return rejected(lines, "ambiguous-match");
+    return { ok: false, reason: "ambiguous-match" };
   }
 
-  // Stage 4: delegate to the existing 5P-4 move pipeline. No new swap logic.
   const unit: ResolvedMoveUnit = {
     kind: "paragraph",
     range: idCandidate.range,
     parentId: idCandidate.parentId,
     complexBlockId: idCandidate.id,
   };
-  const outcome = moveComplexBlock(doc, unit, direction, scan);
+  return { ok: true, doc, scan, unit };
+}
+
+/**
+ * Moves the paragraph described by `anchor` one step in `direction`, in
+ * `text` — or returns `changed: false` (original `lines` byte-for-byte
+ * unchanged) with a stable `reason` when it cannot safely do so.
+ *
+ * Steps (fixed order, per the 5T-1 ticket §4; stages 1-3 now live in the
+ * shared `resolveAnchorUnit` helper above — see its own doc comment):
+ *
+ *   1. Candidate resolution -> "resolve-failed".
+ *   2. Structural match -> "identity-changed".
+ *   3. Content match / document-wide ambiguity check -> "content-changed"
+ *      / "ambiguous-match".
+ *   4. Delegation: hand the now-uniquely re-resolved paragraph directly to
+ *      move/resolveMoveTarget.ts#moveComplexBlock — the SAME function
+ *      Phase 5P-4's body-cursor "Move block up/down" already uses. No new
+ *      swap/adjacency logic exists in this file; a "no-sibling"/
+ *      "boundary-unknown" rejection from that call is returned verbatim.
+ *
+ * Phase 5T-2: this is also the SOLE execution path a D&D drop delegates to
+ * (view/OutlineTreeView.ts#dispatchAndApplyParagraphMove, unchanged since
+ * 5T-1) — D&D never calls a different mutation function. See
+ * `resolveParagraphDropDirection` below for how D&D decides which
+ * `direction` to pass in.
+ */
+export function moveParagraphFromAnchor(
+  text: string,
+  anchor: ParagraphMoveAnchor,
+  direction: MoveDirection
+): ParagraphTreeMoveOutcome {
+  const doc: ParsedDocument = parseDocument(text);
+  const resolved = resolveAnchorUnit(doc, anchor);
+  if (!resolved.ok) {
+    return rejected(doc.lines, resolved.reason);
+  }
+
+  const outcome = moveComplexBlock(resolved.doc, resolved.unit, direction, resolved.scan);
   if (!outcome.changed) {
-    return rejected(lines, outcome.reason ?? "no-sibling");
+    return rejected(doc.lines, outcome.reason ?? "no-sibling");
   }
   return { changed: true, lines: outcome.lines, newStartLine: outcome.newStartLine };
+}
+
+/**
+ * Phase 5T-2 ("paragraph D&D の最小実装、案A限定"): which half of a
+ * candidate drop-target row was hovered/dropped on. Paragraph D&D has NO
+ * "inside"/child zone at all — see docs/phase5t2_paragraph-tree-dnd-design.md
+ * §4-2 — so this type deliberately has only the two members a
+ * move/relocateSection.ts#DropMode also has "before"/"after" for, and
+ * omits "inside" entirely (a compile-time guarantee that no caller can
+ * ever pass an "inside" zone into paragraph D&D's own resolution
+ * function).
+ */
+export type ParagraphDropZone = "before" | "after";
+
+/**
+ * A minimal, structural hint for a D&D drop TARGET row — deliberately the
+ * same shape as `ParagraphTreeNodeHint` above (rangeStart/rangeEnd/
+ * parentId), since a drop target is resolved the exact same
+ * hint-into-current-scan way regardless of whether it turns out to be a
+ * paragraph or another allow-listed complex block (callout/blockquote/
+ * fenced-code/table/thematic-break) — see `resolveParagraphDropDirection`'s
+ * own doc comment for why this function never needs to know the target's
+ * `ComplexBlockKind` at all.
+ */
+export type ParagraphDropTargetHint = ParagraphTreeNodeHint;
+
+/**
+ * Every additional way `resolveParagraphDropDirection` can refuse a drop,
+ * on top of `NoParagraphTreeMoveReason` (source-anchor re-resolution
+ * failures reuse those same reason values verbatim — see below).
+ *
+ *   - "self-drop": the drop target's range is the SAME range the source
+ *     anchor re-resolved to (dropping a paragraph onto itself).
+ *   - "not-adjacent": the target's range does not match EITHER of the
+ *     source's own up/down `findComplexSiblingTarget` results in the
+ *     CURRENT document — i.e. the hovered/dropped-on row is not, right
+ *     now, the source's true immediate sibling in either direction. This
+ *     covers every case the 5T-2 ticket's §1/§2 rule out by construction:
+ *     non-adjacent targets, list/section/list-item targets, targets
+ *     outside the source's own `parentId`, and a target that WAS adjacent
+ *     at drag-start but no longer is.
+ *   - "wrong-zone": the target IS a true adjacent sibling, but the
+ *     hovered/dropped zone is the geometrically wrong half of that row —
+ *     see this function's own doc comment for the exact before/after ↔
+ *     up/down mapping this enforces.
+ */
+export type ParagraphDropRejectReason =
+  | NoParagraphTreeMoveReason
+  | "self-drop"
+  | "not-adjacent"
+  | "wrong-zone";
+
+export type ParagraphDropResolution =
+  | { allowed: true; direction: MoveDirection }
+  | { allowed: false; reason: ParagraphDropRejectReason };
+
+/**
+ * Phase 5T-2's central D&D safety function: "given the CURRENT document
+ * text, is `target` (a drop-zone hover, or an actual drop) really, right
+ * now, one of `anchor`'s true adjacent siblings — and if so, in which
+ * `MoveDirection`?" Called from BOTH `handleParagraphDragOver` (to decide
+ * whether to show a before/after indicator at all) and
+ * `handleParagraphDrop` (to decide, immediately before executing, which
+ * direction to hand to `moveParagraphFromAnchor`) — see
+ * view/OutlineTreeView.ts. Never mutates anything itself; a caller still
+ * always finishes by calling `moveParagraphFromAnchor`, which re-resolves
+ * `anchor` completely independently ONE MORE TIME at execution — this
+ * function's "allowed: true" is a hover/pre-flight answer, never itself a
+ * green light to write to the note (same "never a green light on its own"
+ * relationship `resolveParagraphFromTreeHint`'s own doc comment already
+ * documents for the context-menu path).
+ *
+ * No new adjacency notion is invented here: this function ONLY answers
+ * "does `target` match one of `findComplexSiblingTarget`'s own up/down
+ * results for the freshly re-resolved source" — the exact same function
+ * `moveComplexBlock`/the 5T-1 context-menu path already use to decide
+ * eligibility. `target`'s `ComplexBlockKind` (paragraph vs. callout vs.
+ * table, etc.) never needs to be inspected here at all: whatever
+ * `findComplexSiblingTarget` is willing to return already IS the fully
+ * allow-listed candidate (5P-4's own kind/safety filtering — see that
+ * function's own doc comment) — this function only checks whether
+ * `target`'s RANGE happens to be that same candidate's range.
+ *
+ * Before/after -> up/down mapping (docs/phase5t2_paragraph-tree-dnd-design.md
+ * §4-2's "有効条件"): a target sitting ABOVE the source in the document
+ * (found via `findComplexSiblingTarget(..., "up", ...)`) is only a valid
+ * drop when `zone === "after"` — the half of that row nearest the source,
+ * directly on the boundary the swap will close. A target sitting BELOW the
+ * source (found via `..., "down", ...`) is only valid when
+ * `zone === "before"`, the mirror case. The opposite half of either row is
+ * REJECTED (`"wrong-zone"`), not silently accepted — showing an indicator
+ * on the far side of a two-candidate-only swap target would visually
+ * suggest a more general "insert at this exact point" capability that
+ * paragraph D&D deliberately does not have (design doc §3's "任意位置への
+ * 挿入に見えるUIは採用しない").
+ */
+export function resolveParagraphDropDirection(
+  text: string,
+  anchor: ParagraphMoveAnchor,
+  target: ParagraphDropTargetHint,
+  zone: ParagraphDropZone
+): ParagraphDropResolution {
+  const doc: ParsedDocument = parseDocument(text);
+  const resolved = resolveAnchorUnit(doc, anchor);
+  if (!resolved.ok) {
+    return { allowed: false, reason: resolved.reason };
+  }
+  const { unit, scan } = resolved;
+
+  if (
+    target.rangeStart === unit.range.startLine &&
+    target.rangeEnd === unit.range.endLine &&
+    target.parentId === unit.parentId
+  ) {
+    return { allowed: false, reason: "self-drop" };
+  }
+
+  const matchesTarget = (candidate: ComplexSiblingTarget): boolean =>
+    candidate.kind === "swap" &&
+    candidate.withRange.startLine === target.rangeStart &&
+    candidate.withRange.endLine === target.rangeEnd;
+
+  const upSibling = findComplexSiblingTarget(doc, unit, "up", scan);
+  const downSibling = findComplexSiblingTarget(doc, unit, "down", scan);
+  const isUpSibling = matchesTarget(upSibling);
+  const isDownSibling = matchesTarget(downSibling);
+
+  if (!isUpSibling && !isDownSibling) {
+    return { allowed: false, reason: "not-adjacent" };
+  }
+  if (isUpSibling && zone !== "after") {
+    return { allowed: false, reason: "wrong-zone" };
+  }
+  if (isDownSibling && zone !== "before") {
+    return { allowed: false, reason: "wrong-zone" };
+  }
+
+  return { allowed: true, direction: isUpSibling ? "up" : "down" };
 }
 
 /**

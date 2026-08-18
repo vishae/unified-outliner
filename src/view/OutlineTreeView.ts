@@ -182,7 +182,9 @@ import {
   isOutlineParagraphNode,
   isOutlineSectionNode,
   listItemDisplayText,
+  OutlineTreeComplexMemberNode,
   OutlineTreeNode,
+  OutlineTreeParagraphNode,
 } from "../tree/buildOutlineTree";
 import { scanComplexBlocks } from "../parser/complexBlocks";
 import {
@@ -210,8 +212,11 @@ import {
 import {
   buildParagraphMoveAnchor,
   moveParagraphFromAnchor,
+  ParagraphDropTargetHint,
+  ParagraphDropZone,
   ParagraphMoveAnchor,
   paragraphTreeMoveReasonText,
+  resolveParagraphDropDirection,
   resolveParagraphFromTreeHint,
 } from "../edit/paragraphTreeMove";
 import { findComplexSiblingTarget, ResolvedMoveUnit } from "../move/resolveMoveTarget";
@@ -295,6 +300,36 @@ const outlineTreeFoldOrigin = Annotation.define<true>();
 function getEditorCmView(editor: Editor): EditorView | undefined {
   const withCm = editor as unknown as { cm?: EditorView };
   return withCm.cm;
+}
+
+/**
+ * Phase 5T-2 ("Outline Tree paragraph の D&D による安全な隣接 swap", desktop
+ * only, plan A only — docs/phase5t2_paragraph-tree-dnd-design.md): the
+ * live state of an in-progress paragraph drag, captured entirely at
+ * dragstart (see handleParagraphDragStart below) and never mutated
+ * afterward — a rejection or a document change simply throws the whole
+ * session away (cancelParagraphDrag) rather than trying to patch it.
+ *
+ * `anchor` is the ONLY field this session's own dragover/drop handlers
+ * ever use to decide safety — it is re-resolved from scratch, three
+ * stages deep, by resolveParagraphDropDirection/moveParagraphFromAnchor
+ * every single time, exactly like the 5T-1 context-menu path. The other
+ * fields exist purely so dragend/refresh/Escape cleanup can find and
+ * unmark the right DOM row and so a self-drop can be recognized quickly —
+ * they are NEVER used as a parser id, a fold id, a persistent selection
+ * id, or any part of the actual move decision (design doc §2's "tree-
+ * paragraph:N は...drag payload の永続キーとして使わない" applies verbatim
+ * to `sourceTreeNodeId` here).
+ */
+interface ParagraphDragSession {
+  /** Captured once at dragstart via buildParagraphMoveAnchor — see this module's paragraphTreeMove.ts import. Re-verified fresh (never trusted as-is) by resolveParagraphDropDirection/moveParagraphFromAnchor at every dragover and at drop. */
+  anchor: ParagraphMoveAnchor;
+  /** The dragged row's OWN Tree view id (`tree-paragraph:N`) — DOM cleanup / row-highlight bookkeeping ONLY, never a comparison key for identity or safety. */
+  sourceTreeNodeId: string;
+  /** Mirrors anchor.rangeStart/rangeEnd/parentId at the moment the drag began — used only as a UI-time hint (e.g. self-drop short-circuit) alongside the anchor; the anchor itself remains the sole safety-bearing field. */
+  sourceRangeStart: number;
+  sourceRangeEnd: number;
+  sourceParentId: string | null;
 }
 
 export class OutlineTreeView extends ItemView {
@@ -400,6 +435,16 @@ export class OutlineTreeView extends ItemView {
   private dragSourceId: string | null = null;
   private draggingItemEl: HTMLElement | null = null;
   private dropIndicatorEl: HTMLElement | null = null;
+
+  /**
+   * Phase 5T-2: the in-progress paragraph drag, if any — see
+   * ParagraphDragSession's own doc comment above. Deliberately a SEPARATE
+   * field from dragSourceId (never string-id-keyed the way section/list
+   * drag source is), but paragraph drags DO share draggingItemEl/
+   * dropIndicatorEl above with section/list D&D (only one drag, of either
+   * kind, is ever active at a time — see this field's own doc comment).
+   */
+  private paragraphDragSession: ParagraphDragSession | null = null;
 
   /**
    * UXP-02 (2026-08-12, docs/uxp-02-long-press-menu-duplicate.md): the
@@ -548,6 +593,10 @@ export class OutlineTreeView extends ItemView {
     // so this cleanup doesn't depend on that callback having run.
     this.activeMenu?.hide();
     this.activeMenu = null;
+    // Phase 5T-2: same reasoning as refresh()'s own cancelParagraphDrag()
+    // call — a view close/unload must not leave a paragraph drag session
+    // (and its DOM classes, on elements about to be emptied anyway) set.
+    this.cancelParagraphDrag();
     this.contentEl.empty();
     // Phase 4E: flush any fold-state mutation still sitting inside the
     // debounce window rather than leaving it to onunload's synchronous,
@@ -564,6 +613,21 @@ export class OutlineTreeView extends ItemView {
    * this view's own internal refresh entry point.
    */
   refresh(): void {
+    // Phase 5T-2 (design doc §4-1: "既存の section/list D&D は、この観点の
+    // ガードを一切持っていない...paragraph の drag は...新しい保護を新設す
+    // る必要がある"): unconditionally cancel any in-progress paragraph
+    // drag session BEFORE anything else in this method runs — including
+    // before the renameState early-return just below — so EVERY cause of
+    // refresh() (editor-change, active-leaf-change, file-open, keyup/
+    // mouseup, and settings-change via refreshOutlineTreeViews) reliably
+    // tears the session down rather than leaving it pointing at a Tree row
+    // that's about to be replaced. This is deliberately more conservative
+    // than the pre-existing section/list D&D (which has no such guard at
+    // all) — see cancelParagraphDrag's own doc comment for why paragraph
+    // specifically needs this even though moveParagraphFromAnchor's own
+    // re-verification would still reject a stale drop safely on its own.
+    this.cancelParagraphDrag();
+
     // Inline rename in progress: never tear down the row's <input> out
     // from under the user for an unrelated refresh trigger (debounced
     // editor-change, active-leaf-change, keyup/mouseup elsewhere). Only
@@ -1607,6 +1671,101 @@ export class OutlineTreeView extends ItemView {
       selfEl.addEventListener("dragleave", () => this.handleDragLeave(selfEl));
       selfEl.addEventListener("drop", (evt) => this.handleDrop(evt, node.id, selfEl));
       selfEl.addEventListener("dragend", () => this.handleDragEnd());
+    } else if (isOutlineParagraphNode(node) && !Platform.isMobile) {
+      // Phase 5T-2 ("Outline Tree paragraph の D&D による安全な隣接 swap",
+      // docs/phase5t2_paragraph-tree-dnd-design.md): a FIFTH, entirely
+      // separate drag-wiring branch — for a paragraph row only, desktop
+      // only (see the 5T-2 ticket's §1/§8: "初期版はデスクトップ限定とし、
+      // モバイル・タッチ・長押し D&D は実装しない" — Platform.isMobile is
+      // excluded here rather than gated inside the handlers, so a mobile
+      // paragraph row gets NO drag wiring/attribute at all, exactly like
+      // it had none before this ticket). Deliberately NOT folded into the
+      // `if (!readOnly)` block above: paragraph rows are ALWAYS in
+      // readOnlyNodeIds (5T-2 design doc §2 — this ticket does not, and
+      // must not, relax that), so widening that existing gate to admit
+      // paragraph would also risk silently admitting rename/other
+      // write-back wiring some future edit might add alongside it inside
+      // that same block. This branch is a narrow, explicit, paragraph-only
+      // exception layered on top of the read-only contract — mirroring
+      // exactly how the paragraph context-menu branch above is its own
+      // separate `else if (isParagraph)` rather than a relaxation of
+      // `!readOnly` — never a general write-capability unlock.
+      //
+      // No dragHandleEl involvement at all: dragHandleEl is created only
+      // for `!readOnly` rows (see its own creation above), and since this
+      // is desktop-only, the row itself (`selfEl`) is the drag source —
+      // exactly like desktop's existing section/list behavior already
+      // uses `selfEl` rather than a handle.
+      selfEl.setAttribute("draggable", "true");
+      selfEl.addEventListener("dragstart", (evt) =>
+        this.handleParagraphDragStart(evt, node, itemEl)
+      );
+      selfEl.addEventListener("dragover", (evt) => this.handleParagraphDragOver(evt, node, selfEl));
+      // Reused verbatim from the section/list branch above — a purely
+      // generic "if this row currently shows the shared drop indicator,
+      // clear it" action with no dependency on dragSourceId/kind at all.
+      selfEl.addEventListener("dragleave", () => this.handleDragLeave(selfEl));
+      selfEl.addEventListener("drop", (evt) => this.handleParagraphDrop(evt, node, selfEl));
+      // Also reused verbatim: handleDragEnd's endDrag() call now clears
+      // paragraphDragSession too (see endDrag's own updated doc comment)
+      // — no separate paragraph-specific dragend handler is needed. This
+      // is also the SAME listener the HTML5 DnD spec's own Escape-cancels-
+      // drag behavior relies on: pressing Escape mid-drag makes the
+      // browser cancel the operation and fire "dragend" on the source
+      // element exactly as if the drop had failed, so no dedicated
+      // keydown/Escape handler is written for this feature at all.
+      selfEl.addEventListener("dragend", () => this.handleDragEnd());
+    } else if (
+      isComplexMember &&
+      node.isStandalone &&
+      (node.complexKind === "callout" || node.complexKind === "blockquote") &&
+      !Platform.isMobile
+    ) {
+      // Phase 5T-2 real-device-verification fix (found via the ticket's
+      // own mandated 実機検証 pass, before this row's own D&D was ever
+      // exercised against a live Obsidian instance): a standalone
+      // callout/blockquote row is unconditionally in readOnlyNodeIds
+      // (isComplexMember's own doc comment above), so it falls through
+      // the `if (!readOnly)` branch exactly like a paragraph row does —
+      // but it is never itself a paragraph node, so the
+      // `isOutlineParagraphNode` branch above does not match it either.
+      // Before this fix such a row therefore had NO drag wiring of any
+      // kind attached (matching its pre-5T-2 "neither a drag source nor
+      // a drop target" contract from Phase 5D-0.3 approval §1), which
+      // silently made it impossible to ever drop a dragged paragraph
+      // onto it: handleDragOver/handleParagraphDragOver never fired at
+      // all on this row, so the browser's own "no listener called
+      // preventDefault" behavior always cancelled the drop — this is
+      // exactly the paragraph<->callout/blockquote non-swap the real
+      // device pass first observed, root-caused here, and fixed by this
+      // branch rather than merely documented as a known limitation.
+      //
+      // This branch wires dragover/drop ONLY — never `draggable`, never
+      // `dragstart` — a standalone callout/blockquote row still never
+      // becomes a drag SOURCE (unchanged from before); it becomes a drop
+      // TARGET only, and only while a paragraph drag session
+      // (this.paragraphDragSession) is actually active — see
+      // handleParagraphDragOver/handleParagraphDrop's own generalized
+      // `paragraphDropTargetHint` resolution below, which now accepts
+      // either an OutlineTreeParagraphNode or an
+      // OutlineTreeComplexMemberNode.
+      //
+      // fenced-code/table/thematic-break are deliberately excluded here:
+      // tree/buildOutlineTree.ts only ever computes `isStandalone: true`
+      // for kind "callout"/"blockquote" (see that module's own
+      // isStandaloneComplexBlock-equivalent check) — those other kinds
+      // are never projected as their own Tree row at all, so there is no
+      // row here to wire a listener onto for them. Paragraph D&D against
+      // a fenced-code/table/thematic-break target therefore stays out of
+      // reach via the Tree UI even after this fix — a known, pre-existing
+      // Tree-view-model constraint (not a 5T-2 regression), recorded as
+      // such in the 5T-2 completion report rather than silently
+      // "verified" against a row that cannot exist.
+      selfEl.addEventListener("dragover", (evt) =>
+        this.handleParagraphDragOver(evt, node, selfEl)
+      );
+      selfEl.addEventListener("dragleave", () => this.handleDragLeave(selfEl));
+      selfEl.addEventListener("drop", (evt) => this.handleParagraphDrop(evt, node, selfEl));
     }
 
     if (hasChildren && !isCollapsed) {
@@ -3629,7 +3788,210 @@ export class OutlineTreeView extends ItemView {
     if (this.draggingItemEl) this.draggingItemEl.removeClass("unified-outliner-dragging");
     this.draggingItemEl = null;
     this.dragSourceId = null;
+    // Phase 5T-2: unified cleanup for whichever drag kind was actually
+    // active — only one of dragSourceId/paragraphDragSession is ever set
+    // at a time (a single native HTML5 drag operation can only have one
+    // source), so clearing both here unconditionally is safe and lets
+    // every existing call site of endDrag() (handleDragEnd, handleDrop)
+    // reliably clean up a paragraph drag too without needing its own
+    // parallel copy of this method.
+    this.paragraphDragSession = null;
   }
+
+  /**
+   * Phase 5T-2 (design doc §4-1): cancels an in-progress PARAGRAPH drag
+   * specifically — called from refresh() (any cause) and onClose(), never
+   * from a native drag event (those already go through handleDragEnd/
+   * endDrag above). Deliberately a no-op when no paragraph drag is
+   * active, so this never disturbs an in-progress SECTION/LIST drag
+   * (Phase 3A/4A) — those keep their own pre-existing behavior
+   * unchanged; this ticket adds NO new cancellation behavior for them.
+   */
+  private cancelParagraphDrag(): void {
+    if (!this.paragraphDragSession) return;
+    this.endDrag();
+    this.clearDropIndicator();
+  }
+
+  /** Phase 5T-2 (design doc §4-2): upper half -> "before", lower half -> "after". Deliberately a SEPARATE two-way split from computeDropMode's three-way (before/inside/after) below — paragraph D&D has no "inside"/child zone at all. */
+  private computeParagraphDropZone(evt: DragEvent, el: HTMLElement): ParagraphDropZone {
+    const rect = el.getBoundingClientRect();
+    const ratio = rect.height > 0 ? (evt.clientY - rect.top) / rect.height : 0.5;
+    return ratio < 0.5 ? "before" : "after";
+  }
+
+  /**
+   * Phase 5T-2 dragstart for a paragraph row. Builds a `ParagraphMoveAnchor`
+   * from the CURRENT refresh()-time doc/scan — exactly like
+   * showParagraphMoveMenu's own menu-build-time anchor (same
+   * resolveParagraphFromTreeHint + buildParagraphMoveAnchor pair, reused
+   * verbatim, no new resolution logic here) — and stores it as this
+   * session's sole safety-bearing field. If either resolution step fails
+   * (the paragraph the Tree row displayed no longer safely resolves right
+   * now), the drag is cancelled at the browser level via preventDefault()
+   * — per the HTML5 DnD spec, cancelling a "dragstart" event stops the
+   * drag-and-drop operation from starting at all, so the user never sees
+   * a ghost-drag with nowhere valid to drop it.
+   */
+  private handleParagraphDragStart(
+    evt: DragEvent,
+    node: OutlineTreeParagraphNode,
+    itemEl: HTMLElement
+  ): void {
+    const doc = this.currentDoc;
+    const complexScan = this.currentComplexScan;
+    if (!doc || !complexScan) {
+      evt.preventDefault();
+      return;
+    }
+    const info = resolveParagraphFromTreeHint(
+      { rangeStart: node.rangeStart, rangeEnd: node.rangeEnd, parentId: node.parentId },
+      complexScan
+    );
+    if (!info) {
+      evt.preventDefault();
+      return;
+    }
+    const anchor = buildParagraphMoveAnchor(doc, info);
+    if (!anchor) {
+      evt.preventDefault();
+      return;
+    }
+
+    this.paragraphDragSession = {
+      anchor,
+      sourceTreeNodeId: node.id,
+      sourceRangeStart: node.rangeStart,
+      sourceRangeEnd: node.rangeEnd,
+      sourceParentId: node.parentId,
+    };
+    this.draggingItemEl = itemEl;
+    itemEl.addClass("unified-outliner-dragging");
+    if (evt.dataTransfer) {
+      // Formal MIME payload only — required by the HTML5 DnD spec for some
+      // browsers/Electron builds to recognize the drag at all. The actual
+      // decision is driven entirely by this.paragraphDragSession, never by
+      // reading this back out (same convention handleDragStart above
+      // already uses for section/list).
+      evt.dataTransfer.setData("text/plain", node.id);
+      evt.dataTransfer.effectAllowed = "move";
+    }
+  }
+
+  /**
+   * Phase 5T-2 dragover for a paragraph row. Re-derives, from the
+   * refresh()-time cached `this.currentDoc` (safe to reuse without a fresh
+   * re-parse here — see cancelParagraphDrag's own doc comment for why any
+   * document change since drag-start would already have torn this session
+   * down before this handler could ever run again), whether `node` is
+   * right now a true adjacent sibling of the drag source in the hovered
+   * zone. Only calls preventDefault()/shows an indicator when
+   * resolveParagraphDropDirection says the drop would actually be
+   * allowed — an invalid target gets no indicator and no drop-allowed
+   * cursor at all (same "don't call preventDefault -> browser shows its
+   * own not-allowed affordance" mechanism handleDragOver above already
+   * relies on for section/list).
+   */
+  private handleParagraphDragOver(
+    evt: DragEvent,
+    node: OutlineTreeParagraphNode | OutlineTreeComplexMemberNode,
+    selfEl: HTMLElement
+  ): void {
+    const session = this.paragraphDragSession;
+    const doc = this.currentDoc;
+    if (!session || !doc) return;
+    const target = this.paragraphDropTargetHint(node);
+    if (!target) {
+      if (this.dropIndicatorEl === selfEl) this.clearDropIndicator();
+      return;
+    }
+    const zone = this.computeParagraphDropZone(evt, selfEl);
+    const resolution = resolveParagraphDropDirection(doc.lines.join("\n"), session.anchor, target, zone);
+    if (!resolution.allowed) {
+      if (this.dropIndicatorEl === selfEl) this.clearDropIndicator();
+      return;
+    }
+    evt.preventDefault();
+    if (evt.dataTransfer) evt.dataTransfer.dropEffect = "move";
+    this.setDropIndicator(selfEl, zone);
+  }
+
+  /**
+   * Phase 5T-2 drop for a paragraph row. Cleans up drag/indicator state
+   * FIRST, unconditionally — matching handleDrop's own "clean up, then
+   * decide" ordering below — then re-derives the drop direction ONE MORE
+   * TIME against the editor's actual CURRENT text (`editor.getValue()`,
+   * not the cached `this.currentDoc` dragover uses — this is the one call
+   * in this whole path that insists on a fully fresh read, immediately
+   * before the only place that can mutate the note). If still allowed,
+   * delegates entirely to `dispatchAndApplyParagraphMove` — the exact
+   * same execution path the 5T-1 context-menu "Move up"/"Move down" items
+   * already use, which performs its OWN complete independent
+   * three-stage re-verification and shows its own Notice on rejection. No
+   * new text-splice/swap primitive is written here or anywhere in this
+   * ticket. A resolution that is no longer allowed at this exact instant
+   * (the document changed in the brief window since the last dragover —
+   * expected to be exceedingly rare, since any such change would already
+   * have cancelled this session via refresh()) is silently treated as a
+   * no-op: the body is not touched, and no Notice is shown, matching
+   * dragover's own silent "just don't show an indicator" behavior for the
+   * identical condition.
+   */
+  private handleParagraphDrop(
+    evt: DragEvent,
+    node: OutlineTreeParagraphNode | OutlineTreeComplexMemberNode,
+    selfEl: HTMLElement
+  ): void {
+    evt.preventDefault();
+    const session = this.paragraphDragSession;
+    this.clearDropIndicator();
+    this.endDrag();
+    if (!session) return;
+
+    const view = this.activeMarkdownView.get();
+    if (!view) return;
+    const target = this.paragraphDropTargetHint(node);
+    if (!target) return;
+    const zone = this.computeParagraphDropZone(evt, selfEl);
+    const resolution = resolveParagraphDropDirection(view.editor.getValue(), session.anchor, target, zone);
+    if (!resolution.allowed) return;
+    this.dispatchAndApplyParagraphMove(session.anchor, resolution.direction);
+  }
+
+  /**
+   * Phase 5T-2 real-device-verification fix: resolves the
+   * (rangeStart, rangeEnd, parentId) hint `resolveParagraphDropDirection`
+   * needs for whichever kind of row is currently being hovered/dropped
+   * on. A paragraph row (OutlineTreeParagraphNode) carries these fields
+   * directly. A standalone callout/blockquote row
+   * (OutlineTreeComplexMemberNode) does not — that type has no
+   * rangeStart/rangeEnd/parentId fields at all (see its own doc comment)
+   * — but its `id` IS the underlying ComplexBlockInfo's own id from the
+   * SAME scan (`this.currentComplexScan`) this Tree was last rendered
+   * from, so looking it back up there by id is an exact match, not a
+   * guess: mirrors how a paragraph row's own rangeStart/rangeEnd/parentId
+   * are themselves just a render-time-cached hint, re-verified fresh
+   * inside resolveParagraphDropDirection's own resolveAnchorUnit/
+   * findComplexSiblingTarget calls, never trusted as final identity by
+   * themselves. Returns null when the node kind isn't recognized as a
+   * valid paragraph-drop target at all, or when the id can no longer be
+   * found in the cached scan (the row is stale) — either way the caller
+   * treats that exactly like "not a valid drop target right now".
+   */
+  private paragraphDropTargetHint(
+    node: OutlineTreeParagraphNode | OutlineTreeComplexMemberNode
+  ): ParagraphDropTargetHint | null {
+    if (node.kind === "paragraph") {
+      return { rangeStart: node.rangeStart, rangeEnd: node.rangeEnd, parentId: node.parentId };
+    }
+    const scan = this.currentComplexScan;
+    if (!scan) return null;
+    const block = scan.blocks.find((b) => b.id === node.id);
+    if (!block) return null;
+    return { rangeStart: block.range.startLine, rangeEnd: block.range.endLine, parentId: block.parentId };
+  }
+
+
 
   private clearDropIndicator(): void {
     if (this.dropIndicatorEl) {

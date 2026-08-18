@@ -5,8 +5,10 @@ import { moveComplexBlock } from "../src/move/resolveMoveTarget";
 import {
   buildParagraphMoveAnchor,
   moveParagraphFromAnchor,
+  ParagraphDropTargetHint,
   ParagraphMoveAnchor,
   ParagraphTreeNodeHint,
+  resolveParagraphDropDirection,
   resolveParagraphFromTreeHint,
 } from "../src/edit/paragraphTreeMove";
 import {
@@ -584,5 +586,227 @@ describe("resolveParagraphFromTreeHint (Phase 5T-1R §3: real Tree-build + real 
     // ComplexBlockInfo.id, verbatim.
     expect(matchedById).toBeDefined();
     expect(matchedById!.kind).toBe("callout");
+  });
+});
+
+/**
+ * Phase 5T-2 ("paragraph D&D の最小実装、案A限定"): pure-function tests for
+ * `resolveParagraphDropDirection` — the hover/pre-flight "is this drop
+ * target really my current adjacent sibling, and in which direction"
+ * check driving both dragover's indicator and drop's direction choice.
+ * Modeled on this file's own `moveParagraphFromAnchor` describe blocks
+ * above (same anchorForNth helper, same fixtures reused where possible so
+ * the D&D path is pinned to agree with the already-tested context-menu
+ * path rather than drifting into a second, independently-verified notion
+ * of adjacency).
+ */
+
+function hintFromRange(startLine: number, endLine: number, parentId: string | null): ParagraphDropTargetHint {
+  return { rangeStart: startLine, rangeEnd: endLine, parentId };
+}
+
+describe("resolveParagraphDropDirection: valid adjacent drops", () => {
+  it("up-sibling target, zone 'after' -> allowed, direction 'up'", () => {
+    const text = ["# H", "paragraph A", "", "paragraph B", "", "paragraph C"].join("\n");
+    const anchor = anchorForNth(text, 1); // "paragraph B"
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const infoA = scan.blocks.find((b) => doc.lines[b.range.startLine] === "paragraph A")!;
+    const target = hintFromRange(infoA.range.startLine, infoA.range.endLine, infoA.parentId);
+
+    const resolution = resolveParagraphDropDirection(text, anchor, target, "after");
+    expect(resolution).toEqual({ allowed: true, direction: "up" });
+
+    // The resolved direction, handed to the SAME execution path a
+    // successful drop delegates to, produces exactly the up-swap.
+    const outcome = moveParagraphFromAnchor(text, anchor, "up");
+    expect(outcome.changed).toBe(true);
+    expect(outcome.lines).toEqual(["# H", "paragraph B", "", "paragraph A", "", "paragraph C"]);
+  });
+
+  it("down-sibling target, zone 'before' -> allowed, direction 'down'", () => {
+    const text = ["# H", "paragraph A", "", "paragraph B", "", "paragraph C"].join("\n");
+    const anchor = anchorForNth(text, 1); // "paragraph B"
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const infoC = scan.blocks.find((b) => doc.lines[b.range.startLine] === "paragraph C")!;
+    const target = hintFromRange(infoC.range.startLine, infoC.range.endLine, infoC.parentId);
+
+    const resolution = resolveParagraphDropDirection(text, anchor, target, "before");
+    expect(resolution).toEqual({ allowed: true, direction: "down" });
+
+    const outcome = moveParagraphFromAnchor(text, anchor, "down");
+    expect(outcome.changed).toBe(true);
+    expect(outcome.lines).toEqual(["# H", "paragraph A", "", "paragraph C", "", "paragraph B"]);
+  });
+
+  it("allowed drop, when executed via moveParagraphFromAnchor, matches 5P-4's own moveComplexBlock byte-for-byte (D&D never invents a second swap primitive)", () => {
+    const text = [
+      "- item1",
+      "  > quoted continuation",
+      "",
+      "  Child paragraph of item1.",
+      "- item2",
+    ].join("\n");
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const paragraphInfo = scan.blocks.find(
+      (b) => b.kind === "paragraph" && doc.lines[b.range.startLine].includes("Child paragraph")
+    )!;
+    const quoteInfo = scan.blocks.find((b) => b.kind === "blockquote")!;
+    const anchor = buildParagraphMoveAnchor(doc, paragraphInfo)!;
+    const target = hintFromRange(quoteInfo.range.startLine, quoteInfo.range.endLine, quoteInfo.parentId);
+
+    const resolution = resolveParagraphDropDirection(text, anchor, target, "after");
+    expect(resolution.allowed).toBe(true);
+    if (!resolution.allowed) throw new Error("expected allowed");
+
+    const outcome = moveParagraphFromAnchor(text, anchor, resolution.direction);
+    const direct = moveComplexBlock(
+      doc,
+      {
+        kind: "paragraph",
+        range: paragraphInfo.range,
+        parentId: paragraphInfo.parentId,
+        complexBlockId: paragraphInfo.id,
+      },
+      resolution.direction,
+      scan
+    );
+    expect(outcome.lines).toEqual(direct.lines);
+    expect(outcome.newStartLine).toBe(direct.newStartLine);
+  });
+});
+
+describe("resolveParagraphDropDirection: wrong-zone rejections (no arbitrary-insertion-looking indicator)", () => {
+  it("up-sibling target, zone 'before' -> rejected wrong-zone (would visually suggest inserting BEFORE the up-sibling, not swapping with it)", () => {
+    const text = ["# H", "paragraph A", "", "paragraph B", "", "paragraph C"].join("\n");
+    const anchor = anchorForNth(text, 1); // "paragraph B"
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const infoA = scan.blocks.find((b) => doc.lines[b.range.startLine] === "paragraph A")!;
+    const target = hintFromRange(infoA.range.startLine, infoA.range.endLine, infoA.parentId);
+
+    const resolution = resolveParagraphDropDirection(text, anchor, target, "before");
+    expect(resolution).toEqual({ allowed: false, reason: "wrong-zone" });
+  });
+
+  it("down-sibling target, zone 'after' -> rejected wrong-zone", () => {
+    const text = ["# H", "paragraph A", "", "paragraph B", "", "paragraph C"].join("\n");
+    const anchor = anchorForNth(text, 1); // "paragraph B"
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const infoC = scan.blocks.find((b) => doc.lines[b.range.startLine] === "paragraph C")!;
+    const target = hintFromRange(infoC.range.startLine, infoC.range.endLine, infoC.parentId);
+
+    const resolution = resolveParagraphDropDirection(text, anchor, target, "after");
+    expect(resolution).toEqual({ allowed: false, reason: "wrong-zone" });
+  });
+});
+
+describe("resolveParagraphDropDirection: self-drop / non-adjacent / boundary rejections", () => {
+  it("dropping a paragraph onto itself is rejected (self-drop)", () => {
+    const text = ["# H", "paragraph A", "", "paragraph B"].join("\n");
+    const anchor = anchorForNth(text, 0); // "paragraph A"
+    const target = hintFromRange(anchor.rangeStart, anchor.rangeEnd, anchor.parentId);
+
+    const resolution = resolveParagraphDropDirection(text, anchor, target, "after");
+    expect(resolution).toEqual({ allowed: false, reason: "self-drop" });
+  });
+
+  it("a non-adjacent target (one hop further than the true sibling) is rejected — arbitrary-position insertion is never allowed", () => {
+    const text = ["# H", "paragraph A", "", "paragraph B", "", "paragraph C"].join("\n");
+    const anchor = anchorForNth(text, 0); // "paragraph A"
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const infoC = scan.blocks.find((b) => doc.lines[b.range.startLine] === "paragraph C")!;
+    const target = hintFromRange(infoC.range.startLine, infoC.range.endLine, infoC.parentId);
+
+    const resolutionBefore = resolveParagraphDropDirection(text, anchor, target, "before");
+    const resolutionAfter = resolveParagraphDropDirection(text, anchor, target, "after");
+    expect(resolutionBefore).toEqual({ allowed: false, reason: "not-adjacent" });
+    expect(resolutionAfter).toEqual({ allowed: false, reason: "not-adjacent" });
+  });
+
+  it("a target belonging to a DIFFERENT parentId (a sibling list item's own child paragraph) is rejected as not-adjacent, even when its raw line range is textually adjacent", () => {
+    const text = ["- item1", "  Child of item1.", "- item2", "  Child of item2."].join("\n");
+    const anchor = anchorForNth(text, 0); // "Child of item1."
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const otherChild = scan.blocks.find(
+      (b) => b.kind === "paragraph" && doc.lines[b.range.startLine].includes("Child of item2.")
+    )!;
+    expect(otherChild.parentId).not.toBe(anchor.parentId);
+    const target = hintFromRange(otherChild.range.startLine, otherChild.range.endLine, otherChild.parentId);
+
+    const resolution = resolveParagraphDropDirection(text, anchor, target, "after");
+    expect(resolution).toEqual({ allowed: false, reason: "not-adjacent" });
+  });
+
+  it("a list item sitting between two same-parent paragraphs blocks adjacency (boundary-unknown never silently hopped) — the far paragraph reads as not-adjacent from this function's point of view", () => {
+    const text = ["# H", "paragraph A", "- list item", "paragraph B"].join("\n");
+    const anchor = anchorForNth(text, 0); // "paragraph A"
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const infoB = scan.blocks.find((b) => doc.lines[b.range.startLine] === "paragraph B")!;
+    const target = hintFromRange(infoB.range.startLine, infoB.range.endLine, infoB.parentId);
+
+    const resolution = resolveParagraphDropDirection(text, anchor, target, "before");
+    expect(resolution).toEqual({ allowed: false, reason: "not-adjacent" });
+  });
+
+  it("a section-boundary target (heading line itself, no matching ComplexBlockInfo) is rejected as not-adjacent", () => {
+    const text = ["# H1", "paragraph A", "# H2", "paragraph B"].join("\n");
+    const anchor = anchorForNth(text, 0); // "paragraph A", section H1
+    // Hint pointing at the heading line itself — never a real
+    // ComplexBlockInfo, so it can never match findComplexSiblingTarget's
+    // own up/down results.
+    const target = hintFromRange(2, 2, null);
+
+    const resolution = resolveParagraphDropDirection(text, anchor, target, "after");
+    expect(resolution).toEqual({ allowed: false, reason: "not-adjacent" });
+  });
+});
+
+describe("resolveParagraphDropDirection: source anchor re-resolution failures propagate (shares resolveAnchorUnit with moveParagraphFromAnchor, not a second copy)", () => {
+  it("resolve-failed when the source paragraph was deleted", () => {
+    const original = ["# H", "Before.", "", "Target paragraph.", "", "After."].join("\n");
+    const anchor = anchorForNth(original, 1); // "Target paragraph."
+    const changedText = ["# H", "Before.", "", "", "After."].join("\n");
+    const doc = parseDocument(changedText);
+    const scan = scanComplexBlocks(doc);
+    const infoAfter = scan.blocks.find((b) => doc.lines[b.range.startLine] === "After.")!;
+    const target = hintFromRange(infoAfter.range.startLine, infoAfter.range.endLine, infoAfter.parentId);
+
+    const resolution = resolveParagraphDropDirection(changedText, anchor, target, "before");
+    expect(resolution.allowed).toBe(false);
+    if (resolution.allowed) throw new Error("expected rejection");
+    expect(["resolve-failed", "content-changed"]).toContain(resolution.reason);
+  });
+
+  it("content-changed when the source paragraph's own text changed since the anchor was built", () => {
+    const original = ["# H", "Original text.", "", "Other."].join("\n");
+    const anchor = anchorForNth(original, 0);
+    const changedText = ["# H", "Someone else edited this line.", "", "Other."].join("\n");
+    const doc = parseDocument(changedText);
+    const scan = scanComplexBlocks(doc);
+    const infoOther = scan.blocks.find((b) => doc.lines[b.range.startLine] === "Other.")!;
+    const target = hintFromRange(infoOther.range.startLine, infoOther.range.endLine, infoOther.parentId);
+
+    const resolution = resolveParagraphDropDirection(changedText, anchor, target, "before");
+    expect(resolution).toEqual({ allowed: false, reason: "content-changed" });
+  });
+
+  it("ambiguous-match when two byte-identical sibling paragraphs exist under the same parent", () => {
+    const original = ["# H", "Unique text.", "", "Other."].join("\n");
+    const anchor = anchorForNth(original, 0); // "Unique text."
+    const ambiguousText = ["# H", "Unique text.", "", "Unique text.", "", "Other."].join("\n");
+    const doc = parseDocument(ambiguousText);
+    const scan = scanComplexBlocks(doc);
+    const infoOther = scan.blocks.find((b) => doc.lines[b.range.startLine] === "Other.")!;
+    const target = hintFromRange(infoOther.range.startLine, infoOther.range.endLine, infoOther.parentId);
+
+    const resolution = resolveParagraphDropDirection(ambiguousText, anchor, target, "before");
+    expect(resolution).toEqual({ allowed: false, reason: "ambiguous-match" });
   });
 });

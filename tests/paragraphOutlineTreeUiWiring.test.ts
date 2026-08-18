@@ -118,13 +118,16 @@ describe("OutlineTreeView.ts paragraph wiring (static source check, Phase 5P-3)"
     expect(body).toContain("if (!readOnly && Platform.isMobile) {");
   });
 
-  it("drag & drop attachment is gated by !readOnly (paragraph rows, always in readOnlyNodeIds, are neither a drag source nor a drop target)", () => {
+  it("section/list drag & drop attachment stays gated by the ORIGINAL, unwidened !readOnly block (Phase 5T-2 adds paragraph D&D as a separate else-if branch below it - see the dedicated Phase 5T-2 describe block further down - never by relaxing this condition itself)", () => {
     const body = getRenderNodeBody();
     const dragBlockStart = body.indexOf("if (!readOnly) {", body.indexOf("Phase 3A (section) / Phase 4A (list): drag"));
     expect(dragBlockStart).toBeGreaterThan(-1);
     const dragBlock = body.slice(dragBlockStart, dragBlockStart + 600);
     expect(dragBlock).toContain("handleDragStart");
     expect(dragBlock).toContain("handleDrop");
+    // The section/list block's own condition is still the bare, unwidened
+    // `!readOnly` - it was never changed to admit paragraph rows.
+    expect(dragBlock.startsWith("if (!readOnly) {")).toBe(true);
   });
 
   it("does not introduce any Tree-triggered paragraph Partial Edit entry point (no resolveParagraphAtCursor / paragraphAnchor / activatePartialEditViewForParagraph reference anywhere in this file)", () => {
@@ -239,20 +242,22 @@ describe("Tree read-only contract maintained after Phase 5P-4/5T-1 (paragraph st
     expect(codeOnly).not.toContain("indent");
   });
 
-  it("§5-5: paragraph drag-and-drop remains rejected — isOutlineParagraphNode never appears anywhere near the drag-and-drop wiring (handleDragStart/handleDragOver/handleDrop), which stays gated purely by !readOnly", () => {
+  it("§5-5 (REVISED by Phase 5T-2 - see that ticket's own decision to deliberately overturn this invariant, exactly as §5-4 was revised by 5T-1 above): the ORIGINAL section/list drag-and-drop block (gated by the bare, unwidened !readOnly) still contains no isOutlineParagraphNode reference at all - paragraph D&D is wired as a SEPARATE else-if branch immediately after it (checked in the dedicated Phase 5T-2 describe block further down), never by adding paragraph into this existing block", () => {
     const dragSectionStart = viewTs.indexOf(
       "Phase 3A (section) / Phase 4A (list): drag & drop."
     );
     expect(dragSectionStart).toBeGreaterThan(-1);
-    const dragSectionEnd = viewTs.indexOf(
-      "if (hasChildren && !isCollapsed)",
+    const readOnlyBlockStart = viewTs.indexOf("if (!readOnly) {", dragSectionStart);
+    const paragraphBranchStart = viewTs.indexOf(
+      "} else if (isOutlineParagraphNode(node) && !Platform.isMobile) {",
       dragSectionStart
     );
-    expect(dragSectionEnd).toBeGreaterThan(dragSectionStart);
-    const dragSection = viewTs.slice(dragSectionStart, dragSectionEnd);
-    expect(dragSection).toContain("handleDragStart");
-    expect(dragSection).toContain("handleDrop");
-    expect(dragSection).not.toContain("isOutlineParagraphNode");
+    expect(readOnlyBlockStart).toBeGreaterThan(dragSectionStart);
+    expect(paragraphBranchStart).toBeGreaterThan(readOnlyBlockStart);
+    const readOnlyDragBlock = viewTs.slice(readOnlyBlockStart, paragraphBranchStart);
+    expect(readOnlyDragBlock).toContain("handleDragStart");
+    expect(readOnlyDragBlock).toContain("handleDrop");
+    expect(readOnlyDragBlock).not.toContain("isOutlineParagraphNode");
   });
 
   it("§5-6: queueOutlineTreeMoveFlash (main.ts) never uses a paragraph's own Tree node id as nodeIdHint — for any non-section/list move unit it always resolves the ENCLOSING SECTION's id instead, so a paragraph's temporary tree-paragraph:N id is never used as a move target id or post-move selection-restoration key", () => {
@@ -401,8 +406,8 @@ describe("Phase 5T-1: paragraph Tree-triggered Move (narrow, safety-gated except
     expect(occurrences).toBe(1);
   });
 
-  it("edit/paragraphTreeMove.ts delegates to 5P-4's moveComplexBlock verbatim and implements no new swap/reorder logic of its own (no direct line-array splice/swap in this file)", () => {
-    expect(moveTs).toContain("moveComplexBlock(doc, unit, direction, scan)");
+  it("edit/paragraphTreeMove.ts delegates to 5P-4's moveComplexBlock verbatim and implements no new swap/reorder logic of its own (no direct line-array splice/swap in this file) - Phase 5T-2 note: the call site now reads resolved.doc/resolved.unit/resolved.scan (the shared resolveAnchorUnit helper's output, extracted so resolveParagraphDropDirection can reuse the exact same three-stage resolution - see that function's own doc comment), not a second, independently-maintained copy of the resolution logic", () => {
+    expect(moveTs).toContain("moveComplexBlock(resolved.doc, resolved.unit, direction, resolved.scan)");
     expect(moveTs).not.toContain(".splice(");
   });
 
@@ -464,5 +469,223 @@ describe("Phase 5T-1: paragraph Tree-triggered Move (narrow, safety-gated except
         expect(line).not.toContain(bad);
       }
     }
+  });
+});
+
+/**
+ * Phase 5T-2 ("Outline Tree paragraph の D&D による安全な隣接 swap", plan A
+ * only, desktop only — docs/phase5t2_paragraph-tree-dnd-design.md): static
+ * UI-wiring checks for the new paragraph drag & drop branch, modeled on
+ * this file's own existing Phase 5T-1 describe block above (same
+ * "supplementary only, never the sole defense" framing — the REAL
+ * adjacency/safety defense is the pure-function test suite in
+ * tests/paragraphTreeMove.test.ts's own
+ * "resolveParagraphDropDirection" describe blocks, which exercise the
+ * actual decision logic directly; these checks only confirm the WIRING
+ * routes through that logic rather than reinventing it, and that no
+ * child/inside drop affordance or general write-capability was
+ * introduced alongside it).
+ */
+describe("Phase 5T-2: paragraph drag & drop wiring (narrow, desktop-only, plan-A-only exception)", () => {
+  const viewTs = readFileSync(path.resolve(__dirname, "../src/view/OutlineTreeView.ts"), "utf-8");
+  const moveTs = readFileSync(path.resolve(__dirname, "../src/edit/paragraphTreeMove.ts"), "utf-8");
+  const stylesCss = readFileSync(path.resolve(__dirname, "../styles.css"), "utf-8");
+
+  function paragraphDragBranch(): string {
+    const start = viewTs.indexOf(
+      "} else if (isOutlineParagraphNode(node) && !Platform.isMobile) {"
+    );
+    expect(start).toBeGreaterThan(-1);
+    const end = viewTs.indexOf("\n    }\n\n    if (hasChildren && !isCollapsed)", start);
+    expect(end).toBeGreaterThan(start);
+    return viewTs.slice(start, end);
+  }
+
+  it("the paragraph drag branch is gated by isOutlineParagraphNode(node) && !Platform.isMobile — desktop only, never attached for a mobile paragraph row", () => {
+    const branch = paragraphDragBranch();
+    expect(branch.startsWith("} else if (isOutlineParagraphNode(node) && !Platform.isMobile) {")).toBe(
+      true
+    );
+  });
+
+  it("the paragraph drag branch never widens the original section/list !readOnly gate — it is its own else-if arm, and paragraph rows remain in readOnlyNodeIds (unrelated to this branch existing)", () => {
+    const branch = paragraphDragBranch();
+    // The branch's own code (not its explanatory comment) never tests
+    // `readOnly` at all — its eligibility is entirely
+    // isOutlineParagraphNode(node) && !Platform.isMobile, checked in the
+    // enclosing else-if condition already asserted above.
+    const codeOnly = branch
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    expect(codeOnly).not.toContain("!readOnly");
+    expect(codeOnly).not.toContain("readOnly &&");
+  });
+
+  it("the paragraph drag branch wires exactly dragstart/dragover/dragleave/drop/dragend, delegating to the dedicated handleParagraph* methods (dragleave/dragend are REUSED verbatim from the section/list branch's own generic handleDragLeave/handleDragEnd, not reimplemented)", () => {
+    const branch = paragraphDragBranch();
+    expect(branch).toContain("this.handleParagraphDragStart(evt, node, itemEl)");
+    expect(branch).toContain("this.handleParagraphDragOver(evt, node, selfEl)");
+    expect(branch).toContain("this.handleDragLeave(selfEl)");
+    expect(branch).toContain("this.handleParagraphDrop(evt, node, selfEl)");
+    expect(branch).toContain("this.handleDragEnd()");
+  });
+
+  it("the paragraph drag branch never references dragHandleEl in its actual CODE (desktop-only — selfEl itself is the drag source, exactly like desktop's existing section/list behavior; no mobile drag-handle carve-out was added) - the branch's own explanatory comment legitimately mentions dragHandleEl by name to explain why it is irrelevant here, so comments are excluded from this check", () => {
+    const branch = paragraphDragBranch();
+    const codeOnly = branch
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    expect(codeOnly).not.toContain("dragHandleEl");
+  });
+
+  it("no child/inside drop affordance exists anywhere in the paragraph drag path — 'unified-outliner-drop-inside' never appears in the branch itself, in computeParagraphDropZone, or in resolveParagraphDropDirection/ParagraphDropZone's own type", () => {
+    const branch = paragraphDragBranch();
+    expect(branch).not.toContain("unified-outliner-drop-inside");
+    const zoneFnStart = viewTs.indexOf("private computeParagraphDropZone(");
+    expect(zoneFnStart).toBeGreaterThan(-1);
+    const zoneFnEnd = viewTs.indexOf("\n  }", zoneFnStart);
+    const zoneFn = viewTs.slice(zoneFnStart, zoneFnEnd);
+    expect(zoneFn).not.toContain("inside");
+    expect(zoneFn).toContain('"before"');
+    expect(zoneFn).toContain('"after"');
+    // Checked against CODE only - paragraphTreeMove.ts's own doc comments
+    // legitimately discuss (and explain the deliberate absence of) an
+    // "inside" zone in prose; only the actual TypeScript union members
+    // matter here, and ParagraphDropZone has exactly two: "before"/"after".
+    const zoneTypeStart = moveTs.indexOf("export type ParagraphDropZone");
+    expect(zoneTypeStart).toBeGreaterThan(-1);
+    const zoneTypeEnd = moveTs.indexOf(";", zoneTypeStart);
+    const zoneType = moveTs.slice(zoneTypeStart, zoneTypeEnd);
+    expect(zoneType).not.toContain("inside");
+    expect(zoneType).toContain('"before"');
+    expect(zoneType).toContain('"after"');
+  });
+
+  it("computeParagraphDropZone is a SEPARATE two-way (before/after) split, not a reuse or a modification of the existing three-way computeDropMode (which stays before/inside/after, unchanged, for section/list)", () => {
+    const zoneFnStart = viewTs.indexOf("private computeParagraphDropZone(");
+    const modeFnStart = viewTs.indexOf("private computeDropMode(");
+    expect(zoneFnStart).toBeGreaterThan(-1);
+    expect(modeFnStart).toBeGreaterThan(-1);
+    expect(zoneFnStart).not.toBe(modeFnStart);
+    const modeFnEnd = viewTs.indexOf("\n  }", modeFnStart);
+    const modeFn = viewTs.slice(modeFnStart, modeFnEnd);
+    // computeDropMode is unchanged: still the three-way section/list split.
+    expect(modeFn).toContain('"inside"');
+  });
+
+  it("handleParagraphDragStart builds its anchor via resolveParagraphFromTreeHint + buildParagraphMoveAnchor — the exact same pair showParagraphMoveMenu already uses — never a new Tree-node-to-ComplexBlockInfo resolution path", () => {
+    const start = viewTs.indexOf("private handleParagraphDragStart(");
+    expect(start).toBeGreaterThan(-1);
+    const end = viewTs.indexOf("\n  }", start);
+    const body = viewTs.slice(start, end);
+    expect(body).toContain("resolveParagraphFromTreeHint(");
+    expect(body).toContain("buildParagraphMoveAnchor(doc, info)");
+  });
+
+  it("handleParagraphDragOver and handleParagraphDrop both decide legality via resolveParagraphDropDirection — never by calling canDropOn/canDropListOn/relocateSection/relocateListSubtree (those stay section/list-only, per the 5T-2 design doc's own 'why existing D&D cannot be reused' conclusion)", () => {
+    const overStart = viewTs.indexOf("private handleParagraphDragOver(");
+    const overEnd = viewTs.indexOf("\n  }", overStart);
+    const overBody = viewTs.slice(overStart, overEnd);
+    const dropStart = viewTs.indexOf("private handleParagraphDrop(");
+    const dropEnd = viewTs.indexOf("\n  }", dropStart);
+    const dropBody = viewTs.slice(dropStart, dropEnd);
+    for (const body of [overBody, dropBody]) {
+      expect(body).toContain("resolveParagraphDropDirection(");
+      expect(body).not.toContain("canDropOn(");
+      expect(body).not.toContain("canDropListOn(");
+      expect(body).not.toContain("relocateSection(");
+      expect(body).not.toContain("relocateListSubtree(");
+    }
+  });
+
+  it("handleParagraphDrop delegates the actual write-back entirely to dispatchAndApplyParagraphMove (the SAME 5T-1 execution path the context-menu Move up/down items already use) — it never calls moveComplexBlock/swapBlocks/moveParagraphFromAnchor itself, and never touches the editor directly", () => {
+    const start = viewTs.indexOf("private handleParagraphDrop(");
+    expect(start).toBeGreaterThan(-1);
+    const end = viewTs.indexOf("\n  }", start);
+    const body = viewTs.slice(start, end);
+    expect(body).toContain("this.dispatchAndApplyParagraphMove(session.anchor, resolution.direction)");
+    expect(body).not.toContain("moveComplexBlock(");
+    expect(body).not.toContain("swapBlocks(");
+    expect(body).not.toContain("moveParagraphFromAnchor(");
+    expect(body).not.toContain("editor.replaceRange");
+  });
+
+  it("endDrag() now clears paragraphDragSession too, so the section/list branch's own pre-existing dragend/drop cleanup calls (unchanged) reliably clean up a paragraph drag as well, without a second parallel cleanup method", () => {
+    const start = viewTs.indexOf("private endDrag(): void {");
+    expect(start).toBeGreaterThan(-1);
+    const end = viewTs.indexOf("\n  }", start);
+    const body = viewTs.slice(start, end);
+    expect(body).toContain("this.paragraphDragSession = null;");
+  });
+
+  it("refresh() cancels any in-progress paragraph drag session UNCONDITIONALLY, before even the renameState early-return — so editor-change/active-leaf-change/file-open/keyup/mouseup/settings-change (every refresh() trigger) all reliably tear a stale paragraph drag down, closing the exact gap the 5T-2 design doc flags as existing, unaddressed for section/list D&D", () => {
+    const start = viewTs.indexOf("refresh(): void {");
+    expect(start).toBeGreaterThan(-1);
+    const renameGuardIdx = viewTs.indexOf("if (this.renameState) return;", start);
+    const cancelIdx = viewTs.indexOf("this.cancelParagraphDrag();", start);
+    expect(cancelIdx).toBeGreaterThan(start);
+    expect(renameGuardIdx).toBeGreaterThan(start);
+    expect(cancelIdx).toBeLessThan(renameGuardIdx);
+  });
+
+  it("onClose() also cancels any in-progress paragraph drag session before tearing down the view's DOM", () => {
+    const start = viewTs.indexOf("async onClose(): Promise<void> {");
+    expect(start).toBeGreaterThan(-1);
+    const end = viewTs.indexOf("\n  }", start);
+    const body = viewTs.slice(start, end);
+    expect(body).toContain("this.cancelParagraphDrag();");
+  });
+
+  it("cancelParagraphDrag() is a no-op when no paragraph drag is active — it must never disturb an in-progress section/list drag (Phase 3A/4A keep their own pre-existing, unmodified refresh-time behavior)", () => {
+    const start = viewTs.indexOf("private cancelParagraphDrag(): void {");
+    expect(start).toBeGreaterThan(-1);
+    const end = viewTs.indexOf("\n  }", start);
+    const body = viewTs.slice(start, end);
+    expect(body).toContain("if (!this.paragraphDragSession) return;");
+  });
+
+  it("no rename/delete/insert/indent/outdent/Tree Partial Edit affordance was introduced anywhere in the new paragraph drag methods (ParagraphDragSession, cancelParagraphDrag, computeParagraphDropZone, handleParagraphDragStart/DragOver/Drop) — the only capability added is a Move, delegated entirely to the pre-existing 5T-1 execution path", () => {
+    const methodNames = [
+      "cancelParagraphDrag",
+      "computeParagraphDropZone",
+      "handleParagraphDragStart",
+      "handleParagraphDragOver",
+      "handleParagraphDrop",
+    ];
+    const forbidden = [
+      "beginRenameForNode",
+      "deleteBlock(",
+      "insertBlock",
+      "indentBlock",
+      "outdentBlock",
+      "PartialEditView",
+      "activatePartialEditView",
+    ];
+    for (const name of methodNames) {
+      const start = viewTs.indexOf(`private ${name}(`);
+      expect(start).toBeGreaterThan(-1);
+      const end = viewTs.indexOf("\n  }", start);
+      const body = viewTs.slice(start, end);
+      for (const bad of forbidden) {
+        expect(body).not.toContain(bad);
+      }
+    }
+  });
+
+  it("styles.css's existing drop-indicator classes (-dragging/-drop-before/-drop-after) are REUSED as-is for paragraph D&D — no new paragraph-specific CSS class was introduced, and -drop-inside is never referenced by the paragraph drag path (checked above)", () => {
+    expect(stylesCss).toContain(".unified-outliner-dragging");
+    expect(stylesCss).toContain(".unified-outliner-drop-before");
+    expect(stylesCss).toContain(".unified-outliner-drop-after");
+  });
+
+  it("ParagraphDragSession's own doc comment and shape confirm sourceTreeNodeId is never used as a comparison/identity key - only anchor is (matching the design doc §2's 'drag payload の永続キーとして使わない' contract)", () => {
+    const start = viewTs.indexOf("interface ParagraphDragSession {");
+    expect(start).toBeGreaterThan(-1);
+    const end = viewTs.indexOf("\n}", start);
+    const body = viewTs.slice(start, end);
+    expect(body).toContain("anchor: ParagraphMoveAnchor;");
+    expect(body).toContain("sourceTreeNodeId: string;");
   });
 });
