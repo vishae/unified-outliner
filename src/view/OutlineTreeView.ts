@@ -3930,7 +3930,25 @@ export class OutlineTreeView extends ItemView {
     }
     evt.preventDefault();
     if (evt.dataTransfer) evt.dataTransfer.dropEffect = "move";
-    this.setDropIndicator(selfEl, zone);
+    // Phase 5T-2S-B: show the indicator at the edge the paragraph will
+    // actually land on after the swap completes, not the raw hover zone
+    // that merely triggered this decision. For an adjacent-only swap, the
+    // "trigger zone" and the "landing edge" are always on OPPOSITE sides
+    // of the same target row: e.g. a down-sibling target only validates
+    // when hovering its "before" (top) half, but the paragraph itself
+    // will land AFTER (below) that target once the swap runs — drawing
+    // the indicator on the raw `zone` therefore always rendered the line
+    // on the boundary immediately touching the drag source's OWN current
+    // position (since the two rows are adjacent), which real-device
+    // verification showed users misread as "this will not move" rather
+    // than as a preview of the destination. Deriving the drawn edge from
+    // `resolution.direction` instead fixes this without touching the
+    // validity check above (`zone` is still exactly what
+    // resolveParagraphDropDirection uses to decide before/after
+    // eligibility) or any execution logic in handleParagraphDrop/
+    // moveParagraphFromAnchor.
+    const indicatorMode: DropMode = resolution.direction === "down" ? "after" : "before";
+    this.setDropIndicator(selfEl, indicatorMode);
   }
 
   /**
