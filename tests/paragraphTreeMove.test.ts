@@ -676,6 +676,65 @@ describe("resolveParagraphDropDirection: valid adjacent drops", () => {
     expect(outcome.lines).toEqual(direct.lines);
     expect(outcome.newStartLine).toBe(direct.newStartLine);
   });
+
+  it("standalone callout target (both directions) -> allowed, matches moveComplexBlock byte-for-byte (Phase 5T-2R: promoted from an ad-hoc real-device debug investigation into a proper regression test, since a standalone callout target was the exact pairing the 5T-2 real-device pass found broken at the UI-wiring layer even though this pure function was already correct)", () => {
+    const text = [
+      "## Section",
+      "",
+      "paragraph B1.",
+      "",
+      "> [!note] Callout title",
+      "> Callout body.",
+      "",
+      "paragraph B2.",
+    ].join("\n");
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const b1Info = scan.blocks.find(
+      (b) => b.kind === "paragraph" && doc.lines[b.range.startLine].includes("paragraph B1")
+    )!;
+    const b2Info = scan.blocks.find(
+      (b) => b.kind === "paragraph" && doc.lines[b.range.startLine].includes("paragraph B2")
+    )!;
+    const calloutInfo = scan.blocks.find((b) => b.kind === "callout")!;
+    const target = hintFromRange(calloutInfo.range.startLine, calloutInfo.range.endLine, calloutInfo.parentId);
+
+    // paragraph B1 is the callout's up-sibling from the callout's own
+    // perspective, i.e. the callout is B1's DOWN-sibling -> zone "before".
+    const anchorB1 = buildParagraphMoveAnchor(doc, b1Info)!;
+    const resB1Before = resolveParagraphDropDirection(text, anchorB1, target, "before");
+    expect(resB1Before).toEqual({ allowed: true, direction: "down" });
+    const resB1After = resolveParagraphDropDirection(text, anchorB1, target, "after");
+    expect(resB1After).toEqual({ allowed: false, reason: "wrong-zone" });
+
+    const outcomeB1 = moveParagraphFromAnchor(text, anchorB1, "down");
+    const directB1 = moveComplexBlock(
+      doc,
+      { kind: "paragraph", range: b1Info.range, parentId: b1Info.parentId, complexBlockId: b1Info.id },
+      "down",
+      scan
+    );
+    expect(outcomeB1.lines).toEqual(directB1.lines);
+    expect(outcomeB1.newStartLine).toBe(directB1.newStartLine);
+
+    // paragraph B2 is the callout's down-sibling -> the callout is B2's
+    // UP-sibling -> zone "after".
+    const anchorB2 = buildParagraphMoveAnchor(doc, b2Info)!;
+    const resB2After = resolveParagraphDropDirection(text, anchorB2, target, "after");
+    expect(resB2After).toEqual({ allowed: true, direction: "up" });
+    const resB2Before = resolveParagraphDropDirection(text, anchorB2, target, "before");
+    expect(resB2Before).toEqual({ allowed: false, reason: "wrong-zone" });
+
+    const outcomeB2 = moveParagraphFromAnchor(text, anchorB2, "up");
+    const directB2 = moveComplexBlock(
+      doc,
+      { kind: "paragraph", range: b2Info.range, parentId: b2Info.parentId, complexBlockId: b2Info.id },
+      "up",
+      scan
+    );
+    expect(outcomeB2.lines).toEqual(directB2.lines);
+    expect(outcomeB2.newStartLine).toBe(directB2.newStartLine);
+  });
 });
 
 describe("resolveParagraphDropDirection: wrong-zone rejections (no arbitrary-insertion-looking indicator)", () => {

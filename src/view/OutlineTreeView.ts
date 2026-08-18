@@ -3718,10 +3718,20 @@ export class OutlineTreeView extends ItemView {
     this.draggingItemEl = itemEl;
     itemEl.addClass("unified-outliner-dragging");
     if (evt.dataTransfer) {
-      // Required by the HTML5 DnD spec for the drag to be recognized by
-      // some browsers/Electron builds; the actual move is driven entirely
-      // by this.dragSourceId, not by reading this data back out.
-      evt.dataTransfer.setData("text/plain", sectionId);
+      // Phase 5T-2R: the payload is an intentionally empty sentinel, never
+      // the real sectionId. A real-device pass during Phase 5T-2 proved
+      // that dropping a Tree row outside the Tree (e.g. onto the body
+      // editor) is never intercepted by any Tree-side dragover/drop
+      // listener, so the browser/Electron/CodeMirror's own default
+      // text/plain drop-handling runs and inserts this payload as literal
+      // text. Writing the real id here would corrupt the Markdown body
+      // with strings like "sec-1". An empty string still satisfies the
+      // HTML5 DnD spec's requirement that some browsers/Electron builds
+      // need at least one setData() call to recognize the drag at all,
+      // while guaranteeing zero textual leakage under default drop
+      // handling. The actual move is driven entirely by this.dragSourceId
+      // (private instance state), never by reading this data back out.
+      evt.dataTransfer.setData("text/plain", "");
       evt.dataTransfer.effectAllowed = "move";
     }
   }
@@ -3868,12 +3878,19 @@ export class OutlineTreeView extends ItemView {
     this.draggingItemEl = itemEl;
     itemEl.addClass("unified-outliner-dragging");
     if (evt.dataTransfer) {
-      // Formal MIME payload only — required by the HTML5 DnD spec for some
-      // browsers/Electron builds to recognize the drag at all. The actual
-      // decision is driven entirely by this.paragraphDragSession, never by
-      // reading this back out (same convention handleDragStart above
-      // already uses for section/list).
-      evt.dataTransfer.setData("text/plain", node.id);
+      // Phase 5T-2R: intentionally empty sentinel, never the real node.id
+      // (a Tree-view-only id like "tree-paragraph:2"). Same rationale as
+      // handleDragStart above — a real-device pass during Phase 5T-2 proved
+      // dropping a paragraph row onto the body editor inserts this payload
+      // as literal text via the browser/Electron/CodeMirror's default
+      // text/plain drop-handling when no Tree-side listener intercepts the
+      // drop. An empty string keeps the required setData() call (needed by
+      // some browsers/Electron builds to recognize the drag at all) while
+      // guaranteeing zero textual leakage. The actual decision is driven
+      // entirely by this.paragraphDragSession (private instance state),
+      // never by reading this back out (same convention handleDragStart
+      // above already uses for section/list).
+      evt.dataTransfer.setData("text/plain", "");
       evt.dataTransfer.effectAllowed = "move";
     }
   }
