@@ -336,6 +336,20 @@ describe("Phase 5T-1: paragraph Tree-triggered Move (narrow, safety-gated except
     expect(body).toContain("if (!upEligible && !downEligible) return;");
   });
 
+  it("REGRESSION (found via real-device verification after the initial 5T-1 commit): showParagraphMoveMenu resolves the target ComplexBlockInfo from the Tree node's own rangeStart/rangeEnd/parentId via nodeById — NEVER by comparing complexScan.blocks[].id against the raw Tree nodeId. A paragraph Tree row's node.id is tree/buildOutlineTree.ts's paragraphViewId(ordinal) (e.g. 'tree-paragraph:3'), a display-ordinal id, NOT the scan-local ComplexBlockInfo.id ('paragraph-3') that standalone complex-member rows use as their own node.id. Comparing the two directly (as the first commit did) makes `target` always undefined, silently producing an empty menu for every paragraph row — caught only by right-clicking a real paragraph node on an actual device, never by a static source check or a pure-function test of paragraphTreeMove.ts in isolation.", () => {
+    const start = viewTs.indexOf("private showParagraphMoveMenu(");
+    expect(start).toBeGreaterThan(-1);
+    const end = viewTs.indexOf("\n  private dispatchAndApplyParagraphMove(", start);
+    const body = viewTs.slice(start, end);
+    expect(body).toContain("this.nodeById.get(nodeId)");
+    expect(body).toContain("isOutlineParagraphNode(treeNode)");
+    expect(body).toContain("b.range.startLine === treeNode.rangeStart");
+    expect(body).toContain("b.range.endLine === treeNode.rangeEnd");
+    expect(body).toContain("b.parentId === treeNode.parentId");
+    // The original (buggy) id-equality lookup must never reappear.
+    expect(body).not.toContain('b.id === nodeId && b.kind === "paragraph"');
+  });
+
   it("dispatchAndApplyParagraphMove delegates the actual write-back to moveParagraphFromAnchor and reuses applyLineEditOutcome (the shared Move/Edit write-back path) rather than writing to the editor directly", () => {
     const start = viewTs.indexOf("private dispatchAndApplyParagraphMove(");
     expect(start).toBeGreaterThan(-1);

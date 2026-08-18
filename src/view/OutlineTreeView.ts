@@ -2624,7 +2624,31 @@ export class OutlineTreeView extends ItemView {
   private showParagraphMoveMenu(evt: MouseEvent, nodeId: string): void {
     const doc = this.currentDoc;
     const complexScan = this.currentComplexScan;
-    const target = complexScan?.blocks.find((b) => b.id === nodeId && b.kind === "paragraph");
+    // Real-device verification (Phase 5T-1 post-commit fix): a paragraph
+    // Tree row's OWN `node.id` is `tree-paragraph:<ordinal>`
+    // (tree/buildOutlineTree.ts's paragraphViewId) — a document-wide
+    // display-ordinal id, NOT the scan-local `ComplexBlockInfo.id` that
+    // standalone complex-member rows use as their Tree node id (those are
+    // built with `id: info.id` directly — see buildStandaloneComplexNode).
+    // Looking a paragraph up by `b.id === nodeId` against complexScan.blocks
+    // therefore never matches anything, which silently produced an empty
+    // menu for every paragraph row until this was caught by right-clicking
+    // an actual paragraph node on a real device. The correct resolution —
+    // and the one the 5T-1 ticket's own §3 already calls for ("Tree ノード
+    // の開始位置をヒントとして、現在の本文から段落を解決する") — is to treat
+    // the Tree node's own `rangeStart`/`rangeEnd`/`parentId` (available on
+    // `OutlineTreeParagraphNode`, looked up via `nodeById`) as a HINT for
+    // which live `ComplexBlockInfo` to resolve from the current scan, never
+    // its `id` string.
+    const treeNode = this.nodeById.get(nodeId);
+    if (!treeNode || !isOutlineParagraphNode(treeNode)) return;
+    const target = complexScan?.blocks.find(
+      (b) =>
+        b.kind === "paragraph" &&
+        b.range.startLine === treeNode.rangeStart &&
+        b.range.endLine === treeNode.rangeEnd &&
+        b.parentId === treeNode.parentId
+    );
     if (!doc || !complexScan || !target) return;
 
     const anchor = buildParagraphMoveAnchor(doc, target);
