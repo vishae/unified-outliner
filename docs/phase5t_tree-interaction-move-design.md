@@ -270,3 +270,108 @@ paragraph ↔ list(実際の list item/サブツリーとの交換)は 5T-0 の�
 - `docs/phase5p3d_paragraph-tree-display-design.md` — 5P-3 の確定設計。paragraph の read-only Tree 投影契約の原典。
 - `docs/phase5d0_3_composite-block-outline-tree-projection-design-memo.md` — CompositeBlock の Tree 投影・Tree 発火 move の既存実装。本ドキュメント §5 の設計判断の直接の先例。
 - `docs/統合実装ロードマップ_2026-08-05.md` §3.8、および本チケットで追記する新セクション — Phase 5P/5T の位置づけ。
+
+## 13. Phase 5T-1R: 実機バグ修正の受入固定と paragraph 解決契約（追記）
+
+Phase 5T-1 の初回実装（`0fc3b0a`）は、実機（Method Vault）での動作確認で
+「paragraph Tree node を右クリックしても context menu が一切開かない」不具合
+を発生させていた。原因・修正・恒久化された契約を、本ドキュメントに正式に記
+録する。5T-1 の完了状態は `faadbac`（バグ修正コミット）を含めたものとして
+確定する。
+
+### 13-1. 根本原因: view identity と scan-local identity の混同
+
+`OutlineTreeParagraphNode.id`（`tree/buildOutlineTree.ts` の
+`paragraphViewId(ordinal)` が生成する `tree-paragraph:<ordinal>` という文字
+列）は、Tree の **表示・DOM・イベント配線のための一時 identity** である。
+`refresh()` のたびに ordinal から再構築され、ドキュメント全体での「表示順」
+にのみ依存する。
+
+これに対し `ComplexBlockInfo.id`（`parser/complexBlocks.ts` の
+`scanComplexBlocks()` が1回のスキャン呼び出し内でのみ発行する
+`paragraph-<n>` という文字列）は **スキャンローカルな一時 id** であり、別の
+スキャン呼び出しとの間で同じ値が同じ段落を指す保証は一切ない。
+
+Phase 5T-1 の初回実装は、`showParagraphMoveMenu` 内で
+`complexScan?.blocks.find((b) => b.id === nodeId && b.kind === "paragraph")`
+という比較を行っていたが、`nodeId`（Tree node の view identity）と
+`b.id`（スキャンローカル id）は**そもそも別の id 空間**であり、この比較は
+論理的に一致し得ない。結果として全ての paragraph 行で `target` が常に
+`undefined` となり、メニューが常に空（実質的に一切開かない）状態になって
+いた。
+
+この不具合は、以下のいずれの検証手段でも検出できなかった:
+
+- 純粋関数テスト（`buildParagraphMoveAnchor`/`moveParagraphFromAnchor` を
+  直接呼ぶテスト）は、常に実在する `ComplexBlockInfo` を直接渡していたた
+  め、バグのあった Tree-node-id → `ComplexBlockInfo` の解決コード自体を一
+  度も経由しなかった。
+- 静的ソーステキスト検査（文字列の存在確認）は、コード自体は「一見妥当そ
+  う」に見えるため、id 空間の混同という論理的な誤りを検出できなかった。
+- 実際に Obsidian 上で paragraph Tree node を右クリックして初めて、メニュー
+  が一切開かないという症状として発覚した。
+
+### 13-2. 恒久化された解決契約（`faadbac` で導入、5T-1R で固定）
+
+`OutlineTreeParagraphNode.id` の許可される用途は、以下に限定される:
+
+- DOM 上の key（`unified-outliner-row-${node.id}` 等）
+- Tree 内部の一時的なイベント配線
+- Tree row の表示・選択状態の表現
+- `nodeById` を介した Tree node オブジェクトそのものの取得
+
+以下の用途では **絶対に使用してはならない**:
+
+- `ComplexBlockInfo.id` との直接比較
+- parser/スキャン結果から段落を同定するための識別子
+- `ParagraphMoveAnchor` の永続的な identity
+- fold identity
+- 選択状態の永続化キー
+- drag payload の永続的な key
+- 本文書き込み先を最終決定する識別子
+
+Tree paragraph node を起点として本文の段落を操作する際は、常に以下の手順
+に従う（`edit/paragraphTreeMove.ts#resolveParagraphFromTreeHint` /
+`buildParagraphMoveAnchor` / `moveParagraphFromAnchor` が実装する契約。
+`view/OutlineTreeView.ts#showParagraphMoveMenu` /
+`#dispatchAndApplyParagraphMove` がこの契約の唯一の呼び出し元）:
+
+1. `nodeById` を介して Tree node を取得する。
+2. その node の `rangeStart`/`rangeEnd`/`parentId`（必要なら depth）を、
+   あくまで**候補解決のヒント**として使う——値そのものを信頼しない。
+3. エディタの現在の本文テキストを取得する。
+4. `parseDocument()` / `scanComplexBlocks()` を再実行する（スキャン結果は
+   常に「今」の本文に対して新規に取り直す）。
+5. `kind === "paragraph"` かつ range・parentId・depth が一致するブロックを
+   照合する（`resolveParagraphFromTreeHint`）。
+6. `ParagraphMoveAnchor` を新規生成、または既存アンカーを3段階（id ヒント
+   → parentId/depth 構造一致 → `originalText` バイト単位一致）で再検証する
+   （`buildParagraphMoveAnchor`/`moveParagraphFromAnchor` の stage 1–3）。
+7. `originalText` をバイト単位で比較する（同上 stage 3）。
+8. 一意に解決できた場合のみ、既存の安全な move パス
+   （`move/resolveMoveTarget.ts#moveComplexBlock`）に委譲する（stage 4）。
+9. 曖昧さが残る場合（複数候補が一致する等）は、常に no-op とし、本文を一
+   切変更しない。
+
+この手順は、**今後 Tree 起点で本文 paragraph を操作するすべての機能**（新
+規機能の追加はこのチケットの範囲外だが、将来 D&D 等を実装する際も）に対す
+る標準契約として固定する。逆方向の設計（Tree node id を段落の永続 id とし
+て扱う設計）は、5T 系列のいかなるフェーズでも採用しない。
+
+なお、`OutlineTreeComplexMemberNode`（standalone callout/blockquote の
+Tree node）は `id: info.id`（`ComplexBlockInfo.id` そのもの）を自身の id
+として使う、という**別の、それ自体は正しい**設計になっている
+（`buildStandaloneComplexNode`）。これは standalone complex-member の
+Tree node と `ComplexBlockInfo` が実質的に1対1で同じ scan 呼び出し内に閉
+じているためであり、paragraph の場合とは前提が異なる。両者を同一の契約
+として混同しないこと。
+
+### 13-3. 検証基盤
+
+- 純粋関数テスト・Tree node 解決テスト・UI 配線テストの3系統をすべて実装
+  し、`tests/paragraphTreeMove.test.ts` / `tests/paragraphOutlineTreeUiWiring.test.ts`
+  に反映済み（詳細はテストファイル自身のコメントを参照）。
+- 実機受入手順は `docs/git-push-release-runbook.md` に手順化した。今後
+  「テスト・型検査・lint・build が green であること」だけを「完了」の根拠
+  にしてはならない——実機（Method Vault）での確認を経てから完了報告を出す
+  こと。

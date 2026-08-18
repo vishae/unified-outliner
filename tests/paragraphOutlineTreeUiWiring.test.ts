@@ -314,6 +314,9 @@ describe("Phase 5T-1: paragraph Tree-triggered Move (narrow, safety-gated except
     expect(viewTs).toContain("buildParagraphMoveAnchor");
     expect(viewTs).toContain("moveParagraphFromAnchor");
     expect(viewTs).toContain("paragraphTreeMoveReasonText");
+    // Phase 5T-1R: the extracted Tree-node-hint resolver, imported rather
+    // than re-derived inline (see the dedicated REGRESSION test below).
+    expect(viewTs).toContain("resolveParagraphFromTreeHint");
     expect(viewTs).toContain("findComplexSiblingTarget");
   });
 
@@ -336,18 +339,37 @@ describe("Phase 5T-1: paragraph Tree-triggered Move (narrow, safety-gated except
     expect(body).toContain("if (!upEligible && !downEligible) return;");
   });
 
-  it("REGRESSION (found via real-device verification after the initial 5T-1 commit): showParagraphMoveMenu resolves the target ComplexBlockInfo from the Tree node's own rangeStart/rangeEnd/parentId via nodeById — NEVER by comparing complexScan.blocks[].id against the raw Tree nodeId. A paragraph Tree row's node.id is tree/buildOutlineTree.ts's paragraphViewId(ordinal) (e.g. 'tree-paragraph:3'), a display-ordinal id, NOT the scan-local ComplexBlockInfo.id ('paragraph-3') that standalone complex-member rows use as their own node.id. Comparing the two directly (as the first commit did) makes `target` always undefined, silently producing an empty menu for every paragraph row — caught only by right-clicking a real paragraph node on an actual device, never by a static source check or a pure-function test of paragraphTreeMove.ts in isolation.", () => {
+  it("REGRESSION (found via real-device verification after the initial 5T-1 commit; Phase 5T-1R locks this in as a permanent contract): showParagraphMoveMenu resolves the target ComplexBlockInfo from the Tree node's own rangeStart/rangeEnd/parentId via nodeById + edit/paragraphTreeMove.ts#resolveParagraphFromTreeHint — NEVER by comparing complexScan.blocks[].id against the raw Tree nodeId. A paragraph Tree row's node.id is tree/buildOutlineTree.ts's paragraphViewId(ordinal) (e.g. 'tree-paragraph:3'), a display-ordinal id, NOT the scan-local ComplexBlockInfo.id ('paragraph-3') that standalone complex-member rows use as their own node.id. Comparing the two directly (as the first commit did) makes `target` always undefined, silently producing an empty menu for every paragraph row — caught only by right-clicking a real paragraph node on an actual device, never by a static source check or a pure-function test of paragraphTreeMove.ts in isolation. IMPORTANT: this static check is supplementary only — see the dedicated 'Tree node resolution' describe block in tests/paragraphTreeMove.test.ts for the real defense, which exercises resolveParagraphFromTreeHint directly against REAL buildOutlineTree()+scanComplexBlocks() output rather than trusting a source-text grep alone.", () => {
     const start = viewTs.indexOf("private showParagraphMoveMenu(");
     expect(start).toBeGreaterThan(-1);
     const end = viewTs.indexOf("\n  private dispatchAndApplyParagraphMove(", start);
     const body = viewTs.slice(start, end);
     expect(body).toContain("this.nodeById.get(nodeId)");
     expect(body).toContain("isOutlineParagraphNode(treeNode)");
-    expect(body).toContain("b.range.startLine === treeNode.rangeStart");
-    expect(body).toContain("b.range.endLine === treeNode.rangeEnd");
-    expect(body).toContain("b.parentId === treeNode.parentId");
-    // The original (buggy) id-equality lookup must never reappear.
+    // Phase 5T-1R: the range/parentId comparison itself now lives inside
+    // the extracted, directly-tested resolveParagraphFromTreeHint — this
+    // call site only supplies the hint object built from the Tree node.
+    expect(body).toContain("resolveParagraphFromTreeHint(");
+    expect(body).toContain("rangeStart: treeNode.rangeStart");
+    expect(body).toContain("rangeEnd: treeNode.rangeEnd");
+    expect(body).toContain("parentId: treeNode.parentId");
+    // The original (buggy) id-equality lookup must never reappear, neither
+    // here nor inside the extracted resolver itself.
     expect(body).not.toContain('b.id === nodeId && b.kind === "paragraph"');
+    expect(body).not.toContain("complexScan?.blocks.find(\n      (b) =>\n        b.kind === \"paragraph\" &&\n        b.id ===");
+  });
+
+  it("edit/paragraphTreeMove.ts's extracted resolveParagraphFromTreeHint never compares a Tree node id against ComplexBlockInfo.id — it matches purely on kind/range/parentId, per the 5T-1R view-identity-vs-scan-identity contract", () => {
+    const resolverStart = moveTs.indexOf("export function resolveParagraphFromTreeHint(");
+    expect(resolverStart).toBeGreaterThan(-1);
+    const resolverEnd = moveTs.indexOf("\n/**", resolverStart + 1);
+    const resolverBody = moveTs.slice(resolverStart, resolverEnd === -1 ? undefined : resolverEnd);
+    expect(resolverBody).toContain('b.kind === "paragraph"');
+    expect(resolverBody).toContain("b.range.startLine === hint.rangeStart");
+    expect(resolverBody).toContain("b.range.endLine === hint.rangeEnd");
+    expect(resolverBody).toContain("b.parentId === hint.parentId");
+    expect(resolverBody).not.toContain("b.id ===");
+    expect(resolverBody).not.toContain(".id === hint");
   });
 
   it("dispatchAndApplyParagraphMove delegates the actual write-back to moveParagraphFromAnchor and reuses applyLineEditOutcome (the shared Move/Edit write-back path) rather than writing to the editor directly", () => {

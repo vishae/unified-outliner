@@ -212,6 +212,7 @@ import {
   moveParagraphFromAnchor,
   ParagraphMoveAnchor,
   paragraphTreeMoveReasonText,
+  resolveParagraphFromTreeHint,
 } from "../edit/paragraphTreeMove";
 import { findComplexSiblingTarget, ResolvedMoveUnit } from "../move/resolveMoveTarget";
 import { getEnabledCompositeBlockRules } from "../settingsDefaults";
@@ -2640,16 +2641,28 @@ export class OutlineTreeView extends ItemView {
     // `OutlineTreeParagraphNode`, looked up via `nodeById`) as a HINT for
     // which live `ComplexBlockInfo` to resolve from the current scan, never
     // its `id` string.
+    //
+    // Phase 5T-1R: this resolution glue is no longer inline here — it is
+    // now edit/paragraphTreeMove.ts#resolveParagraphFromTreeHint, a small
+    // standalone pure function directly unit-tested (combining real
+    // buildOutlineTree() output with real scanComplexBlocks() output —
+    // see tests/paragraphTreeMove.test.ts) without needing a DOM or an
+    // OutlineTreeView instance. This call site now only supplies the hint
+    // and handles the null case; see that function's own doc comment for
+    // the full root-cause writeup and the resolution contract this locks
+    // in for every future Tree-triggered paragraph operation.
     const treeNode = this.nodeById.get(nodeId);
     if (!treeNode || !isOutlineParagraphNode(treeNode)) return;
-    const target = complexScan?.blocks.find(
-      (b) =>
-        b.kind === "paragraph" &&
-        b.range.startLine === treeNode.rangeStart &&
-        b.range.endLine === treeNode.rangeEnd &&
-        b.parentId === treeNode.parentId
+    if (!doc || !complexScan) return;
+    const target = resolveParagraphFromTreeHint(
+      {
+        rangeStart: treeNode.rangeStart,
+        rangeEnd: treeNode.rangeEnd,
+        parentId: treeNode.parentId,
+      },
+      complexScan
     );
-    if (!doc || !complexScan || !target) return;
+    if (!target) return;
 
     const anchor = buildParagraphMoveAnchor(doc, target);
     if (!anchor) return;

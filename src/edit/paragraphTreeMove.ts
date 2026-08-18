@@ -42,7 +42,7 @@
  * `ParagraphMoveAnchor` on the same model.
  */
 import { ParsedDocument } from "../model/block";
-import { ComplexBlockInfo } from "../model/complexBlock";
+import { ComplexBlockInfo, ComplexBlockScanResult } from "../model/complexBlock";
 import { complexBlockDepth, scanComplexBlocks } from "../parser/complexBlocks";
 import { parseDocument } from "../parser/parseDocument";
 import { MoveDirection } from "../move/findMoveTarget";
@@ -108,6 +108,85 @@ export function buildParagraphMoveAnchor(
     rangeStart: info.range.startLine,
     rangeEnd: info.range.endLine,
   };
+}
+
+/**
+ * A minimal, structural hint shape for resolving a paragraph
+ * `ComplexBlockInfo` from a Tree-node-like object. Deliberately NOT the
+ * full `OutlineTreeParagraphNode` type (this module stays independent of
+ * tree/buildOutlineTree.ts and view/OutlineTreeView.ts, matching this
+ * file's existing "pure function, no Tree/Obsidian dependency"
+ * convention) — any caller holding a `rangeStart`/`rangeEnd`/`parentId`
+ * triple, Tree node or otherwise, can use this.
+ */
+export interface ParagraphTreeNodeHint {
+  rangeStart: number;
+  rangeEnd: number;
+  parentId: string | null;
+}
+
+/**
+ * Phase 5T-1R §2/§3: resolves the LIVE `ComplexBlockInfo` (kind
+ * "paragraph") that a Tree-node-like `hint` currently corresponds to,
+ * given a fresh `scanComplexBlocks()` result over the CURRENT document.
+ *
+ * This is the extraction, mandated by the 5T-1R ticket, of the resolution
+ * glue that used to live inline inside
+ * view/OutlineTreeView.ts#showParagraphMoveMenu (added there as the
+ * Phase 5T-1 post-commit real-device bug fix, faadbac) — pulled out here
+ * so it is directly unit-testable without an OutlineTreeView instance or
+ * a DOM, and so any future Tree-triggered paragraph feature reuses this
+ * exact function rather than re-deriving (and potentially re-breaking)
+ * the same logic inline a second time.
+ *
+ * ---- Root-cause context (why this function exists at all) ----
+ *
+ * A paragraph Tree node's OWN `id` (tree/buildOutlineTree.ts's
+ * `paragraphViewId` — `` `tree-paragraph:${ordinal}` ``) is a Tree-VIEW-ONLY
+ * identity: a display-ordinal string, rebuilt fresh on every `refresh()`,
+ * that exists purely for the DOM key / event wiring / row highlighting /
+ * `nodeById` lookup. It is NEVER the same id space as
+ * `ComplexBlockInfo.id` (parser/complexBlocks.ts's scan-local
+ * `` `paragraph-${n}` ``, valid only within one `scanComplexBlocks()`
+ * call) — comparing the two directly is exactly the bug Phase 5T-1's
+ * initial commit (0fc3b0a) shipped and the real-device-only-detectable
+ * failure faadbac fixed (the two id spaces simply never match, so the
+ * paragraph context menu silently never opened for any paragraph row).
+ * This function is the one, and from now on the ONLY, sanctioned way to
+ * bridge a Tree node back to its live `ComplexBlockInfo`: treat the Tree
+ * node's structural fields (`rangeStart`/`rangeEnd`/`parentId`) as HINTS
+ * for a fresh scan, never its `id` string.
+ *
+ * Returns `null` when: no `kind === "paragraph"` block in `scan.blocks`
+ * matches all three hint fields (the paragraph the Tree row displayed no
+ * longer exists at that structural position — deleted, merged into a
+ * neighbor, or the document changed since the Tree was last built); or
+ * more than one block matches (a well-formed scan should never produce
+ * two blocks sharing one exact line range, but resolving to `null` rather
+ * than picking arbitrarily keeps this function's own "never guess"
+ * contract, matching `moveParagraphFromAnchor`'s own stage-3 "ambiguous ->
+ * reject" convention below).
+ *
+ * IMPORTANT — this function alone is NOT a green light to write to the
+ * body. A caller must still run the returned block through
+ * `buildParagraphMoveAnchor` and then `moveParagraphFromAnchor` (which
+ * re-derives its OWN fresh scan and re-verifies parentId/depth/content
+ * byte-for-byte) before ever touching the note — this function only
+ * answers "which live block does this Tree node currently point at",
+ * never "is it still safe to move".
+ */
+export function resolveParagraphFromTreeHint(
+  hint: ParagraphTreeNodeHint,
+  scan: ComplexBlockScanResult
+): ComplexBlockInfo | null {
+  const matches = scan.blocks.filter(
+    (b) =>
+      b.kind === "paragraph" &&
+      b.range.startLine === hint.rangeStart &&
+      b.range.endLine === hint.rangeEnd &&
+      b.parentId === hint.parentId
+  );
+  return matches.length === 1 ? matches[0] : null;
 }
 
 /**

@@ -6,7 +6,17 @@ import {
   buildParagraphMoveAnchor,
   moveParagraphFromAnchor,
   ParagraphMoveAnchor,
+  ParagraphTreeNodeHint,
+  resolveParagraphFromTreeHint,
 } from "../src/edit/paragraphTreeMove";
+import {
+  buildOutlineTree,
+  flattenOutlineTree,
+  isOutlineComplexMemberNode,
+  isOutlineParagraphNode,
+  OutlineTreeParagraphNode,
+} from "../src/tree/buildOutlineTree";
+import { createTranslator } from "../src/i18n";
 
 /**
  * Phase 5T-1 §8-1 ("anchor と再解決を純粋関数テストで検証すること — 静的ソース
@@ -401,5 +411,178 @@ describe("moveParagraphFromAnchor / buildParagraphMoveAnchor: independence from 
     const anchor = anchorForNth(text, 0);
     const outcome = moveParagraphFromAnchor(text, anchor, "down");
     expect(outcome.changed).toBe(true);
+  });
+});
+
+/**
+ * Phase 5T-1R §3 ("Tree node 解決テスト"): unlike every test above (which
+ * exercises buildParagraphMoveAnchor/moveParagraphFromAnchor directly
+ * against a hand-built ComplexBlockInfo, bypassing the Tree entirely -
+ * exactly why the real-device id-space-confusion bug in
+ * view/OutlineTreeView.ts#showParagraphMoveMenu went uncaught by every one
+ * of them), these tests build a REAL Outline Tree via
+ * tree/buildOutlineTree.ts#buildOutlineTree and combine its actual
+ * OutlineTreeParagraphNode output with a REAL scanComplexBlocks() result,
+ * then feed that into edit/paragraphTreeMove.ts#resolveParagraphFromTreeHint
+ * - the exact extracted function view/OutlineTreeView.ts#showParagraphMoveMenu
+ * itself calls (see tests/paragraphOutlineTreeUiWiring.test.ts's own
+ * "REGRESSION" test for the static-source-side confirmation of that; THIS
+ * describe block is the real, executable side of that same guarantee,
+ * per the ticket's explicit instruction not to rely on a source-text grep
+ * alone). No change to parseDocument.ts or ParsedDocument.nodes is
+ * involved anywhere below.
+ */
+function realParagraphTreeNodes(text: string): {
+  doc: ReturnType<typeof parseDocument>;
+  scan: ReturnType<typeof scanComplexBlocks>;
+  paragraphNodes: OutlineTreeParagraphNode[];
+} {
+  const doc = parseDocument(text);
+  const scan = scanComplexBlocks(doc);
+  const tree = buildOutlineTree(doc, {
+    paragraphs: { blocks: scan.blocks },
+    t: createTranslator("en"),
+  });
+  const paragraphNodes = flattenOutlineTree(tree).filter(isOutlineParagraphNode);
+  return { doc, scan, paragraphNodes };
+}
+
+function hintFromNode(node: OutlineTreeParagraphNode): ParagraphTreeNodeHint {
+  return { rangeStart: node.rangeStart, rangeEnd: node.rangeEnd, parentId: node.parentId };
+}
+
+describe("resolveParagraphFromTreeHint (Phase 5T-1R §3: real Tree-build + real scan)", () => {
+  it("a real paragraph Tree node's own `id` (view identity, tree-paragraph:N) is NEVER equal to the ComplexBlockInfo.id (scan-local, paragraph-N) it corresponds to - the exact id-space confusion that produced the original real-device bug", () => {
+    const text = ["# H", "paragraph A", "", "paragraph B", "", "paragraph C"].join("\n");
+    const { scan, paragraphNodes } = realParagraphTreeNodes(text);
+    expect(paragraphNodes).toHaveLength(3);
+    for (const node of paragraphNodes) {
+      expect(node.id).toMatch(/^tree-paragraph:[0-9]+$/);
+      const wouldMatchById = scan.blocks.find((b) => b.id === node.id);
+      // The buggy pre-faadbac lookup: comparing complexScan.blocks[].id
+      // against the Tree node's own id can never succeed, because the two
+      // are different id spaces entirely.
+      expect(wouldMatchById).toBeUndefined();
+    }
+  });
+
+  it("resolves each real paragraph Tree node back to its own live ComplexBlockInfo purely via rangeStart/rangeEnd/parentId - never via id string comparison", () => {
+    const text = ["# H", "paragraph A", "", "paragraph B", "", "paragraph C"].join("\n");
+    const { doc, scan, paragraphNodes } = realParagraphTreeNodes(text);
+    expect(paragraphNodes.map((n) => n.label)).toEqual(["paragraph A", "paragraph B", "paragraph C"]);
+    for (const node of paragraphNodes) {
+      const resolved = resolveParagraphFromTreeHint(hintFromNode(node), scan);
+      expect(resolved).not.toBeNull();
+      expect(resolved!.range.startLine).toBe(node.rangeStart);
+      expect(resolved!.range.endLine).toBe(node.rangeEnd);
+      expect(resolved!.parentId).toBe(node.parentId);
+      const extracted = doc.lines.slice(resolved!.range.startLine, resolved!.range.endLine + 1).join("\n");
+      // Confirms the resolved block is genuinely the SAME paragraph the
+      // node displayed, by content - even though resolution itself never
+      // looked at content or at either id string.
+      expect(extracted).toBe(node.label);
+    }
+  });
+
+  it("resolution is unaffected when an earlier paragraph's removal shifts every later paragraph's view-id ordinal - a fresh Tree build assigns new tree-paragraph:N ids, yet the SAME underlying paragraph (identified by content) still re-resolves correctly by its OWN fresh range/parentId, never by comparing old and new id strings", () => {
+    const before = ["# H", "paragraph A", "", "paragraph B", "", "paragraph C"].join("\n");
+    const { paragraphNodes: nodesBefore } = realParagraphTreeNodes(before);
+    const paragraphCBefore = nodesBefore.find((n) => n.label === "paragraph C");
+    expect(paragraphCBefore?.id).toBe("tree-paragraph:3");
+
+    // Simulate an edit that removes the first paragraph - every later
+    // paragraph's scan-local id AND view-id ordinal shifts down by one.
+    const after = ["# H", "paragraph B", "", "paragraph C"].join("\n");
+    const { scan: scanAfter, paragraphNodes: nodesAfter } = realParagraphTreeNodes(after);
+    const paragraphCAfter = nodesAfter.find((n) => n.label === "paragraph C");
+    expect(paragraphCAfter?.id).toBe("tree-paragraph:2"); // ordinal shifted; a NEW view id.
+    expect(paragraphCAfter?.id).not.toBe(paragraphCBefore?.id);
+
+    // Resolution against the fresh scan, using the fresh node's own hint,
+    // still finds paragraph C correctly - it never compared the old and
+    // new id strings against each other at all.
+    const resolved = resolveParagraphFromTreeHint(hintFromNode(paragraphCAfter!), scanAfter);
+    expect(resolved).not.toBeNull();
+    expect(resolved!.id).not.toBe(paragraphCAfter!.id); // still two different id spaces, post-shift.
+  });
+
+  it("disambiguates two paragraphs with IDENTICAL preview text correctly, via each node's own distinct rangeStart/rangeEnd (never by label/content, which resolveParagraphFromTreeHint does not even inspect)", () => {
+    const text = ["# H", "same text", "", "same text"].join("\n");
+    const { paragraphNodes, scan } = realParagraphTreeNodes(text);
+    expect(paragraphNodes).toHaveLength(2);
+    expect(paragraphNodes[0].label).toBe(paragraphNodes[1].label); // identical preview text, by construction.
+    expect(paragraphNodes[0].rangeStart).not.toBe(paragraphNodes[1].rangeStart);
+
+    const resolvedFirst = resolveParagraphFromTreeHint(hintFromNode(paragraphNodes[0]), scan);
+    const resolvedSecond = resolveParagraphFromTreeHint(hintFromNode(paragraphNodes[1]), scan);
+    expect(resolvedFirst).not.toBeNull();
+    expect(resolvedSecond).not.toBeNull();
+    expect(resolvedFirst!.range.startLine).toBe(paragraphNodes[0].rangeStart);
+    expect(resolvedSecond!.range.startLine).toBe(paragraphNodes[1].rangeStart);
+    // The two resolved blocks are genuinely distinct document positions,
+    // never accidentally collapsed onto one another.
+    expect(resolvedFirst!.range.startLine).not.toBe(resolvedSecond!.range.startLine);
+  });
+
+  it("returns null (safe no-op) when the body changed and the hinted structural position no longer holds any paragraph at all - resolution never guesses", () => {
+    const before = ["# H", "paragraph A", "", "paragraph B"].join("\n");
+    const { paragraphNodes } = realParagraphTreeNodes(before);
+    const staleHint = hintFromNode(paragraphNodes[1]); // "paragraph B"'s hint, captured pre-edit.
+
+    // The referenced paragraph is deleted entirely; the document shrinks
+    // so nothing at all occupies that old range any more.
+    const after = ["# H", "paragraph A"].join("\n");
+    const docAfter = parseDocument(after);
+    const scanAfter = scanComplexBlocks(docAfter);
+
+    const resolved = resolveParagraphFromTreeHint(staleHint, scanAfter);
+    expect(resolved).toBeNull();
+  });
+
+  it("full pipeline: a stale hint whose structural position (parentId/range) coincidentally still matches a DIFFERENT paragraph's CURRENT position still resolves structurally (by design - this function only answers 'what lives there now'), but the downstream buildParagraphMoveAnchor + moveParagraphFromAnchor content check safely rejects the move rather than silently touching the wrong text - this is why the 9-step contract requires BOTH steps, never resolveParagraphFromTreeHint alone", () => {
+    const before = ["# H", "paragraph A", "", "paragraph B"].join("\n");
+    const { doc: docBefore, scan: scanBefore, paragraphNodes } = realParagraphTreeNodes(before);
+    const nodeA = paragraphNodes[0];
+    const infoABefore = resolveParagraphFromTreeHint(hintFromNode(nodeA), scanBefore);
+    expect(infoABefore).not.toBeNull();
+    const anchor = buildParagraphMoveAnchor(docBefore, infoABefore!);
+    expect(anchor).not.toBeNull();
+
+    // The body changes: "paragraph A"'s own text is edited in place, but
+    // its structural position (parentId/range/depth) stays identical.
+    const after = ["# H", "paragraph A EDITED", "", "paragraph B"].join("\n");
+
+    // resolveParagraphFromTreeHint against the same OLD hint still finds
+    // *something* at that structural position (by design/contract).
+    const scanAfter = scanComplexBlocks(parseDocument(after));
+    const resolvedAfter = resolveParagraphFromTreeHint(hintFromNode(nodeA), scanAfter);
+    expect(resolvedAfter).not.toBeNull();
+
+    // But the full, mandated pipeline (anchor built pre-edit, then
+    // re-verified against the CURRENT text) safely rejects the move -
+    // the byte-for-byte content check in moveParagraphFromAnchor's own
+    // stage 3 is what actually prevents a wrong-content write-back.
+    const outcome = moveParagraphFromAnchor(after, anchor!, "down");
+    expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("content-changed");
+    expect(outcome.lines).toEqual(parseDocument(after).lines);
+  });
+
+  it("no regression: section/list/standalone-complex-member Tree node id resolution is UNCHANGED - those kinds legitimately use the scan-local ComplexBlockInfo.id directly AS their own Tree node id (buildStandaloneComplexNode), which is exactly why the id-equality lookup pattern (correctly) still works for them and must never be 'fixed' to match paragraph's different contract", () => {
+    const text = ["# H", "> [!note] My Note", "> body"].join("\n");
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const tree = buildOutlineTree(doc, {
+      standaloneComplexBlocks: { blocks: scan.blocks },
+      t: createTranslator("en"),
+    });
+    const memberNode = flattenOutlineTree(tree).find(isOutlineComplexMemberNode);
+    expect(memberNode).toBeDefined();
+    const matchedById = scan.blocks.find((b) => b.id === memberNode!.id);
+    // Unlike paragraph, this IS the correct, still-working lookup for a
+    // standalone complex-member row - its Tree node id IS the scan-local
+    // ComplexBlockInfo.id, verbatim.
+    expect(matchedById).toBeDefined();
+    expect(matchedById!.kind).toBe("callout");
   });
 });
