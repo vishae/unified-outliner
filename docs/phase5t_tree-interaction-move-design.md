@@ -479,3 +479,10 @@ Tree上のparagraphノードを、同一parent/depth内の非隣接位置へ移�
 5T-4D/5T-4A（Tree paragraph → Partial Edit）に続き、(1) 本文カーソル位置に連動する `highlightedId` を section/list のみから paragraph・standalone callout・standalone blockquote・fenced code・table を含む既存7種別へ拡張するための設計、(2) Tree で選択していたノードに move/edit を実行した後 `selectedId` が古い位置や誤ったノードを指したままになる不具合の根本原因監査と修復設計（selection follow）、の2点について設計・監査を実施した。本フェーズも設計・監査・利用者向け判断材料の作成のみであり、本番コード変更・GUI自動操作・実機検証は一切行っていない。
 
 監査の結果、standalone paragraph/callout/blockquote/table へのカーソル位置は今日すでに囲みセクションへの粗いフォールバックとしてハイライトされていること（true null ではないこと）、および `selectedId` の陳腐化は paragraph 固有の問題ではなく、Tree node id が毎 refresh で振り直される表示用連番であることに起因する一般的な問題であることを、コードの直接監査によって確定した。highlightedId 拡張は案A（新規の純粋な current-position resolver）、selection follow は案C（新規の専用 selection-follow repair resolver、既存の `pendingMoveFlash` 機構と構造的に同種）をそれぞれ第一候補として推奨した。fenced-code/table は今日いかなる形でも Tree row を持たないため、対象7種別のうちこの2種別は「Tree表示済みnodeのみ対象」というスコープ制約と両立しない、という緊張関係を確認し、利用者判断事項として提示した。詳細な監査結果・設計案比較・契約・利用者判断事項（5件）は `docs/phase5t5_cursor_to_tree_highlight_design.md` を正とする。
+
+
+## 18. Phase 5T-6D: section / heading D&D の before/after drop indicator 再現・設計監査（追記）
+
+5T-5D/5T-5A（cursor→highlight拡張・selection follow）の実機受入（8項目、異常なし）の際、利用者がマウスで見出し（section）をドラッグしたところ、移動先の before/after 区切り線が表示されない（inside のみラベンダー背景として表示される）ことに気づいた、という新規の報告を受けて設計・監査を実施した。本フェーズも設計・監査・利用者向け判断材料の作成のみであり、本番コード変更・GUI自動操作・実機検証は一切行っていない。
+
+監査の結果、利用者の実際のプラグイン設定（`treeKindHighlight.sectionMode: "stripe"`）と `styles.css` の CSS 詳細度を直接確認したことで、section 行に常時適用される「stripe」装飾の box-shadow（詳細度の高いセレクタ）が、`.unified-outliner-drop-before`/`.unified-outliner-drop-after`/`.unified-outliner-drop-inside` の box-shadow（詳細度の低いセレクタ）を常に上書きしていることを確定した。before/after は box-shadow のみに依存するため完全に非表示となり、inside は box-shadow に加えて background-color も使うため、その背景色だけが視認できる — これは利用者の報告内容と正確に一致する。この根本原因は section 固有（list には box-shadow を使う highlight モードが存在せず、paragraph には対象となる kind 別常時装飾が存在しない）であり、動画のカーソル位置精度に依存しない静的な証拠として確認された。対応案4件（CSS のプロパティ分離・drag中の常時装飾無効化・box-shadow以外への変更・edgeゾーン比率調整）を比較し、利用者判断事項4件を提示した。詳細な監査結果・データフロー・CSS対応表・根本原因候補・対応案比較・手動確認手順は `docs/phase5t6_section_drag_drop_indicator_design.md` を正とする。
