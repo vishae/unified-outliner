@@ -213,35 +213,109 @@ settings:
   opacity: 0.5;
 }
 
-/* before / after: a thin line at the top/bottom edge of the row. */
-.unified-outliner-drop-before {
-  box-shadow: inset 0 2px 0 0 var(--uo-current-color);
+/* Phase 5T-6A (docs/phase5t6_section_drag_drop_indicator_design.md §8/§9,
+ * root-cause candidate 1 / recommended option C): before/after/inside no
+ * longer use `box-shadow` at all. Under `sectionMode: "stripe"` (below),
+ * `.tree-item-self[data-kind="section"]` carries an ALWAYS-ON box-shadow
+ * whose selector has strictly higher CSS specificity than these
+ * single-class indicator selectors — box-shadow is a single,
+ * non-cumulative property, so the higher-specificity always-on rule
+ * silently and completely won that competition regardless of source
+ * order or which class was added to the row last, making the
+ * before/after edge line (and the inside indicator's own left accent
+ * bar) invisible on every section row whenever that setting was active.
+ * Moving all three indicators onto a dedicated `::after` pseudo-element
+ * that uses `position`/`inset offsets`/`background-color` instead of
+ * `box-shadow` removes the shared property entirely: these selectors
+ * target a different node (`::after`, not `.tree-item-self` itself), so
+ * there is no longer any single CSS property these indicators and ANY
+ * current or future always-on per-kind decoration (stripe or otherwise)
+ * could ever compete over, regardless of specificity. `position:
+ * relative` is scoped to only these three (transient, drag-only) classes
+ * rather than added to `.tree-item-self` unconditionally, keeping the
+ * change inert for every row that isn't actively showing a drop
+ * indicator. */
+.unified-outliner-drop-before,
+.unified-outliner-drop-after,
+.unified-outliner-drop-inside {
+  position: relative;
 }
 
-.unified-outliner-drop-after {
-  box-shadow: inset 0 -2px 0 0 var(--uo-current-color);
+/* before / after: a thin line at the top/bottom edge of the row, drawn as
+ * a full-width absolutely-positioned bar rather than an inset box-shadow.
+ * `pointer-events: none` keeps the pseudo-element purely decorative — it
+ * never intercepts the row's own dragover/drop/click handling and never
+ * blocks the drag handle, which stays a real child element receiving
+ * events normally underneath the 2px the bar visually overlaps (same
+ * footprint the box-shadow version painted before). */
+.unified-outliner-drop-before::after,
+.unified-outliner-drop-after::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background-color: var(--uo-current-color);
+  pointer-events: none;
+}
+
+.unified-outliner-drop-before::after {
+  top: 0;
+}
+
+.unified-outliner-drop-after::after {
+  bottom: 0;
 }
 
 /* inside: a tinted row + a left accent bar, visually distinct from the
  * before/after edge-lines so "becomes a child" reads differently from
- * "moves next to". The plain rgba tint below is the baseline for every
- * environment; the @supports block just after it swaps in the themeable
- * color-mix() tint wherever that function is actually supported, without
- * ever having two background-color declarations in the same rule block
- * (this used to rely on the older same-selector "second, invalid
- * declaration is simply ignored" CSS fallback idiom — @supports expresses
- * the exact same fallback/enhancement relationship as an explicit
- * feature query instead, with an identical rendered result in both
- * supporting and non-supporting environments). */
-.unified-outliner-drop-inside {
+ * "moves next to". Both the tint (`::before`) and the accent bar
+ * (`::after`) are drawn on dedicated pseudo-elements rather than
+ * directly as `.tree-item-self`'s own `background-color`/`box-shadow`.
+ * This is not just consistency with before/after above: a row-level
+ * `background-color` here would ALSO collide with `sectionMode:
+ * "subtle"`'s own always-on `background-color` on
+ * `.tree-item-self[data-kind="section"]` (higher specificity, same
+ * property, same element — the always-on tint would silently replace
+ * this one, the exact same class of bug as the box-shadow/stripe
+ * collision documented above, just for `background-color` under
+ * `"subtle"` instead of `box-shadow` under `"stripe"`). Targeting
+ * pseudo-elements sidesteps this for every sectionMode value, present or
+ * future, the same way it does for before/after — a pseudo-element is a
+ * distinct generated box from its host `.tree-item-self`, so a selector
+ * that only ever targets `.tree-item-self` itself (every kind-highlight
+ * rule in this file) can never apply to `.tree-item-self::before` or
+ * `.tree-item-self::after` at all, regardless of specificity. The plain
+ * rgba tint below is the baseline for every environment; the @supports
+ * block just after it swaps in the themeable color-mix() tint wherever
+ * that function is actually supported, without ever having two
+ * background-color declarations in the same rule block. */
+.unified-outliner-drop-inside::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   background-color: rgba(91, 87, 209, 0.25);
-  box-shadow: inset 3px 0 0 0 var(--uo-current-color);
+  pointer-events: none;
 }
 
 @supports (background-color: color-mix(in srgb, red 25%, transparent)) {
-  .unified-outliner-drop-inside {
+  .unified-outliner-drop-inside::before {
     background-color: color-mix(in srgb, var(--uo-current-color) 25%, transparent);
   }
+}
+
+.unified-outliner-drop-inside::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background-color: var(--uo-current-color);
+  pointer-events: none;
 }
 
 /* UXP-01 (2026-08-12, docs/uxp-01-ipad-drag-context-menu.md): a

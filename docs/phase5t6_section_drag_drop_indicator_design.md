@@ -206,3 +206,22 @@ listMode（`"hover" | "subtle" | "off"`）にはbox-shadowを使うモードが�
 ## 13. 5T-5A契約との非干渉の確認
 
 本フェーズは`src/`・`tests/`・`styles.css`のいずれも変更していない。§2・§6で確認した通り、`runRelocateCommand`は既存の`dispatchAndApply`（`followSelection`既定値`true`）をそのまま使用しており、5T-5Aで確立した`selectedId`/`highlightedId`の再解決・null クリア契約に触れるコード変更は本フェーズに一切含まれない。`parseDocument.ts`も本フェーズの調査・変更対象に含めていない。
+
+
+## 14. Phase 5T-6A: 実装確定事項（追記）
+
+Phase 5T-6D の設計監査（§8候補1: `sectionMode: "stripe"` とbox-shadowの競合）を受けて、対応案C（box-shadow以外のプロパティへの変更）を採用し、`styles.css` のみを変更する最小実装を行った。
+
+### 14-1. 実装内容
+
+- `.unified-outliner-drop-before`/`.unified-outliner-drop-after`/`.unified-outliner-drop-inside` の3クラスから `box-shadow` を完全に排除し、`position: relative`（3クラス共通、行自身に付与）と、専用の `::before`/`::after` 疑似要素（`position: absolute` + `background-color` + `pointer-events: none`）による表示に置き換えた。
+- 実装過程で、`sectionMode: "subtle"` の常時 `background-color` と、`.unified-outliner-drop-inside` 自身の行レベル `background-color`（inside のタイント）が、box-shadowと全く同じ構造でCSS詳細度競合を起こしうることを追加で発見した。同一フェーズ・同一コミットで、insideのタイントも `::before` 疑似要素へ分離し、この background-color 版の競合もあわせて解消した（design doc §8で予告した対応スコープを、発見した同種の問題の分だけ小さく拡張したもの。CSSプロパティを疑似要素側へ完全に分離するという同一の設計原則の範囲内であり、判定ロジック・移動ロジック・DOM構造・イベント経路には一切触れていない）。
+- `computeDropMode` の閾値（1/3・2/3）、`handleDragOver`/`handleDrop`/`runRelocateCommand`/`relocateSection`/`relocateListSubtree` の意味論は無変更。`parseDocument.ts` も無変更。
+
+### 14-2. テスト
+
+新規 `tests/dropIndicatorCssConflict.test.ts`（13件）を追加した。styles.css を軽量な自作パーサ（コメント除去 → 波括弧の対応関係で top-level ルールへ分解、`@supports`/`@media` は再帰的に展開）でルール単位に分解し、以下を検証する：drop-indicator の行レベルルールが `box-shadow`/`background-color` のいずれも宣言していないこと、stripe/subtleの常時装飾ルール自体は無傷で存続していること、`::before`/`::after` 側が `--uo-current-color` と `pointer-events: none` を用いること、kind-highlight系ルールとdrop-indicator行レベルルールとの間でCSSプロパティの重複が一切無いこと（一般化した非衝突不変条件）、`sectionMode` の型が3値のままであること、`computeDropMode` の閾値・`relocateSection` の意味論が無変更であること。
+
+### 14-3. 品質ゲート
+
+`npx vitest run`: 72ファイル/1253件全通過（新規13件を含む）。`npm run lint`: 0エラー（既存の無関係な警告3件のみ、`src/settings.ts`、本フェーズ変更対象外）。`npm run build`（`tsc -noEmit -skipLibCheck` + esbuild production）: 成功。
