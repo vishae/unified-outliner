@@ -296,6 +296,8 @@ Phase 5P（5P-0〜5P-4）は、2026-08-17 に完了として承認された。�
 
 次に検討すべきは、Tree 上でのマウス操作による移動、ならびに context menu からの移動である。ただし、これは 5P-4 の UI を追加するだけの作業ではなく、paragraph を Tree 上の read-only node として扱う契約・drag/drop の意味論・Tree 選択と本文カーソルの同期・drop target の妥当性・cross-model move・Markdown の安全な書き戻しを同時に扱う独立の設計課題である。したがって、この検討は本計画（Phase 5P）の対象外とし、独立系統 **Phase 5T（Tree Interaction / Tree Move Design）** として切り出す。5T-0（設計のみ）の内容は `docs/phase5t_tree-interaction-move-design.md` を正とする。
 
+**追記（2026-08-19、Phase 5T-4D）**: 本節冒頭で「Tree 起点の move / drag & drop / context menu edit を意図的に未対応とすること」と確定した5P完了範囲のうち、「context menu edit」（Tree 上の paragraph から Partial Edit を起動すること）は、利用者の明示的な指示により Phase 5T-4D で見直しの検討対象となった。見直しの結果、既存の paragraph Partial Edit 契約（本節の `resolver/resolveParagraphAtCursor.ts`・`edit/paragraphPartialEdit.ts`）自体は一切変更せず、Tree 側から既存の `activatePartialEditViewForParagraph` を再利用する形で起動するという設計方針を固定した（本番コード変更なし、設計・監査のみ）。詳細は `docs/phase5t4_tree_paragraph_partial_edit_design.md` を正とする。
+
 Phase 5P は、本ドキュメント §8 の関係図における「5P-4 隣接交換の契約化」で完結し、以降の Tree 発火操作の検討は 5T 側の責任とする。§8 の関係図を以下のとおり更新する。
 
 ```

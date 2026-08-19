@@ -465,3 +465,10 @@ Tree上のparagraphノードを、同一parent/depth内の非隣接位置へ移�
 推奨し、案Bは undo/中間状態/複雑性の観点から非推奨とした。次フェーズ
 着手前に利用者が判断すべき事項が5件残っており、実装（本番コード変更）
 はまだ行っていない。
+
+
+## 16. Phase 5T-4D: Tree paragraph → Partial Edit の設計・監査（追記）
+
+5T-3D/5T-3A（非隣接move）に続き、Tree 上の paragraph node から既存の paragraph Partial Edit（Phase 5P-2）を安全に起動するための設計・監査を実施した。本フェーズも設計・監査・利用者向け判断材料の作成のみであり、本番コード変更・GUI自動操作・実機検証は一切行っていない。
+
+監査の結果、Tree 側で既にヒント再解決済みの paragraph（`resolveParagraphFromTreeHint`）が持つ `range.startLine` を、既存の `main.ts#activatePartialEditViewForParagraph(cursorLine)` にそのまま渡すだけで、新しいアンカー型・新しい書き戻し関数を一切追加せずに実現できることが判明した。案A（Tree context menu → 既存 Partial Edit）を第一候補として推奨し、案C（ダブルクリック/F2起動）を将来候補、案B（Tree row の inline edit）を非推奨とした。詳細な監査結果・設計案比較・保存契約・利用者判断事項（4件）は `docs/phase5t4_tree_paragraph_partial_edit_design.md` を正とする。
