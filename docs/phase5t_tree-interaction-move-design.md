@@ -422,3 +422,46 @@ drop（D&D）について、**設計・監査のみを行い、本番実装は�
 本セクションの追加により、本ドキュメント自体は変更していない既存の §1〜
 §13 の内容と矛盾しない——5T-2D は既存結論を上書きするのではなく、5T-1/
 5T-1R の実装済みコードに基づいて再確認・深化したものである。
+
+## 15. Phase 5T-2S / 5T-2S-B / 5T-3D: Tree/body一致性の受入と非隣接move設計調査（追記）
+
+本セクションは 5T-2S・5T-2S-B・5T-3D の結論を要約し、以降のフェーズが
+参照すべきドキュメントへの導線を残すためのものである。5T-2S-A までの
+Method Vault 実機検証プロトコルおよびその結果自体は
+`docs/phase5t2s_tree-body-consistency-investigation.md` を正とする。
+
+### 15-1. 5T-2S / 5T-2S-B: 確定事実
+
+- 段落 context menu の隣接swap、段落D&Dの隣接swap、Tree外部dropの内部ID
+  漏洩修正は、いずれも実機で動作確認済み。
+- 段落D&Dのdrop indicator表示位置の不具合（判定用zoneでなく実際の着地
+  edgeを描画すべき）は 5T-2S-B で修正し、実機で解消を確認済み
+  （`docs/phase5t2s_tree-body-consistency-investigation.md` §9）。
+- §5〜§6 で計画した Source Mode / Reading View 双方での優先6操作の実機
+  再現テストは、利用者による手動確認の結果、異常が観察されなかった
+  （同ドキュメント §10）。ただし、これは「不具合が存在しない」ことの
+  証明ではなく、あくまで今回テストした範囲内での観察結果である。
+- 上記を踏まえ、Tree/body一致性は現行の受入スコープ内では許容できるも
+  のとして扱う。paragraph↔list のクロスモデル移動は、引き続き別トピッ
+  クとして扱う（本ドキュメント §7 の既存結論のまま）。
+
+### 15-2. 5T-3D: 非隣接move設計調査
+
+Tree上のparagraphノードを、同一parent/depth内の非隣接位置へ移動する
+（隣接swapの繰り返しではなく、1回のcut-and-reinsertとして扱う）ための
+モデル/UX/write-back/復元性の設計を調査した。本フェーズは設計・監査・
+利用者向け判断材料の作成のみであり、本番コード変更・GUI自動操作・実機
+検証は一切行っていない。
+
+詳細な3案（案A: 単発cut-and-reinsert、案B: 隣接swap繰り返し、案C: 専用
+コマンドUI）の比較表、既存コード（`insertBlockAt`／`resolveAnchorUnit`
+／`resolveParagraphDropDirection`／`ComplexSiblingTarget` 等）の監査結
+果、source/target解決契約・挿入位置契約・UI契約の設計、および利用者判
+断用の Method Vault ノートへのリンクは、すべて
+`docs/phase5t3_non_adjacent_paragraph_move_design.md` を正とする。
+
+結論の要約: mutationモデルとして案A（`insertBlockAt` の再利用による単
+発cut-and-reinsert）、UIモデルとして案C（専用コマンド）の組み合わせを
+推奨し、案Bは undo/中間状態/複雑性の観点から非推奨とした。次フェーズ
+着手前に利用者が判断すべき事項が5件残っており、実装（本番コード変更）
+はまだ行っていない。
