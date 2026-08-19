@@ -185,8 +185,10 @@ import {
   OutlineTreeComplexMemberNode,
   OutlineTreeNode,
   OutlineTreeParagraphNode,
+  paragraphTreeLabel,
+  standaloneComplexBlockLabel,
 } from "../tree/buildOutlineTree";
-import { scanComplexBlocks } from "../parser/complexBlocks";
+import { complexBlockDepth, scanComplexBlocks } from "../parser/complexBlocks";
 import {
   evaluateCompositeBlockDeletability,
   evaluateCompositeBlockMovability,
@@ -194,7 +196,7 @@ import {
   matchCompositeBlocks,
 } from "../parser/compositeBlocks";
 import { CompositeBlockInfo, CompositeBlockRule } from "../model/compositeBlock";
-import { ComplexBlockScanResult } from "../model/complexBlock";
+import { ComplexBlockInfo, ComplexBlockScanResult } from "../model/complexBlock";
 import {
   buildCompositeBlockSnapshot,
   CompositeBlockSnapshot,
@@ -219,6 +221,14 @@ import {
   resolveParagraphDropDirection,
   resolveParagraphFromTreeHint,
 } from "../edit/paragraphTreeMove";
+import {
+  buildSiblingTargetAnchor,
+  listNonAdjacentMoveTargets,
+  moveParagraphNonAdjacent,
+  NonAdjacentMovePosition,
+  paragraphNonAdjacentMoveReasonText,
+  SiblingTargetAnchor,
+} from "../edit/paragraphNonAdjacentMove";
 import { findComplexSiblingTarget, ResolvedMoveUnit } from "../move/resolveMoveTarget";
 import { getEnabledCompositeBlockRules } from "../settingsDefaults";
 import { resolveHighlightedNodeId } from "../tree/resolveHighlightedSectionId";
@@ -2834,7 +2844,18 @@ export class OutlineTreeView extends ItemView {
     };
     const upEligible = findComplexSiblingTarget(doc, unit, "up", complexScan).kind === "swap";
     const downEligible = findComplexSiblingTarget(doc, unit, "down", complexScan).kind === "swap";
-    if (!upEligible && !downEligible) return;
+
+    // Phase 5T-3A: the non-adjacent-move sibling group — every OTHER
+    // paragraph/callout/blockquote sharing this paragraph's own parentId/
+    // depth (edit/paragraphNonAdjacentMove.ts#listNonAdjacentMoveTargets),
+    // in document order. Menu-time convenience only, exactly like
+    // upEligible/downEligible above — the actual move always re-resolves
+    // both source and target independently at click time (see
+    // dispatchAndApplyParagraphNonAdjacentMove below).
+    const depth = complexBlockDepth(doc, target.parentId);
+    const siblingGroup = listNonAdjacentMoveTargets(complexScan, target.range, target.parentId, depth, doc);
+
+    if (!upEligible && !downEligible && siblingGroup.length === 0) return;
 
     const menu = new Menu();
     if (upEligible) {
@@ -2854,7 +2875,151 @@ export class OutlineTreeView extends ItemView {
       );
     }
 
+    if (siblingGroup.length > 0) {
+      const first = siblingGroup[0];
+      const last = siblingGroup[siblingGroup.length - 1];
+      const firstAnchor = buildSiblingTargetAnchor(doc, first);
+      const lastAnchor = buildSiblingTargetAnchor(doc, last);
+      if (firstAnchor) {
+        menu.addItem((item) =>
+          item
+            .setTitle(this.plugin.t("tree.menu.paragraphMoveToTop"))
+            .setIcon("chevrons-up")
+            .onClick(() =>
+              this.dispatchAndApplyParagraphNonAdjacentMove(anchor, firstAnchor, "before")
+            )
+        );
+      }
+      if (lastAnchor) {
+        menu.addItem((item) =>
+          item
+            .setTitle(this.plugin.t("tree.menu.paragraphMoveToBottom"))
+            .setIcon("chevrons-down")
+            .onClick(() =>
+              this.dispatchAndApplyParagraphNonAdjacentMove(anchor, lastAnchor, "after")
+            )
+        );
+      }
+      menu.addItem((item) =>
+        item
+          .setTitle(this.plugin.t("tree.menu.paragraphMoveBeforeSibling"))
+          .setIcon("arrow-up-to-line")
+          .onClick(() => this.showParagraphMoveTargetPicker(evt, doc, anchor, siblingGroup, "before"))
+      );
+      menu.addItem((item) =>
+        item
+          .setTitle(this.plugin.t("tree.menu.paragraphMoveAfterSibling"))
+          .setIcon("arrow-down-to-line")
+          .onClick(() => this.showParagraphMoveTargetPicker(evt, doc, anchor, siblingGroup, "after"))
+      );
+    }
+
     this.showTrackedMenu(menu, evt);
+  }
+
+  /**
+   * Phase 5T-3A: the "指定 sibling の前へ/後へ移動…" two-step picker — a
+   * SECOND `Menu`, shown at the SAME mouse-event coordinates immediately
+   * after the first menu's item is clicked (Obsidian's `Menu` in this
+   * codebase's pinned API version has no native submenu support — see the
+   * ticket's own §3 candidate list, which explicitly allows "既存 menu か
+   * ら二段階選択" as the minimal-diff option). Each entry reuses this
+   * paragraph's own existing Tree label functions
+   * (`paragraphTreeLabel`/`standaloneComplexBlockLabel`) so a sibling shows
+   * with the exact same text it already has as a Tree row — no new label
+   * logic is invented here. `doc`/`anchor`/`siblingGroup` are all captured
+   * from the FIRST menu's build time; like every other menu-time
+   * eligibility check in this view, this is display-only — the actual move
+   * always re-resolves source AND target independently
+   * (moveParagraphNonAdjacent's own job), so a stale label here can never
+   * cause a wrong or unsafe write.
+   */
+  private showParagraphMoveTargetPicker(
+    evt: MouseEvent,
+    doc: ParsedDocument,
+    sourceAnchor: ParagraphMoveAnchor,
+    siblingGroup: ComplexBlockInfo[],
+    position: NonAdjacentMovePosition
+  ): void {
+    const menu = new Menu();
+    for (const info of siblingGroup) {
+      // The "段落 N" ordinal fallback (paragraphTreeLabel's tier-3 label,
+      // used only when the paragraph's own text has no letters/digits to
+      // preview) is not re-derived here — this picker has no cheap access
+      // to buildOutlineTree's document-wide paragraph ordinal without a
+      // second full Tree build. `0` is passed instead: a label-worthy
+      // paragraph (the overwhelming common case) never reaches that
+      // fallback tier at all, so this only affects the rare
+      // symbols/whitespace-only-paragraph case, and even then only this
+      // picker ROW's display text — never move safety, which is entirely
+      // `moveParagraphNonAdjacent`'s own re-resolution job.
+      const label =
+        info.kind === "paragraph"
+          ? paragraphTreeLabel(
+              doc.lines.slice(info.range.startLine, info.range.endLine + 1).join("\n"),
+              0,
+              (key) => this.plugin.t(key)
+            )
+          : standaloneComplexBlockLabel(doc, info, (key) => this.plugin.t(key));
+      const targetAnchor = buildSiblingTargetAnchor(doc, info);
+      if (!targetAnchor) continue;
+      menu.addItem((item) =>
+        item
+          .setTitle(label)
+          .onClick(() => this.dispatchAndApplyParagraphNonAdjacentMove(sourceAnchor, targetAnchor, position))
+      );
+    }
+    this.showTrackedMenu(menu, evt);
+  }
+
+  /**
+   * Phase 5T-3A: dedicated, thin dispatch for a paragraph non-adjacent
+   * move — mirrors dispatchAndApplyParagraphMove exactly (same
+   * multi-cursor guard, same "read the editor's CURRENT text and hand it
+   * to the pure function along with the menu-time anchors" shape, same
+   * applyLineEditOutcome/scroll/refresh tail). All re-parsing, the
+   * source/target three-stage re-verification, the overlap/parent/depth
+   * rejection, the cut-and-reinsert, and the blank-line safety step are
+   * edit/paragraphNonAdjacentMove.ts#moveParagraphNonAdjacent's job —
+   * nothing here duplicates any of it.
+   */
+  private dispatchAndApplyParagraphNonAdjacentMove(
+    sourceAnchor: ParagraphMoveAnchor,
+    targetAnchor: SiblingTargetAnchor,
+    position: NonAdjacentMovePosition
+  ): boolean {
+    const view = this.activeMarkdownView.get();
+    if (!view) return false;
+    const editor: Editor = view.editor;
+
+    if (editor.listSelections().length > 1) {
+      this.notify(this.plugin.t("notice.multipleCursors"));
+      return false;
+    }
+
+    const text = editor.getValue();
+    const outcome = moveParagraphNonAdjacent(text, sourceAnchor, targetAnchor, position);
+
+    const cursor = { line: sourceAnchor.rangeStart, ch: 0 };
+    const changed = applyLineEditOutcome(
+      editor,
+      cursor,
+      sourceAnchor.rangeStart,
+      text.split("\n"),
+      outcome,
+      () => this.notify(paragraphNonAdjacentMoveReasonText((k) => this.plugin.t(k), outcome.reason))
+    );
+
+    if (changed) {
+      const cur = editor.getCursor();
+      const lineLen = editor.getLine(cur.line)?.length ?? 0;
+      editor.scrollIntoView(
+        { from: { line: cur.line, ch: 0 }, to: { line: cur.line, ch: lineLen } },
+        true
+      );
+      this.refresh();
+    }
+    return changed;
   }
 
   /**

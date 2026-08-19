@@ -259,7 +259,7 @@ function extractText(doc: ParsedDocument, startLine: number, endLine: number): s
  * uniquely-identified, currently-safe-to-touch `ResolvedMoveUnit`, or a
  * `NoParagraphTreeMoveReason` explaining why none could be produced.
  */
-type ResolveAnchorUnitResult =
+export type ResolveAnchorUnitResult =
   | { ok: true; doc: ParsedDocument; scan: ComplexBlockScanResult; unit: ResolvedMoveUnit }
   | { ok: false; reason: NoParagraphTreeMoveReason };
 
@@ -276,7 +276,7 @@ type ResolveAnchorUnitResult =
  * maintained copies of it. No safety behavior changes here relative to
  * the pre-5T-2 inline version — this is a pure extraction.
  */
-function resolveAnchorUnit(doc: ParsedDocument, anchor: ParagraphMoveAnchor): ResolveAnchorUnitResult {
+export function resolveAnchorUnit(doc: ParsedDocument, anchor: ParagraphMoveAnchor): ResolveAnchorUnitResult {
   const scan = scanComplexBlocks(doc);
   const eligibleParagraphs = scan.blocks.filter(
     (b) => b.kind === "paragraph" && b.editability === "supported"

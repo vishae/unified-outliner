@@ -318,3 +318,81 @@ insideをtargetの相対位置として明示的に定義する設計）は参�
 5. 本ドキュメント §2 で確認した「paragraph↔list cross-model move」は
    引き続き別トピックとして扱うことに同意するか（本フェーズのスコープ
    には含めない前提で進めてよいか）。
+
+## 7. Phase 5T-3A: 最小実装の確定事項（追記）
+
+本セクションは、5T-3D の設計を実際にコードへ落とした Phase 5T-3A の結果
+を記録する。GUI 自動操作・実機確認はこのフェーズでも一切行っていない。
+
+### 7-1. 実装したもの
+
+- `src/edit/paragraphNonAdjacentMove.ts`（新規）: `moveParagraphNonAdjacent`
+  （案A、単発cut-and-reinsert）、`resolveTargetAnchor`（target側の3段階
+  再解決契約）、`ensureBlankSeparation`（区切り空行の自動挿入、純粋関数）、
+  `listNonAdjacentMoveTargets`（sibling群の列挙）。
+- `src/edit/paragraphTreeMove.ts`: 既存の `resolveAnchorUnit`（source側の
+  3段階再解決契約）を `export` しただけで、ロジックは無変更。5T-1/5T-2/
+  5T-2S の契約に一切手を加えていない。
+- `src/view/OutlineTreeView.ts`: `showParagraphMoveMenu` に4つの新規コマ
+  ンド（先頭へ移動／末尾へ移動／指定した段落の前へ移動…／後へ移動…）を
+  追加。「指定した段落の前へ/後へ」は既存 Menu を再利用した二段階選択
+  （案C比較表で"最も安全で最小差分"と評価した候補）として実装した。既存
+  の上下移動（Move up/down）自体のロジックは変更していない。
+- `src/i18n.ts`: 新規メニュー文言4件、新規no-op理由8件を en/ja 両方に追加。
+
+### 7-2. no-op 条件一覧（実装結果）
+
+`resolve-failed` / `identity-changed` / `content-changed` / `ambiguous-match`
+（source側、既存契約を再利用） / `target-resolve-failed` /
+`target-identity-changed` / `target-content-changed` /
+`target-ambiguous-match`（target側、新設した対称契約） / `self-target` /
+`parent-mismatch` / `range-overlap`。`depth-mismatch` も型としては存在す
+るが、同一 parentId であれば `complexBlockDepth` は常に同じ値を返す（純
+粋に parentId から導出されるため）ため、実際には到達しないdefense-in-depth
+専用のコードであることを確認した（`move/resolveMoveTarget.ts` の
+`findComplexSiblingTarget` に既にある同種のrecheckと同じ位置づけ。
+`tests/resolveMoveTarget.test.ts` の既存の同名テストと同じ手法で、
+「同一parentIdなら常に同一depth」であることをテストで確認している)。
+
+### 7-3. 空行挿入ルール（実装結果）
+
+`ensureBlankSeparation` は、移動後のブロックの直前/直後の行が「空行で
+はなく、見出しでもなく、リストマーカーでもない」場合にのみ空行を1行挿
+入する。この条件は `scanParagraphBlocks` 自身の `isCandidate` 判定基準
+と同一であり、段落候補行の連結を断つ3種類の境界（空行/見出し/リスト）
+と完全に一致させている。callout/blockquote の引用行（`>`始まり）は
+`isCandidate` では除外されないため、段落をcallout/blockquoteに直接隣接
+させる場合も同じ規則で空行が必要と判定される — これは設計時点では
+paragraph-adjacent-paragrahのみを想定していたが、実装時にcallout/
+blockquoteの引用行もscanParagraphBlocksの候補行と判定されることを確認
+し、スコープを広げた（本ファイル冒頭のモジュール doc comment 参照）。
+
+### 7-4. Undo契約（実装結果）
+
+`moveParagraphNonAdjacent` は1回の呼び出しで最終的な `lines[]` を1つ返
+し、`view/OutlineTreeView.ts#dispatchAndApplyParagraphNonAdjacentMove` は
+既存の `applyLineEditOutcome`（1回の `editor.replaceRange`）にそのまま
+渡すのみ。新しいCM6 undoグルーピング機構は追加していない。
+
+### 7-5. テスト
+
+`tests/paragraphNonAdjacentMove.test.ts`（新規、23件）: 先頭へ/末尾へ/
+指定sibling前後への移動の成功例、paragraph→callout/blockquote前後（区
+切り空行の自動挿入込み）、不要な空行を増やさないこと、self-target/
+parent-mismatch/range-overlap/各種resolve-failed・content-changed・
+ambiguous-matchのno-op、既存の隣接swap（5T-1）が無変更であることの回帰
+確認、`listNonAdjacentMoveTargets`のsibling列挙、reason文言の全ロケール
+確認。`tests/paragraphOutlineTreeUiWiring.test.ts` は新規コマンドの配線
+を確認する1件を追加し、既存の「if (!upEligible && !downEligible) return;」
+という静的ソースアサーションを、siblingGroupを含めた新しいガード条件に
+合わせて更新した（動作の後退ではなく、意図した対象拡張の反映）。
+
+`npx tsc --noEmit` / `npx vitest run`（69ファイル / 1180件 全通過） /
+`npm run lint`（0 errors、既存の警告3件のみ、いずれも本フェーズと無関
+係）/ `npm run build` すべて成功。`src/parser/parseDocument.ts` は無変更
+（`git diff --stat -- src/parser/parseDocument.ts` が空であることを確
+認）。
+
+### 7-6. 手動確認用の最小チェックリスト（利用者向け、Claude は未実施）
+
+Method Vault ノート `phase5t3a-non-adjacent-move-manual-check.md` を参照。

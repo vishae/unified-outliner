@@ -261,6 +261,16 @@ const en = {
   "tree.menu.paragraphMoveUp": "Move up",
   "tree.menu.paragraphMoveDown": "Move down",
 
+  // Phase 5T-3A ("paragraph non-adjacent move の最小実装"): the four new
+  // menu commands (edit/paragraphNonAdjacentMove.ts), plus the picker
+  // items shown after "Move before sibling…"/"Move after sibling…" is
+  // clicked (a second Menu listing each eligible sibling by its existing
+  // Tree label — see view/OutlineTreeView.ts#showParagraphMoveMenu).
+  "tree.menu.paragraphMoveToTop": "Move to top",
+  "tree.menu.paragraphMoveToBottom": "Move to bottom",
+  "tree.menu.paragraphMoveBeforeSibling": "Move before sibling…",
+  "tree.menu.paragraphMoveAfterSibling": "Move after sibling…",
+
   // ---- Partial Edit Pane --------------------------------------------------
   "partialEdit.viewName": "Unified Outliner: Partial Edit",
   "partialEdit.noActiveNote": "Unified Outliner: no active note to load a node from.",
@@ -493,6 +503,28 @@ const en = {
     "Unified Outliner: the note changed, so the move was cancelled.",
   "reason.paragraphTreeMoveAmbiguous":
     "Unified Outliner: this paragraph could not be uniquely identified, so the move was cancelled.",
+
+  // Phase 5T-3A: edit/paragraphNonAdjacentMove.ts's own rejection reasons.
+  // The four "reason.paragraphTreeMove*" keys above are reused verbatim for
+  // this feature's SOURCE-side failures (see that module's own
+  // paragraphNonAdjacentMoveReasonText) — only the TARGET-side and the
+  // new structural-rejection reasons need dedicated keys here.
+  "reason.paragraphNonAdjacentTargetResolveFailed":
+    "Unified Outliner: the destination could not be safely re-resolved (the note may have changed).",
+  "reason.paragraphNonAdjacentTargetIdentityChanged":
+    "Unified Outliner: the destination's position in the note changed, so the move was cancelled.",
+  "reason.paragraphNonAdjacentTargetContentChanged":
+    "Unified Outliner: the note changed, so the move was cancelled.",
+  "reason.paragraphNonAdjacentTargetAmbiguous":
+    "Unified Outliner: the destination could not be uniquely identified, so the move was cancelled.",
+  "reason.paragraphNonAdjacentSelfTarget":
+    "Unified Outliner: can't move a paragraph next to itself.",
+  "reason.paragraphNonAdjacentParentMismatch":
+    "Unified Outliner: the destination is not in the same section/list item, so the move was cancelled.",
+  "reason.paragraphNonAdjacentDepthMismatch":
+    "Unified Outliner: the destination is not at the same nesting depth, so the move was cancelled.",
+  "reason.paragraphNonAdjacentRangeOverlap":
+    "Unified Outliner: the destination overlaps the paragraph being moved, so the move was cancelled.",
 } as const;
 
 export type TranslationKey = keyof typeof en;
@@ -668,6 +700,11 @@ const ja: Record<TranslationKey, string> = {
   "tree.menu.standaloneMoveDown": "下へ移動",
   "tree.menu.paragraphMoveUp": "上へ移動",
   "tree.menu.paragraphMoveDown": "下へ移動",
+
+  "tree.menu.paragraphMoveToTop": "先頭へ移動",
+  "tree.menu.paragraphMoveToBottom": "末尾へ移動",
+  "tree.menu.paragraphMoveBeforeSibling": "指定した段落の前へ移動…",
+  "tree.menu.paragraphMoveAfterSibling": "指定した段落の後へ移動…",
 
   // ---- 部分編集ペイン -------------------------------------------------------
   "partialEdit.viewName": "Unified Outliner: 部分編集",
@@ -869,6 +906,23 @@ const ja: Record<TranslationKey, string> = {
     "Unified Outliner: 本文が変更されたため、移動を取り消した。",
   "reason.paragraphTreeMoveAmbiguous":
     "Unified Outliner: この段落を一意に特定できなかったため、移動を取り消した。",
+
+  "reason.paragraphNonAdjacentTargetResolveFailed":
+    "Unified Outliner: 移動先を安全に再解決できなかった（ノートが変更された可能性がある）。",
+  "reason.paragraphNonAdjacentTargetIdentityChanged":
+    "Unified Outliner: 移動先の文書内での位置が変化したため、移動を取り消した。",
+  "reason.paragraphNonAdjacentTargetContentChanged":
+    "Unified Outliner: 本文が変更されたため、移動を取り消した。",
+  "reason.paragraphNonAdjacentTargetAmbiguous":
+    "Unified Outliner: 移動先を一意に特定できなかったため、移動を取り消した。",
+  "reason.paragraphNonAdjacentSelfTarget":
+    "Unified Outliner: 段落を自分自身の隣には移動できない。",
+  "reason.paragraphNonAdjacentParentMismatch":
+    "Unified Outliner: 移動先が同じセクション/リスト項目内にないため、移動を取り消した。",
+  "reason.paragraphNonAdjacentDepthMismatch":
+    "Unified Outliner: 移動先が同じ深さにないため、移動を取り消した。",
+  "reason.paragraphNonAdjacentRangeOverlap":
+    "Unified Outliner: 移動先が移動対象の段落と重なっているため、移動を取り消した。",
 };
 
 const DICTIONARIES: Record<SupportedLocale, Record<TranslationKey, string>> = {

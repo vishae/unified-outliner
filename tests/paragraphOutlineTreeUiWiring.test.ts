@@ -333,15 +333,43 @@ describe("Phase 5T-1: paragraph Tree-triggered Move (narrow, safety-gated except
   it("showParagraphMoveMenu uses findComplexSiblingTarget (5P-4's own eligibility check) to decide which of Move up/down to show, rather than inventing new eligibility logic", () => {
     const start = viewTs.indexOf("private showParagraphMoveMenu(");
     expect(start).toBeGreaterThan(-1);
-    const end = viewTs.indexOf("\n  private dispatchAndApplyParagraphMove(", start);
+    // Phase 5T-3A inserted two new private methods (showParagraphMoveTargetPicker,
+    // dispatchAndApplyParagraphNonAdjacentMove) between showParagraphMoveMenu
+    // and dispatchAndApplyParagraphMove — the end marker is now the NEXT
+    // method literally after showParagraphMoveMenu, not
+    // dispatchAndApplyParagraphMove itself, so this still isolates just
+    // showParagraphMoveMenu's own body.
+    const end = viewTs.indexOf("\n  private showParagraphMoveTargetPicker(", start);
     expect(end).toBeGreaterThan(start);
     const body = viewTs.slice(start, end);
     expect(body).toContain("findComplexSiblingTarget(doc, unit, \"up\", complexScan)");
     expect(body).toContain("findComplexSiblingTarget(doc, unit, \"down\", complexScan)");
     expect(body).toContain("buildParagraphMoveAnchor(doc, target)");
-    // No menu at all when neither direction is eligible (matches
-    // showCompositeCommandMenu's own "no menu when nothing to do" style).
-    expect(body).toContain("if (!upEligible && !downEligible) return;");
+    // No menu at all when neither direction is eligible AND no non-adjacent
+    // sibling group exists either (Phase 5T-3A extended this guard —
+    // matches showCompositeCommandMenu's own "no menu when nothing to do"
+    // style, now also covering the new Move to top/bottom/before/after
+    // sibling items).
+    expect(body).toContain(
+      "if (!upEligible && !downEligible && siblingGroup.length === 0) return;"
+    );
+  });
+
+  it("Phase 5T-3A: showParagraphMoveMenu wires in the four new non-adjacent-move commands via edit/paragraphNonAdjacentMove.ts, without touching the existing adjacent Move up/down items", () => {
+    expect(viewTs).toContain('from "../edit/paragraphNonAdjacentMove"');
+    expect(viewTs).toContain("listNonAdjacentMoveTargets");
+    expect(viewTs).toContain("buildSiblingTargetAnchor");
+    expect(viewTs).toContain("moveParagraphNonAdjacent");
+    expect(viewTs).toContain("paragraphNonAdjacentMoveReasonText");
+    expect(viewTs).toContain("private showParagraphMoveTargetPicker(");
+    expect(viewTs).toContain("private dispatchAndApplyParagraphNonAdjacentMove(");
+    expect(viewTs).toContain('this.plugin.t("tree.menu.paragraphMoveToTop")');
+    expect(viewTs).toContain('this.plugin.t("tree.menu.paragraphMoveToBottom")');
+    expect(viewTs).toContain('this.plugin.t("tree.menu.paragraphMoveBeforeSibling")');
+    expect(viewTs).toContain('this.plugin.t("tree.menu.paragraphMoveAfterSibling")');
+    // The pre-existing adjacent Move up/down dispatch is untouched.
+    expect(viewTs).toContain("this.dispatchAndApplyParagraphMove(anchor, \"up\")");
+    expect(viewTs).toContain("this.dispatchAndApplyParagraphMove(anchor, \"down\")");
   });
 
   it("REGRESSION (found via real-device verification after the initial 5T-1 commit; Phase 5T-1R locks this in as a permanent contract): showParagraphMoveMenu resolves the target ComplexBlockInfo from the Tree node's own rangeStart/rangeEnd/parentId via nodeById + edit/paragraphTreeMove.ts#resolveParagraphFromTreeHint — NEVER by comparing complexScan.blocks[].id against the raw Tree nodeId. A paragraph Tree row's node.id is tree/buildOutlineTree.ts's paragraphViewId(ordinal) (e.g. 'tree-paragraph:3'), a display-ordinal id, NOT the scan-local ComplexBlockInfo.id ('paragraph-3') that standalone complex-member rows use as their own node.id. Comparing the two directly (as the first commit did) makes `target` always undefined, silently producing an empty menu for every paragraph row — caught only by right-clicking a real paragraph node on an actual device, never by a static source check or a pure-function test of paragraphTreeMove.ts in isolation. IMPORTANT: this static check is supplementary only — see the dedicated 'Tree node resolution' describe block in tests/paragraphTreeMove.test.ts for the real defense, which exercises resolveParagraphFromTreeHint directly against REAL buildOutlineTree()+scanComplexBlocks() output rather than trusting a source-text grep alone.", () => {
