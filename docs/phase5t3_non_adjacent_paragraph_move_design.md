@@ -396,3 +396,29 @@ ambiguous-matchのno-op、既存の隣接swap（5T-1）が無変更であるこ�
 ### 7-6. 手動確認用の最小チェックリスト（利用者向け、Claude は未実施）
 
 Method Vault ノート `phase5t3a-non-adjacent-move-manual-check.md` を参照。
+
+## 8. Phase 5T-3A: 実機受入結果（利用者による手動確認、記録）
+
+利用者が Method Vault のチェックリスト（`Method/unified-outliner/
+phase5t3a-non-adjacent-move-manual-check.md`）に基づき、実機（Obsidian
+デスクトップアプリ）上で8件の確認項目（先頭へ移動／末尾へ移動／指定し
+た段落の前へ移動／後へ移動／段落→calloutの前／段落→callout・
+blockquoteの後／no-op拒否ケース／Tree-本文順序一致）すべてを手動で確認
+し、**いずれも異常は観察されなかった**旨の報告を受けた。
+
+なお、この実機確認に至る過程で、実装そのものとは別に、Obsidian側のプ
+ラグイン反映に関する運用上の問題が1件見つかった: 複数vault（Method /
+Minji）を併用している環境で、更新後のビルドを一方のvault（Minji）にの
+み配置していたため、実際に開いていたもう一方のvault（Method）では旧
+ビルドのまま検証が行われ、新規コマンドが一切表示されないという事象が
+発生した。原因はコード側ではなく、デプロイ先vaultの取り違えであった
+（`~/Library/Application Support/obsidian/obsidian.json` で実際に
+`"open": true` になっているvaultを確認し、そちらにもビルドを配置し直
+すことで解消)。両vaultのプラグイン（main.js/manifest.json/styles.css）
+は最終的に本フェーズのビルド（source側と同一SHA-256ハッシュ）へ更新済
+み。
+
+本節は、既存の §7-6 で計画した手動確認手順の実施結果を記録するもので
+あり、5T-2S §8 の受入基準と同じ方針（「異常が観察されなかった」という
+観察結果の記録であり、「不具合が存在しない」ことの証明ではない）に従っ
+ている。
