@@ -277,3 +277,12 @@ body-editor 起点の `openParagraphPartialEditForCursor` は `editor.listSelect
 ### 10-6. Method Vault 手動確認ノート
 
 `Method/unified-outliner/phase5t4a-tree-paragraph-partial-edit-manual-check.md` に、8項目の最小手動確認チェックリストを作成した。
+
+
+## 11. Phase 5T-4A: 実機受入結果（利用者による手動確認、記録）
+
+`Method/unified-outliner/phase5t4a-tree-paragraph-partial-edit-manual-check.md` の8項目チェックリストについて、利用者が実機（Obsidianアプリ）で手動確認を行い、1〜8のすべてで異常が観察されなかった旨の報告を受けた。
+
+確認された8項目は、メニュー表示・起動・単純な保存・cancel・空行入力の拒否・callout/blockquote隣接での安全性・list item内paragraphでの動作・保存後のTreeと本文の一致、である。
+
+5T-2S §8・5T-3A §8で確立した表記規約に従い、これは「今回確認した範囲内で異常が観察されなかった」という観察結果であり、「不具合が存在しないことの証明」ではない点を明記する。Claude 自身は本フェーズ・前フェーズを通じて GUI 操作・実機確認を一切行っていない。
