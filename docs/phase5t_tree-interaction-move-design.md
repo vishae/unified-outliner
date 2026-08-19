@@ -472,3 +472,10 @@ Tree上のparagraphノードを、同一parent/depth内の非隣接位置へ移�
 5T-3D/5T-3A（非隣接move）に続き、Tree 上の paragraph node から既存の paragraph Partial Edit（Phase 5P-2）を安全に起動するための設計・監査を実施した。本フェーズも設計・監査・利用者向け判断材料の作成のみであり、本番コード変更・GUI自動操作・実機検証は一切行っていない。
 
 監査の結果、Tree 側で既にヒント再解決済みの paragraph（`resolveParagraphFromTreeHint`）が持つ `range.startLine` を、既存の `main.ts#activatePartialEditViewForParagraph(cursorLine)` にそのまま渡すだけで、新しいアンカー型・新しい書き戻し関数を一切追加せずに実現できることが判明した。案A（Tree context menu → 既存 Partial Edit）を第一候補として推奨し、案C（ダブルクリック/F2起動）を将来候補、案B（Tree row の inline edit）を非推奨とした。詳細な監査結果・設計案比較・保存契約・利用者判断事項（4件）は `docs/phase5t4_tree_paragraph_partial_edit_design.md` を正とする。
+
+
+## 17. Phase 5T-5D: 本文カーソル → Tree current-position highlight と、Tree selection follow の拡張設計・監査（追記）
+
+5T-4D/5T-4A（Tree paragraph → Partial Edit）に続き、(1) 本文カーソル位置に連動する `highlightedId` を section/list のみから paragraph・standalone callout・standalone blockquote・fenced code・table を含む既存7種別へ拡張するための設計、(2) Tree で選択していたノードに move/edit を実行した後 `selectedId` が古い位置や誤ったノードを指したままになる不具合の根本原因監査と修復設計（selection follow）、の2点について設計・監査を実施した。本フェーズも設計・監査・利用者向け判断材料の作成のみであり、本番コード変更・GUI自動操作・実機検証は一切行っていない。
+
+監査の結果、standalone paragraph/callout/blockquote/table へのカーソル位置は今日すでに囲みセクションへの粗いフォールバックとしてハイライトされていること（true null ではないこと）、および `selectedId` の陳腐化は paragraph 固有の問題ではなく、Tree node id が毎 refresh で振り直される表示用連番であることに起因する一般的な問題であることを、コードの直接監査によって確定した。highlightedId 拡張は案A（新規の純粋な current-position resolver）、selection follow は案C（新規の専用 selection-follow repair resolver、既存の `pendingMoveFlash` 機構と構造的に同種）をそれぞれ第一候補として推奨した。fenced-code/table は今日いかなる形でも Tree row を持たないため、対象7種別のうちこの2種別は「Tree表示済みnodeのみ対象」というスコープ制約と両立しない、という緊張関係を確認し、利用者判断事項として提示した。詳細な監査結果・設計案比較・契約・利用者判断事項（5件）は `docs/phase5t5_cursor_to_tree_highlight_design.md` を正とする。
