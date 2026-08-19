@@ -1050,6 +1050,14 @@ export class PartialEditView extends ItemView {
         true
       );
 
+      // Phase 5T-5A: selection-follow — see UnifiedOutlinerPlugin
+      // #queueOutlineTreeSelectionFollow's own doc comment. A no-op when
+      // no Outline Tree View leaf currently has this paragraph selected;
+      // resolveSelectionAfterRefresh re-resolves from CURRENT body content
+      // on the next refresh, exactly like every other Tree-dispatched
+      // move/edit.
+      this.plugin.queueOutlineTreeSelectionFollow(outcome.newStartLine);
+
       new Notice(this.plugin.t("partialEdit.paragraphUpdated"));
       return true;
     }
@@ -1084,6 +1092,13 @@ export class PartialEditView extends ItemView {
       { from: { line: outcome.newStartLine, ch: 0 }, to: { line: outcome.newStartLine, ch: lineLen } },
       true
     );
+
+    // Phase 5T-5A: same selection-follow as the paragraph branch above,
+    // for symmetry — a section/list subtree edit doesn't relocate the
+    // node's own start line (applySubtreeEdit never moves content, only
+    // rewrites it in place), so this is a low-risk, mostly-defensive
+    // addition rather than the primary fix this ticket targets.
+    this.plugin.queueOutlineTreeSelectionFollow(outcome.newStartLine);
 
     new Notice(
       this.nodeKind === "list"

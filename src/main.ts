@@ -17,7 +17,6 @@ import {
   MoveComplexBlockOutcome,
   ResolvedMoveUnit,
   describeMoveUnit,
-  findEnclosingSectionId,
   moveComplexBlock,
   resolveEnclosingSectionId,
   resolveMoveUnit,
@@ -1005,7 +1004,8 @@ export default class UnifiedOutlinerPlugin extends Plugin {
     // instead is equivalent, just correctly ordered.
     if (outcome.changed) {
       this.announceMoveResult(doc, unit, direction);
-      this.queueOutlineTreeMoveFlash(doc, unit, outcome);
+      this.queueOutlineTreeMoveFlash(outcome);
+      this.queueOutlineTreeSelectionFollow(outcome.newStartLine);
     }
 
     applyLineEditOutcome(
@@ -1063,7 +1063,8 @@ export default class UnifiedOutlinerPlugin extends Plugin {
     // before it would otherwise be set.
     if (outcome.changed) {
       this.announceMoveResult(doc, unit, direction);
-      this.queueOutlineTreeMoveFlash(doc, unit, outcome);
+      this.queueOutlineTreeMoveFlash(outcome);
+      this.queueOutlineTreeSelectionFollow(outcome.newStartLine);
     }
 
     applyLineEditOutcome(
@@ -1106,36 +1107,54 @@ export default class UnifiedOutlinerPlugin extends Plugin {
   /**
    * Move target preview (2026-08-11 ticket §5B): queues a one-shot flash
    * highlight on every open Outline Tree View leaf for the row that now
-   * represents the just-moved block. Section/list units have their own
-   * Tree row, addressed by the outcome's newStartLine (node ids shift
-   * across a re-parse — see model/complexBlock.ts's id-stability note —
-   * so matching by line, not id, is what stays correct after the move).
-   * Paragraph/complex-block units have no Tree row of their own (see
-   * resolveMoveTarget.ts's top doc comment on why paragraph stays a
-   * non-Tree-node concept) — the enclosing section's row is flashed
-   * instead, resolved from the PRE-move doc (the section's own heading line
-   * never moves when only content within it is swapped).
+   * represents the just-moved block, addressed by the outcome's own
+   * `newStartLine`.
+   *
+   * Phase 5T-5A (docs/phase5t5_cursor_to_tree_highlight_design.md §3-2,
+   * ticket decision 6): simplified from a `{line}` / `{nodeIdHint}` union
+   * to always `outcome.newStartLine` directly. The old `nodeIdHint` branch
+   * (flashing paragraph/complex-block moves' ENCLOSING SECTION, resolved
+   * from the pre-move doc) predates paragraph/callout/blockquote having
+   * their own Tree row at all — by the time Phase 5T-3A/5T-4A gave
+   * paragraph its own row, this branch was already a stale approximation.
+   * Every move outcome type in this codebase (LineEditOutcome and
+   * MoveComplexBlockOutcome alike) already carries its own `newStartLine`,
+   * so `unit`/`doc` are no longer needed here at all — OutlineTreeView.ts's
+   * own applyPendingMoveFlash now matches this line against whichever Tree
+   * row's own range actually contains it (paragraph/callout/blockquote
+   * included), which is both simpler and more precise than the old
+   * section-only fallback.
    */
-  private queueOutlineTreeMoveFlash(
-    doc: ParsedDocument,
-    unit: ResolvedMoveUnit,
-    outcome: LineEditOutcome | MoveComplexBlockOutcome
-  ): void {
+  private queueOutlineTreeMoveFlash(outcome: LineEditOutcome | MoveComplexBlockOutcome): void {
     if (!this.settings.treeKindHighlight.showMoveTargetPreview) return;
     if (!outcome.changed) return;
 
-    let target: { line?: number; nodeIdHint?: string } | null = null;
-    if (unit.kind === "section" || unit.kind === "list") {
-      target = { line: outcome.newStartLine };
-    } else {
-      const ownerNode = unit.parentId ? doc.nodes.get(unit.parentId) : null;
-      const sectionId = ownerNode ? findEnclosingSectionId(doc, ownerNode) : null;
-      if (sectionId) target = { nodeIdHint: sectionId };
-    }
-    if (!target) return;
-
     for (const leaf of this.app.workspace.getLeavesOfType(OUTLINE_TREE_VIEW_TYPE)) {
-      if (leaf.view instanceof OutlineTreeView) leaf.view.queueMoveFlash(target);
+      if (leaf.view instanceof OutlineTreeView) leaf.view.queueMoveFlash(outcome.newStartLine);
+    }
+  }
+
+  /**
+   * Phase 5T-5A: the selectedId counterpart of queueOutlineTreeMoveFlash
+   * above — queues a one-shot selection-follow target (see
+   * OutlineTreeView.ts#pendingSelectionFollowLine's own doc comment for
+   * the full consume-side contract) on every open Outline Tree View leaf.
+   * Takes a plain post-edit line number (not an outcome object) so every
+   * call site — this class's own move commands below (LineEditOutcome/
+   * MoveComplexBlockOutcome) AND PartialEditView.ts's paragraph-edit-save
+   * success path (ApplyParagraphEditOutcome, a different type that also
+   * happens to carry its own `newStartLine`) — can pass their own
+   * outcome's `newStartLine` field directly without a shared outcome type.
+   * Callers are responsible for only calling this when their own outcome's
+   * `changed` is true. Deliberately NOT gated by
+   * settings.treeKindHighlight.showMoveTargetPreview (that setting
+   * controls only the transient visual flash, an unrelated concern from
+   * persistent Tree selection state). Public so both this class's own move
+   * commands and PartialEditView.ts can call it.
+   */
+  queueOutlineTreeSelectionFollow(line: number): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(OUTLINE_TREE_VIEW_TYPE)) {
+      if (leaf.view instanceof OutlineTreeView) leaf.view.queueSelectionFollow(line);
     }
   }
 

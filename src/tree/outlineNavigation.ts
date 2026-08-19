@@ -141,3 +141,58 @@ export function shouldFollowKeyboardSelectionIntoBody(
 ): boolean {
   return followEnabled && nextId !== null && nextId !== previousId;
 }
+
+/**
+ * Phase 5T-5A: true iff EVERY strict ancestor of `id` is currently
+ * expanded — i.e. `id`'s own row is actually rendered on screen right now
+ * (mirrors exactly what flattenVisibleOutlineTree, above, walks: a
+ * collapsed node's own row stays visible, only its CHILDREN are skipped).
+ * `id` need not exist in `parentIdById` at all (parentIdById.get returns
+ * undefined, treated as "no parent" / root) — a caller passing an id from
+ * a stale/foreign tree simply gets `true` here, since there is nothing to
+ * walk; that is deliberately the caller's responsibility to have already
+ * ruled out via nodeById, not this function's.
+ */
+export function isOutlineNodeVisible(
+  id: string,
+  parentIdById: ReadonlyMap<string, string | null>,
+  collapsedIds: ReadonlySet<string>
+): boolean {
+  let parent = parentIdById.get(id) ?? null;
+  while (parent) {
+    if (collapsedIds.has(parent)) return false;
+    parent = parentIdById.get(parent) ?? null;
+  }
+  return true;
+}
+
+/**
+ * Phase 5T-5A: walks up from `id` (inclusive) to the nearest ancestor
+ * whose own row is currently visible (isOutlineNodeVisible, above),
+ * without ever mutating collapsedIds/fold state itself — used ONLY for
+ * current-position highlight's explicitly-permitted "fall back to nearest
+ * visible ancestor rather than showing nothing" policy
+ * (docs/phase5t5_cursor_to_tree_highlight_design.md §5-4, Phase 5T-5A
+ * ticket decision 4). Deliberately NOT used for selectedId repair — a
+ * hidden selection-follow target is cleared to null instead (ticket
+ * decision 2/3/5: "別 node への近似フォールバックは禁止"), never silently
+ * substituted for an ancestor the user did not select.
+ *
+ * Returns null when `id` is null, or when no ancestor (including `id`
+ * itself) resolves to a visible row (e.g. `id` is absent from
+ * `parentIdById` entirely).
+ */
+export function resolveNearestVisibleAncestorId(
+  id: string | null,
+  parentIdById: ReadonlyMap<string, string | null>,
+  collapsedIds: ReadonlySet<string>
+): string | null {
+  let current: string | null = id;
+  while (current) {
+    if (parentIdById.has(current) && isOutlineNodeVisible(current, parentIdById, collapsedIds)) {
+      return current;
+    }
+    current = parentIdById.get(current) ?? null;
+  }
+  return null;
+}

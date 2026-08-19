@@ -5,8 +5,10 @@ import {
   buildNodeByIdMap,
   buildParentIdMap,
   flattenVisibleOutlineTree,
+  isOutlineNodeVisible,
   nextVisibleId,
   prevVisibleId,
+  resolveNearestVisibleAncestorId,
   shouldFollowKeyboardSelectionIntoBody,
 } from "../src/tree/outlineNavigation";
 
@@ -162,5 +164,87 @@ describe("shouldFollowKeyboardSelectionIntoBody", () => {
   it("disabled and no movement is still false (both conditions independently false)", () => {
     expect(shouldFollowKeyboardSelectionIntoBody(false, "a", "a")).toBe(false);
     expect(shouldFollowKeyboardSelectionIntoBody(false, null, null)).toBe(false);
+  });
+});
+
+
+// ---- Phase 5T-5A: isOutlineNodeVisible / resolveNearestVisibleAncestorId ----
+
+describe("isOutlineNodeVisible (Phase 5T-5A)", () => {
+  it("a top-level node is always visible (no ancestor to be collapsed)", () => {
+    const t = tree();
+    const parentIdById = buildParentIdMap(t);
+    const a = idOf(t, (n) => labelOf(n) === "A");
+    expect(isOutlineNodeVisible(a, parentIdById, new Set())).toBe(true);
+    expect(isOutlineNodeVisible(a, parentIdById, new Set(["anything"]))).toBe(true);
+  });
+
+  it("a node whose own row is collapsed is still visible itself (only its children are hidden)", () => {
+    const t = tree();
+    const parentIdById = buildParentIdMap(t);
+    const a1 = idOf(t, (n) => labelOf(n) === "A1");
+    expect(isOutlineNodeVisible(a1, parentIdById, new Set([a1]))).toBe(true);
+  });
+
+  it("a node becomes hidden when its parent is collapsed", () => {
+    const t = tree();
+    const parentIdById = buildParentIdMap(t);
+    const a1 = idOf(t, (n) => labelOf(n) === "A1");
+    const item1 = idOf(t, (n) => labelOf(n) === "item1");
+    expect(isOutlineNodeVisible(item1, parentIdById, new Set([a1]))).toBe(false);
+  });
+
+  it("a node becomes hidden when a GRANDparent is collapsed, even if its immediate parent is expanded", () => {
+    const t = tree();
+    const parentIdById = buildParentIdMap(t);
+    const a = idOf(t, (n) => labelOf(n) === "A");
+    const item1 = idOf(t, (n) => labelOf(n) === "item1");
+    expect(isOutlineNodeVisible(item1, parentIdById, new Set([a]))).toBe(false);
+  });
+});
+
+describe("resolveNearestVisibleAncestorId (Phase 5T-5A)", () => {
+  it("returns the id itself unchanged when it is already visible", () => {
+    const t = tree();
+    const parentIdById = buildParentIdMap(t);
+    const item1 = idOf(t, (n) => labelOf(n) === "item1");
+    expect(resolveNearestVisibleAncestorId(item1, parentIdById, new Set())).toBe(item1);
+  });
+
+  it("walks up to the nearest visible ancestor when the target is hidden under a collapsed parent", () => {
+    const t = tree();
+    const parentIdById = buildParentIdMap(t);
+    const a1 = idOf(t, (n) => labelOf(n) === "A1");
+    const item1 = idOf(t, (n) => labelOf(n) === "item1");
+    expect(resolveNearestVisibleAncestorId(item1, parentIdById, new Set([a1]))).toBe(a1);
+  });
+
+  it("walks up past multiple collapsed ancestors to the nearest visible one", () => {
+    const t = tree();
+    const parentIdById = buildParentIdMap(t);
+    const a = idOf(t, (n) => labelOf(n) === "A");
+    const a1 = idOf(t, (n) => labelOf(n) === "A1");
+    const item1 = idOf(t, (n) => labelOf(n) === "item1");
+    // Both A and A1 collapsed: A1's OWN row is hidden too here (A1 is a
+    // child of collapsed A), so the walk must continue past A1 all the
+    // way up to A itself (a top-level node, always visible).
+    expect(resolveNearestVisibleAncestorId(item1, parentIdById, new Set([a, a1]))).toBe(a);
+  });
+
+  it("returns null when given null", () => {
+    const t = tree();
+    const parentIdById = buildParentIdMap(t);
+    expect(resolveNearestVisibleAncestorId(null, parentIdById, new Set())).toBeNull();
+  });
+
+  it("never mutates collapsedIds", () => {
+    const t = tree();
+    const parentIdById = buildParentIdMap(t);
+    const a1 = idOf(t, (n) => labelOf(n) === "A1");
+    const item1 = idOf(t, (n) => labelOf(n) === "item1");
+    const collapsed = new Set([a1]);
+    const before = new Set(collapsed);
+    resolveNearestVisibleAncestorId(item1, parentIdById, collapsed);
+    expect(collapsed).toEqual(before);
   });
 });

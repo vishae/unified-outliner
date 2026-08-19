@@ -231,13 +231,15 @@ import {
 } from "../edit/paragraphNonAdjacentMove";
 import { findComplexSiblingTarget, ResolvedMoveUnit } from "../move/resolveMoveTarget";
 import { getEnabledCompositeBlockRules } from "../settingsDefaults";
-import { resolveHighlightedNodeId } from "../tree/resolveHighlightedSectionId";
+import { resolveCurrentPositionNodeId } from "../tree/resolveCurrentPositionNodeId";
 import {
   buildNodeByIdMap,
   buildParentIdMap,
   flattenVisibleOutlineTree,
+  isOutlineNodeVisible,
   nextVisibleId,
   prevVisibleId,
+  resolveNearestVisibleAncestorId,
   shouldFollowKeyboardSelectionIntoBody,
 } from "../tree/outlineNavigation";
 import { buildNodeIdentityMap, findNodeIdAtStartLine } from "../tree/foldIdentity";
@@ -499,11 +501,49 @@ export class OutlineTreeView extends ItemView {
    * queueOutlineTreeMoveFlash right after a successful Move block/Move
    * section, consumed (and cleared) the NEXT time refresh() re-renders —
    * see applyPendingMoveFlash's own doc comment for why matching happens by
-   * line/id hint rather than by a node id captured before the move (ids
-   * shift across a re-parse whenever document order changes, which a
-   * successful move always does for the swapped pair).
+   * line (not by a node id captured before the move: ids shift across a
+   * re-parse whenever document order changes, which a successful move
+   * always does for the swapped pair).
+   *
+   * Phase 5T-5A: simplified from `{ line?: number; nodeIdHint?: string }`
+   * to a plain line number. The old `nodeIdHint` branch (an enclosing
+   * SECTION id, used only for paragraph/complex-block moves) predates
+   * paragraph/callout/blockquote having their own Tree row at all — it was
+   * already stale by the time Phase 5T-3A/5T-4A gave paragraph its own row
+   * (docs/phase5t5_cursor_to_tree_highlight_design.md §3-2, ticket
+   * decision 6). Every move outcome type in this codebase already exposes
+   * its own `newStartLine` (moveBlock/moveComplexBlock/indentBlock/
+   * relocateListSubtree/relocateSection all share this convention), so a
+   * plain line is both simpler and MORE precise now that paragraph/
+   * callout/blockquote have their own rows to match against exactly.
    */
-  private pendingMoveFlash: { line?: number; nodeIdHint?: string } | null = null;
+  private pendingMoveFlash: number | null = null;
+
+  /**
+   * Phase 5T-5A: one-shot "selection should follow to this line after the
+   * next refresh()" signal — the selectedId counterpart of
+   * pendingMoveFlash above, but a SEPARATE field (not reused for the
+   * flash), since the two are different concerns with different
+   * consumption semantics (a transient DOM class vs. persistent
+   * `this.selectedId` state) even though they are very often queued with
+   * the identical line value at the same call site. Queued by
+   * queueSelectionFollow (below) right before every Tree-dispatched move/
+   * indent/outdent (dispatchAndApply's own `followSelection` option) and
+   * by main.ts/PartialEditView.ts's own move/Partial-Edit-save success
+   * paths (via the plugin-level queueOutlineTreeSelectionFollow). Consumed
+   * — and cleared — by resolveSelectionAfterRefresh, called from refresh()
+   * in place of ensureSelection() whenever this is non-null (see that
+   * method's own doc comment for the full contract, and
+   * docs/phase5t5_cursor_to_tree_highlight_design.md §5-2). Deliberately
+   * NOT queued for delete/insert dispatches — a deleted node has no
+   * logical target left to follow (the design doc's own "別 node への近似
+   * フォールバックは禁止" rules out landing selection on whatever
+   * unrelated content happens to occupy the fallback line), and an
+   * inserted node has no PRE-edit selection to have been following in the
+   * first place; both keep relying on ensureSelection()'s pre-existing,
+   * unchanged fallback behavior instead.
+   */
+  private pendingSelectionFollowLine: number | null = null;
 
   private readonly scheduleRefresh = debounce(
     () => this.refresh(),
@@ -651,6 +691,7 @@ export class OutlineTreeView extends ItemView {
       this.currentTree = [];
       this.highlightedId = null;
       this.selectedId = null;
+      this.pendingSelectionFollowLine = null;
       this.nodeById = new Map();
       this.parentIdById = new Map();
       this.readOnlyNodeIds = new Set();
@@ -765,14 +806,33 @@ export class OutlineTreeView extends ItemView {
     this.collapsedIds = this.deriveCollapsedIds();
 
     const cursorLine = view.editor.getCursor().line;
-    this.highlightedId = resolveHighlightedNodeId(doc, cursorLine, { includeLists });
+    // Phase 5T-5A (design doc §3-3/§5-1, 案A): resolveCurrentPositionNodeId
+    // extends the old section/list-only resolveHighlightedNodeId with a
+    // first pass over paragraph/standalone callout/standalone blockquote
+    // candidates — see that module's own doc comment. The raw result is
+    // then walked up to the nearest currently-VISIBLE ancestor (ticket
+    // decision 4: permitted, not forced-open) rather than ever pointing at
+    // a row hidden under a collapsed ancestor.
+    const rawHighlighted = resolveCurrentPositionNodeId(doc, cursorLine, complexScan, this.nodeById, {
+      includeLists,
+    });
+    this.highlightedId = resolveNearestVisibleAncestorId(
+      rawHighlighted,
+      this.parentIdById,
+      this.collapsedIds
+    );
 
-    // Keep an already-valid keyboard selection exactly where it is (see
-    // ensureSelection's doc comment) — this refresh may have been triggered
-    // by something entirely unrelated to sidebar navigation (a debounced
-    // editor-change, an unrelated keyup elsewhere), and must not silently
-    // reset the user's place in the tree.
-    this.ensureSelection();
+    // Phase 5T-5A: when a Tree-dispatched move/edit/Partial-Edit-save just
+    // queued a selection-follow target (this.pendingSelectionFollowLine),
+    // resolve and consume it INSTEAD of the pre-existing ensureSelection()
+    // id-presence check for this one refresh cycle — see
+    // resolveSelectionAfterRefresh's own doc comment for the full
+    // contract. Every other refresh() trigger (debounced editor-change,
+    // active-leaf-change, an unrelated keyup elsewhere) leaves
+    // pendingSelectionFollowLine null, so ensureSelection()'s existing
+    // "keep an already-valid keyboard selection exactly where it is"
+    // behavior is completely unchanged for those cases.
+    this.resolveSelectionAfterRefresh(doc, complexScan, includeLists);
 
     this.applyTreeKindHighlightSettings();
     this.renderTree();
@@ -801,31 +861,31 @@ export class OutlineTreeView extends ItemView {
 
   /**
    * Consumes this.pendingMoveFlash (queued by main.ts's
-   * queueOutlineTreeMoveFlash) against the tree that renderTree() JUST
-   * rebuilt, and — if a match is found — adds a transient CSS class to that
-   * row's DOM element for ~900ms (styles.css's
-   * .unified-outliner-move-flash / @keyframes). Matching by `line` (not by
-   * a node id captured before the move) is deliberate: section/list ids are
-   * only stable within a single parseDocument() pass (see
-   * parser/parseDocument.ts's `sec-N`/`li-N` counters), and a successful
-   * move always changes document order for the swapped pair, so an id
-   * captured pre-move would not exist in the post-move tree at all.
-   * `nodeIdHint` (used for paragraph/complex-block moves, whose enclosing
-   * section's own heading line does not move) is a plain id lookup instead,
-   * since that id's identity IS stable across the move.
+   * queueOutlineTreeMoveFlash, or by this view's own Tree-dispatched move
+   * methods) against the tree that renderTree() JUST rebuilt, and — if a
+   * match is found — adds a transient CSS class to that row's DOM element
+   * for ~900ms (styles.css's .unified-outliner-move-flash / @keyframes).
+   * Matching by `line` (not by a node id captured before the move) is
+   * deliberate: every Tree node id in this codebase is only stable within
+   * a single parseDocument()/buildOutlineTree() pass (see
+   * parser/parseDocument.ts's `sec-N`/`li-N` counters and
+   * tree/buildOutlineTree.ts's paragraph view-id ordinal), and a
+   * successful move always changes document order for the moved content,
+   * so an id captured pre-move would not reliably identify the same
+   * content in the post-move tree. Phase 5T-5A: `pending` is now always a
+   * plain post-move line (the old `nodeIdHint`-based enclosing-section
+   * fallback for paragraph/complex-block moves is gone — see
+   * this.pendingMoveFlash's own doc comment for why it was stale), so a
+   * paragraph/callout/blockquote move now flashes its OWN row exactly,
+   * not just its enclosing section.
    */
   private applyPendingMoveFlash(): void {
     const pending = this.pendingMoveFlash;
     this.pendingMoveFlash = null;
-    if (!pending) return;
+    if (pending === null) return;
 
     const visible = flattenVisibleOutlineTree(this.currentTree, this.collapsedIds);
-    const match =
-      pending.line !== undefined
-        ? visible.find((n) => n.line === pending.line)
-        : pending.nodeIdHint !== undefined
-          ? visible.find((n) => n.id === pending.nodeIdHint)
-          : undefined;
+    const match = visible.find((n) => n.line === pending);
     if (!match) return;
 
     const matchId = match.id;
@@ -845,8 +905,24 @@ export class OutlineTreeView extends ItemView {
    * section — see this.pendingMoveFlash's own doc comment for the
    * queue/consume lifecycle.
    */
-  queueMoveFlash(target: { line?: number; nodeIdHint?: string }): void {
-    this.pendingMoveFlash = target;
+  queueMoveFlash(line: number): void {
+    this.pendingMoveFlash = line;
+  }
+
+  /**
+   * Phase 5T-5A: queues a one-shot selection-follow target — see
+   * this.pendingSelectionFollowLine's own doc comment for the full
+   * queue/consume lifecycle and why this is a SEPARATE field from
+   * pendingMoveFlash. Public (like queueMoveFlash above) so both
+   * main.ts's command-triggered move dispatchers and
+   * PartialEditView.ts's paragraph-edit-save success path can reach every
+   * open Outline Tree View leaf — see
+   * UnifiedOutlinerPlugin#queueOutlineTreeSelectionFollow in main.ts.
+   * This view's OWN Tree-dispatched move/indent/outdent methods call this
+   * directly instead (same instance, no need to go through the plugin).
+   */
+  queueSelectionFollow(line: number): void {
+    this.pendingSelectionFollowLine = line;
   }
 
   /**
@@ -1797,6 +1873,57 @@ export class OutlineTreeView extends ItemView {
   }
 
   /**
+   * Phase 5T-5A (design doc §5-2, ticket decisions 2/3/5): consumes
+   * this.pendingSelectionFollowLine, when set, by re-resolving it against
+   * the JUST-REBUILT tree via the SAME resolveCurrentPositionNodeId used
+   * for highlightedId (see that module's own doc comment on why sharing
+   * one pure line->id resolver for both is intentional and safe — the two
+   * STATE FIELDS stay fully independent; only this stateless computation
+   * is shared). This is the actual fix for the reported bug: unlike
+   * ensureSelection()'s pre-existing "is this id STRING still present in
+   * the fresh tree" check (which can silently match a completely
+   * different node that happens to reuse the same per-refresh ordinal
+   * id — docs/phase5t5_cursor_to_tree_highlight_design.md §3-2), this
+   * re-resolves the LOGICAL target from the operation's own post-edit
+   * line, from scratch, every time.
+   *
+   * Ticket decision 2/5: when the line doesn't resolve to any Tree node at
+   * all, OR resolves to a node that is currently hidden under a collapsed
+   * ancestor, selectedId is cleared to null — never silently substituted
+   * for a nearby/ancestor node (decision: "別 node への近似フォールバック
+   * は禁止"), and fold state is never force-expanded to make the target
+   * visible (decision 3). This is deliberately a STRICTER policy than
+   * highlightedId's own nearest-visible-ancestor fallback (§5-4) — a
+   * fold-hidden selection-follow target reads to the user as "selection
+   * lost", which is the intended, honest signal here, not a silent jump to
+   * an ancestor the user never selected.
+   *
+   * Falls through to the pre-existing ensureSelection() unchanged when no
+   * follow line is pending (every refresh() trigger other than a
+   * Tree-dispatched move/edit/Partial-Edit-save — debounced editor-change,
+   * active-leaf-change, an unrelated keyup elsewhere).
+   */
+  private resolveSelectionAfterRefresh(
+    doc: ParsedDocument,
+    complexScan: ComplexBlockScanResult,
+    includeLists: boolean
+  ): void {
+    const pendingLine = this.pendingSelectionFollowLine;
+    this.pendingSelectionFollowLine = null;
+    if (pendingLine !== null) {
+      const candidate = resolveCurrentPositionNodeId(doc, pendingLine, complexScan, this.nodeById, {
+        includeLists,
+      });
+      this.selectedId =
+        candidate && isOutlineNodeVisible(candidate, this.parentIdById, this.collapsedIds)
+          ? candidate
+          : null;
+      return;
+    }
+    this.ensureSelection();
+  }
+
+  /**
    * If selectedId is null, or no longer among the currently VISIBLE nodes
    * (e.g. its ancestor just got collapsed, or the underlying doc changed
    * enough to shift ids — see the currentDoc field's doc comment on id
@@ -1804,7 +1931,11 @@ export class OutlineTreeView extends ItemView {
    * else the first visible node. A no-op otherwise — this is deliberately
    * NOT "always sync selectedId to highlightedId", so an in-progress
    * keyboard navigation survives refreshes triggered by unrelated events
-   * (see refresh()'s call site).
+   * (see refresh()'s call site). Phase 5T-5A: this pre-existing id-presence
+   * check is now used only as the FALLBACK path (no
+   * pendingSelectionFollowLine pending) — see
+   * resolveSelectionAfterRefresh, above, for the primary repair path this
+   * ticket added.
    */
   private ensureSelection(): void {
     const visible = flattenVisibleOutlineTree(this.currentTree, this.collapsedIds);
@@ -2696,21 +2827,17 @@ export class OutlineTreeView extends ItemView {
    * edit/moveStandaloneComplexBlock.ts) — nothing here duplicates any of
    * it.
    *
-   * Phase 5C-3 approval's own explicit, formal decision: Tree row selection
-   * follow-through is NOT a guarantee of this method. `this.refresh()`
-   * below rebuilds the Tree and re-runs `ensureSelection()` exactly like
-   * every other successful command does, but the cursor-follow resolver
-   * (resolveHighlightedNodeId/resolveCurrentBlock) only ever understands
-   * BlockNode ids (section/list) — it cannot resolve to a complex-member
-   * row — so after a successful move, Tree selection may fall back to the
-   * moved block's own enclosing section rather than staying on the moved
-   * row itself. This is an accepted, documented limitation (Phase 5C-3
-   * approval: "Tree 行選択は「維持されればよい」が、維持されなくても不具合
-   * とはしない"), not a defect to fix here — extending
-   * resolveCurrentBlock/highlightedId to understand complex-member rows is
-   * explicitly out of this ticket's scope. Body-editor cursor scroll
-   * (below) is unaffected by this limitation, since it never depends on
-   * Tree node resolution at all.
+   * Phase 5C-3 approval's own explicit, formal decision (SUPERSEDED by
+   * Phase 5T-5A): Tree row selection follow-through used to not be
+   * guaranteed by this method, since the cursor-follow resolver only
+   * understood BlockNode ids (section/list) and could not resolve to a
+   * complex-member row. Phase 5T-5A (docs/phase5t5_cursor_to_tree_highlight_design.md)
+   * fixed this generally, for every Tree-dispatched move/edit in this
+   * file, not specifically here — see this.queueSelectionFollow's own doc
+   * comment and this method's own `this.queueSelectionFollow(outcome.newStartLine)`
+   * call below. Body-editor cursor scroll (below) was never affected by
+   * the old limitation, since it never depended on Tree node resolution
+   * at all.
    *
    * `snapshot` reaches this function only via a closure captured at
    * menu-build time (showStandaloneComplexBlockMenu → here) — never a bare
@@ -2751,6 +2878,7 @@ export class OutlineTreeView extends ItemView {
         { from: { line: cur.line, ch: 0 }, to: { line: cur.line, ch: lineLen } },
         true
       );
+      this.queueSelectionFollow(outcome.newStartLine);
       this.refresh();
     }
     return changed;
@@ -3071,6 +3199,7 @@ export class OutlineTreeView extends ItemView {
         { from: { line: cur.line, ch: 0 }, to: { line: cur.line, ch: lineLen } },
         true
       );
+      this.queueSelectionFollow(outcome.newStartLine);
       this.refresh();
     }
     return changed;
@@ -3090,17 +3219,15 @@ export class OutlineTreeView extends ItemView {
    * `anchor` reaches this function only via a closure captured at
    * menu-build time (showParagraphMoveMenu -> here) — never a bare
    * scan-local id, for the same reason the composite/standalone dispatch
-   * methods' own doc comments explain. Per Phase 5C-3's own accepted
-   * limitation (re-affirmed here for paragraph): Tree row selection
-   * follow-through after a successful move is not guaranteed — the
-   * cursor-follow resolver only understands BlockNode ids (section/list),
-   * so `this.refresh()` below may leave Tree selection on the moved
-   * paragraph's enclosing container rather than the paragraph row itself.
-   * This is an accepted, pre-existing limitation shared with every other
-   * ComplexBlockKind move, not something this ticket introduces or is
-   * required to fix (5T-1 ticket §6: "Tree の paragraph selection を無理に
-   * 復元しない"). Body-editor cursor scroll (below) is unaffected by this
-   * limitation, since it never depends on Tree node resolution at all.
+   * methods' own doc comments explain. Per 5T-1 ticket §6 ("Tree の
+   * paragraph selection を無理に復元しない"), Tree row selection
+   * follow-through after a successful move used NOT to be guaranteed here
+   * — SUPERSEDED by Phase 5T-5A, which added a general selection-follow
+   * repair mechanism covering paragraph moves too (see
+   * this.queueSelectionFollow's own doc comment and this method's own
+   * `this.queueSelectionFollow(outcome.newStartLine)` call below). Body-
+   * editor cursor scroll (below) was never affected by the old
+   * limitation, since it never depended on Tree node resolution at all.
    */
   private dispatchAndApplyParagraphMove(
     anchor: ParagraphMoveAnchor,
@@ -3135,6 +3262,7 @@ export class OutlineTreeView extends ItemView {
         { from: { line: cur.line, ch: 0 }, to: { line: cur.line, ch: lineLen } },
         true
       );
+      this.queueSelectionFollow(outcome.newStartLine);
       this.refresh();
     }
     return changed;
@@ -3277,9 +3405,25 @@ export class OutlineTreeView extends ItemView {
    * that differs between callers, so no move/indent logic — or its no-op
    * handling — is duplicated here.
    */
+  /**
+   * Phase 5T-5A: `followSelection` (default true) gates whether a
+   * successful outcome also queues a selection-follow target
+   * (this.queueSelectionFollow(outcome.newStartLine)) — true for every
+   * move/indent/outdent call site (runBlockCommand/runContextualCommand/
+   * runRelocateCommand: the operated-on content still exists afterward, so
+   * "follow the same logical target" is well-defined), explicitly false
+   * for every delete/insert call site (runDeleteCommand/
+   * runInsertSiblingListItemCommand/runInsertChildListItemCommand/
+   * runInsertSiblingSectionCommand: a deleted node has no logical target
+   * left to follow, and an inserted node has no PRE-edit selection to have
+   * been following — see this.pendingSelectionFollowLine's own doc
+   * comment for why "no follow" is the deliberately correct choice for
+   * both, not merely an omission).
+   */
   private dispatchAndApply(
     sectionId: string,
-    dispatch: (doc: ParsedDocument) => LineEditOutcome
+    dispatch: (doc: ParsedDocument) => LineEditOutcome,
+    followSelection = true
   ): boolean {
     const view = this.activeMarkdownView.get();
     if (!view) return false;
@@ -3324,6 +3468,7 @@ export class OutlineTreeView extends ItemView {
         { from: { line: cur.line, ch: 0 }, to: { line: cur.line, ch: lineLen } },
         true
       );
+      if (followSelection) this.queueSelectionFollow(outcome.newStartLine);
       this.refresh();
     }
     return changed;
@@ -3453,6 +3598,7 @@ export class OutlineTreeView extends ItemView {
         { from: { line: cur.line, ch: 0 }, to: { line: cur.line, ch: lineLen } },
         true
       );
+      this.queueSelectionFollow(outcome.newStartLine);
       this.refresh();
     }
     return changed;
@@ -3479,23 +3625,36 @@ export class OutlineTreeView extends ItemView {
    * kind-agnostic dispatch pattern.
    */
   private runDeleteCommand(nodeId: string): void {
-    this.dispatchAndApply(nodeId, (doc) => deleteBlock(doc, nodeId));
+    // Phase 5T-5A: followSelection=false — a deleted node has no logical
+    // target left to follow (see dispatchAndApply's own doc comment).
+    this.dispatchAndApply(nodeId, (doc) => deleteBlock(doc, nodeId), false);
   }
 
   private runInsertSiblingListItemCommand(afterListItemId: string): void {
-    const changed = this.dispatchAndApply(afterListItemId, (doc) =>
-      insertSiblingListItem(doc, afterListItemId, {
-        normalizeOrderedLists: this.plugin.settings.normalizeOrderedLists,
-      })
+    // Phase 5T-5A: followSelection=false — an inserted node has no
+    // pre-edit selection to have been following (see dispatchAndApply's
+    // own doc comment). autoRenameAfterInsert below still relies on
+    // highlightedId, unaffected by this.
+    const changed = this.dispatchAndApply(
+      afterListItemId,
+      (doc) =>
+        insertSiblingListItem(doc, afterListItemId, {
+          normalizeOrderedLists: this.plugin.settings.normalizeOrderedLists,
+        }),
+      false
     );
     if (changed) this.autoRenameAfterInsert();
   }
 
   private runInsertChildListItemCommand(parentListItemId: string): void {
-    const changed = this.dispatchAndApply(parentListItemId, (doc) =>
-      insertChildListItem(doc, parentListItemId, {
-        normalizeOrderedLists: this.plugin.settings.normalizeOrderedLists,
-      })
+    // Phase 5T-5A: followSelection=false — see runInsertSiblingListItemCommand's own comment.
+    const changed = this.dispatchAndApply(
+      parentListItemId,
+      (doc) =>
+        insertChildListItem(doc, parentListItemId, {
+          normalizeOrderedLists: this.plugin.settings.normalizeOrderedLists,
+        }),
+      false
     );
     if (changed) this.autoRenameAfterInsert();
   }
@@ -3513,8 +3672,11 @@ export class OutlineTreeView extends ItemView {
   private runInsertSiblingSectionCommand(afterSectionId: string): void {
     new HeadingLevelModal(this.app, this.plugin, (level) => {
       if (level === null) return;
-      const changed = this.dispatchAndApply(afterSectionId, (doc) =>
-        insertSiblingSection(doc, afterSectionId, level)
+      // Phase 5T-5A: followSelection=false — see runInsertSiblingListItemCommand's own comment.
+      const changed = this.dispatchAndApply(
+        afterSectionId,
+        (doc) => insertSiblingSection(doc, afterSectionId, level),
+        false
       );
       if (changed) this.autoRenameAfterInsert();
     }).open();

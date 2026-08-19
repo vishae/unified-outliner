@@ -260,17 +260,30 @@ describe("Tree read-only contract maintained after Phase 5P-4/5T-1 (paragraph st
     expect(readOnlyDragBlock).not.toContain("isOutlineParagraphNode");
   });
 
-  it("§5-6: queueOutlineTreeMoveFlash (main.ts) never uses a paragraph's own Tree node id as nodeIdHint — for any non-section/list move unit it always resolves the ENCLOSING SECTION's id instead, so a paragraph's temporary tree-paragraph:N id is never used as a move target id or post-move selection-restoration key", () => {
-    const start = mainTs.indexOf("private queueOutlineTreeMoveFlash(");
-    expect(start).toBeGreaterThan(-1);
-    const end = mainTs.indexOf("\n  }", start);
-    const body = mainTs.slice(start, end);
-    expect(body).toContain('unit.kind === "section" || unit.kind === "list"');
-    expect(body).toContain("findEnclosingSectionId(doc, ownerNode)");
-    expect(body).toContain("if (sectionId) target = { nodeIdHint: sectionId };");
-    // Never keys nodeIdHint off unit itself (which would risk leaking a
-    // paragraph ComplexBlockInfo's scan-local id into the Tree's id space).
-    expect(body).not.toContain("nodeIdHint: unit.");
+  it("§5-6 REVISED by Phase 5T-5A: queueOutlineTreeMoveFlash/queueOutlineTreeSelectionFollow (main.ts) key purely off outcome.newStartLine (a plain line number) for EVERY move unit kind, never a nodeIdHint / paragraph-view-id / ComplexBlockInfo id of any kind — the old nodeIdHint concept (and its ENCLOSING-SECTION fallback for non-section/list units) is gone entirely now that paragraph/callout/blockquote have their own Tree rows to match by line against (docs/phase5t5_cursor_to_tree_highlight_design.md §3-2)", () => {
+    const flashStart = mainTs.indexOf("private queueOutlineTreeMoveFlash(");
+    expect(flashStart).toBeGreaterThan(-1);
+    const flashEnd = mainTs.indexOf("\n  }", flashStart);
+    const flashBody = mainTs.slice(flashStart, flashEnd);
+    expect(flashBody).toContain("outcome.newStartLine");
+    expect(flashBody).toContain("queueMoveFlash(outcome.newStartLine)");
+    expect(flashBody).not.toContain("nodeIdHint");
+    expect(flashBody).not.toContain("findEnclosingSectionId");
+    expect(flashBody).not.toContain("unit.kind");
+    expect(flashBody).not.toContain("tree-paragraph");
+
+    const followStart = mainTs.indexOf("queueOutlineTreeSelectionFollow(line: number)");
+    expect(followStart).toBeGreaterThan(-1);
+    const followEnd = mainTs.indexOf("\n  }", followStart);
+    const followBody = mainTs.slice(followStart, followEnd);
+    expect(followBody).toContain("queueSelectionFollow(line)");
+    expect(followBody).not.toContain("nodeIdHint");
+    expect(followBody).not.toContain("tree-paragraph");
+
+    // findEnclosingSectionId is no longer imported/used anywhere in
+    // main.ts — the whole nodeIdHint/enclosing-section-fallback concept it
+    // existed for is gone (Phase 5T-5A, ticket decision 6).
+    expect(mainTs).not.toContain("findEnclosingSectionId");
   });
 
   it("§5-7: showParagraphsInOutline is never referenced by the Move-block implementation files (move/resolveMoveTarget.ts, main.ts's moveCurrentBlock/moveCurrentSection) — the setting only ever gates Tree DISPLAY (OutlineTreeView.ts's refresh()), confirming cursor-based Move availability/outcome is identical regardless of its value", () => {

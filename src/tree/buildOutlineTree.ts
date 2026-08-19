@@ -846,7 +846,7 @@ export function paragraphTreeLabel(text: string, ordinal: number, t: Translator)
  * (`sec-N`/`li-N`, or a raw dash-based ComplexBlockInfo id reused verbatim
  * by a composite/complex-member row).
  */
-function paragraphViewId(n: number): string {
+export function paragraphViewId(n: number): string {
   return `tree-paragraph:${n}`;
 }
 
@@ -860,7 +860,7 @@ function paragraphViewId(n: number): string {
  * identity (see that function's own doc comment) — one pass serves both
  * needs.
  */
-function buildParagraphOrdinals(blocks: ComplexBlockInfo[]): Map<string, number> {
+export function buildParagraphOrdinals(blocks: ComplexBlockInfo[]): Map<string, number> {
   const eligible = blocks
     .filter((b) => b.kind === "paragraph" && b.editability === "supported")
     .slice()
