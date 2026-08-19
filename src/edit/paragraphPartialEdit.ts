@@ -68,7 +68,11 @@ export interface ParagraphEditAnchor {
   originalText: string;
 }
 
-export type NoParagraphApplyReason = "resolve-failed" | "identity-changed" | "content-changed";
+export type NoParagraphApplyReason =
+  | "resolve-failed"
+  | "identity-changed"
+  | "content-changed"
+  | "blank-line-not-allowed";
 
 export interface ApplyParagraphEditOutcome {
   changed: boolean;
@@ -76,6 +80,47 @@ export interface ApplyParagraphEditOutcome {
   /** New start line of the replaced range (valid when changed). */
   newStartLine: number;
   reason?: NoParagraphApplyReason;
+}
+
+/**
+ * Phase 5T-4A ("Tree paragraph → 既存 Partial Edit の最小実装",
+ * docs/phase5t4_tree_paragraph_partial_edit_design.md §5-3): a paragraph's
+ * own text can legitimately span multiple lines (soft-wrapped, no blank
+ * separator — see this file's own "successful apply" test for
+ * "a multi-line paragraph can grow or shrink in line count on Apply",
+ * unchanged and still supported), but it must never contain a genuinely
+ * BLANK line — parser/complexBlocks.ts's own paragraph-boundary rule
+ * treats a blank (or whitespace-only) line as a hard paragraph separator,
+ * so splicing one into the middle of `newText` would, on the next parse,
+ * silently turn one paragraph into two: exactly the "分割" the 5T-4A
+ * ticket §4 requires this module to reject outright, safe-side, whenever
+ * the input is even ambiguous.
+ *
+ * A line counts as "blank" here whenever it is empty OR whitespace-only
+ * after trimming — both are indistinguishable from an ordinary Markdown
+ * blank-line separator once written back to the note, so both are
+ * rejected identically; there is no separate "whitespace-only is more
+ * lenient" case.
+ *
+ * A trailing newline in the caller's `newText` (e.g. the user pressed
+ * Enter once at the very end of the Partial Edit Pane's textarea) is
+ * DELIBERATELY treated exactly like any other blank line, not stripped or
+ * special-cased: `"Some text.\n".split("\n")` ends in an empty-string
+ * element, which this function flags the same as an interior blank line.
+ * This keeps the rule simple and total (one check, no exceptions to
+ * explain), and matches the 5T-4A ticket's own explicit fallback ("仕様が
+ * 曖昧なら「paragraph を複数段落に分割し得る入力はすべて拒否」とすること") —
+ * a paragraph's own `originalText` snapshot (doc.lines.slice(...).join
+ * ("\n")) never carries a trailing newline in the first place, so an
+ * unedited round-trip Apply never trips this check.
+ *
+ * A newline strictly BETWEEN two non-blank lines (ordinary multi-line
+ * paragraph text, e.g. `"Line one.\nLine two."`) is explicitly NOT
+ * rejected — see the doc comment above for why this remains supported,
+ * pre-existing 5P-2 behavior.
+ */
+export function paragraphEditTextContainsBlankLine(text: string): boolean {
+  return text.split("\n").some((line) => line.trim().length === 0);
 }
 
 /**
@@ -100,12 +145,23 @@ export interface ApplyParagraphEditOutcome {
  *     freshly re-extracted text differs from `anchor.originalText` — the
  *     note changed (this paragraph's own content, specifically) since the
  *     pane loaded it.
+ *   - "blank-line-not-allowed" (Phase 5T-4A): `newText` itself contains a
+ *     blank (or whitespace-only) line — see
+ *     `paragraphEditTextContainsBlankLine`'s own doc comment just above.
+ *     Checked FIRST, before any re-resolution against `doc`, since this is
+ *     purely an input-validity question independent of the target
+ *     paragraph's current state — an invalid input is rejected the same
+ *     way whether or not the paragraph itself is still safely resolvable.
  */
 export function applyParagraphEdit(
   doc: ParsedDocument,
   anchor: ParagraphEditAnchor,
   newText: string
 ): ApplyParagraphEditOutcome {
+  if (paragraphEditTextContainsBlankLine(newText)) {
+    return { changed: false, lines: doc.lines, newStartLine: -1, reason: "blank-line-not-allowed" };
+  }
+
   const scan = scanComplexBlocks(doc);
   const block = scan.blocks.find(
     (b) => b.id === anchor.complexBlockId && b.kind === "paragraph"

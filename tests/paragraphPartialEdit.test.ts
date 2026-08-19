@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { parseDocument } from "../src/parser/parseDocument";
 import { resolveParagraphAtCursor } from "../src/resolver/resolveParagraphAtCursor";
-import { applyParagraphEdit, ParagraphEditAnchor } from "../src/edit/paragraphPartialEdit";
+import {
+  applyParagraphEdit,
+  paragraphEditTextContainsBlankLine,
+  ParagraphEditAnchor,
+} from "../src/edit/paragraphPartialEdit";
 
 /** Loads an anchor exactly the way PartialEditView.loadParagraphInternal would, from a fresh parse + resolve. */
 function anchorAt(text: string, cursorLine: number): ParagraphEditAnchor {
@@ -173,5 +177,104 @@ describe("applyParagraphEdit: safe no-op rejections", () => {
       "|---|---|",
       "| 1 | 2 |",
     ]);
+  });
+});
+
+/**
+ * Phase 5T-4A ("Tree paragraph → 既存 Partial Edit の最小実装",
+ * docs/phase5t4_tree_paragraph_partial_edit_design.md §5-3/§7): the new
+ * blank-line-input validation, tested as a standalone pure function first
+ * (per the ticket's own "可能なら…paragraphバリデーション単体テストを分離
+ * すること" instruction) and then through applyParagraphEdit's own
+ * rejection path.
+ */
+describe("paragraphEditTextContainsBlankLine (Phase 5T-4A)", () => {
+  it("returns false for a single-line paragraph", () => {
+    expect(paragraphEditTextContainsBlankLine("Just one line.")).toBe(false);
+  });
+
+  it("returns false for a multi-line paragraph with no blank line between the lines (soft-wrapped, pre-existing 5P-2 behavior)", () => {
+    expect(paragraphEditTextContainsBlankLine("Line one.\nLine two.\nLine three.")).toBe(false);
+  });
+
+  it("returns true when a blank line sits strictly between two non-blank lines", () => {
+    expect(paragraphEditTextContainsBlankLine("Line one.\n\nLine two.")).toBe(true);
+  });
+
+  it("returns true for a whitespace-only line (spaces or tabs only), not just a fully empty one", () => {
+    expect(paragraphEditTextContainsBlankLine("Line one.\n   \nLine two.")).toBe(true);
+    expect(paragraphEditTextContainsBlankLine("Line one.\n\t\nLine two.")).toBe(true);
+  });
+
+  it("returns true for a single trailing newline (an empty final line), even with no other blank line — the trailing-newline convention documented on the function itself", () => {
+    expect(paragraphEditTextContainsBlankLine("Just one line.\n")).toBe(true);
+  });
+
+  it("returns true for a leading blank line", () => {
+    expect(paragraphEditTextContainsBlankLine("\nLine one.")).toBe(true);
+  });
+
+  it("returns true for a fully empty string (an emptied-out paragraph)", () => {
+    expect(paragraphEditTextContainsBlankLine("")).toBe(true);
+  });
+
+  it("returns false for a line with meaningful trailing/leading whitespace around real content (not itself a blank line)", () => {
+    expect(paragraphEditTextContainsBlankLine("  Indented child paragraph text.")).toBe(false);
+    expect(paragraphEditTextContainsBlankLine("Trailing space at end.   ")).toBe(false);
+  });
+});
+
+describe("applyParagraphEdit: blank-line input rejection (Phase 5T-4A)", () => {
+  it("rejects (blank-line-not-allowed) when newText contains a blank line in the middle, and leaves the note byte-identical", () => {
+    const text = ["# H", "Target paragraph."].join("\n");
+    const anchor = anchorAt(text, 1);
+    const doc = parseDocument(text);
+    const outcome = applyParagraphEdit(doc, anchor, "First half.\n\nSecond half.");
+    expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("blank-line-not-allowed");
+    expect(outcome.lines).toEqual(doc.lines);
+  });
+
+  it("rejects (blank-line-not-allowed) for a whitespace-only line", () => {
+    const text = ["# H", "Target paragraph."].join("\n");
+    const anchor = anchorAt(text, 1);
+    const doc = parseDocument(text);
+    const outcome = applyParagraphEdit(doc, anchor, "First half.\n   \nSecond half.");
+    expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("blank-line-not-allowed");
+    expect(outcome.lines).toEqual(doc.lines);
+  });
+
+  it("rejects (blank-line-not-allowed) for a trailing newline, even though the rest of the text is otherwise a valid single-line paragraph", () => {
+    const text = ["# H", "Target paragraph."].join("\n");
+    const anchor = anchorAt(text, 1);
+    const doc = parseDocument(text);
+    const outcome = applyParagraphEdit(doc, anchor, "Edited target paragraph.\n");
+    expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("blank-line-not-allowed");
+    expect(outcome.lines).toEqual(doc.lines);
+  });
+
+  it("this check runs BEFORE re-resolution — a blank-line input is rejected even when the target paragraph itself can no longer be resolved (id/content/structure all irrelevant once the input itself is invalid)", () => {
+    const original = ["# H", "Target paragraph."].join("\n");
+    const anchor = anchorAt(original, 1);
+    // The paragraph was deleted entirely — resolution would otherwise fail
+    // with "resolve-failed"/"content-changed"; the blank-line check must
+    // still be the reason reported, since it is checked first.
+    const changedText = ["# H"].join("\n");
+    const doc = parseDocument(changedText);
+    const outcome = applyParagraphEdit(doc, anchor, "First half.\n\nSecond half.");
+    expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("blank-line-not-allowed");
+    expect(outcome.lines).toEqual(doc.lines);
+  });
+
+  it("still accepts a valid multi-line (no blank line) replacement — the pre-existing 5P-2 'grow or shrink in line count' contract is unaffected by this new check", () => {
+    const text = ["# H", "One line paragraph."].join("\n");
+    const anchor = anchorAt(text, 1);
+    const doc = parseDocument(text);
+    const outcome = applyParagraphEdit(doc, anchor, "Now it is\ntwo lines.");
+    expect(outcome.changed).toBe(true);
+    expect(outcome.lines).toEqual(["# H", "Now it is", "two lines."]);
   });
 });

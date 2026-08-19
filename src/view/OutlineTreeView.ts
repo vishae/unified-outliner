@@ -2758,15 +2758,40 @@ export class OutlineTreeView extends ItemView {
 
   /**
    * Phase 5T-1: a paragraph row's own, deliberately narrow right-click
-   * menu — "Move up"/"Move down" only. No delete, no rename, no Partial
-   * Edit/hoist entry point of any kind (ticket §1: paragraph stays
-   * read-only; Tree 起点の Partial Edit is never added). Never attached at
-   * all unless `isOutlineParagraphNode(node)` is true (see renderNode's own
-   * context-menu chain above), and a paragraph Tree node only ever exists
-   * in `this.currentTree` when `settings.showParagraphsInOutline` is true
-   * (tree/buildOutlineTree.ts's own "never even considered when off"
-   * design, confirmed unchanged by Phase 5P-3) — so this method needs no
-   * separate settings check of its own.
+   * menu — originally "Move up"/"Move down" only, with no Partial Edit/
+   * hoist entry point of any kind (5T-1 ticket §1: "Tree 起点の Partial
+   * Edit is never added"). Still no delete/rename/insert/indent-outdent of
+   * any kind. Never attached at all unless `isOutlineParagraphNode(node)`
+   * is true (see renderNode's own context-menu chain above), and a
+   * paragraph Tree node only ever exists in `this.currentTree` when
+   * `settings.showParagraphsInOutline` is true (tree/buildOutlineTree.ts's
+   * own "never even considered when off" design, confirmed unchanged by
+   * Phase 5P-3) — so this method needs no separate settings check of its
+   * own.
+   *
+   * Phase 5T-4A ("Tree paragraph → Partial Edit の最小実装",
+   * docs/phase5t4_tree_paragraph_partial_edit_design.md): the 5T-1-era
+   * "Tree 起点の Partial Edit is never added" boundary above was
+   * explicitly, deliberately revisited by that ticket — this method now
+   * ALSO adds one unconditional "段落を編集…" item that opens the paragraph
+   * in the EXISTING Partial Edit Pane. This is deliberately NOT a new
+   * editing model: no new anchor type, no new save/apply function, no Tree
+   * row inline editor. The item's onClick hands `target.range.startLine`
+   * (a plain line-number hint, freshly re-resolved by
+   * `resolveParagraphFromTreeHint` just above) to the pre-existing, entirely
+   * unmodified `main.ts#activatePartialEditViewForParagraph(cursorLine)` —
+   * the exact same entry point the body-editor "Edit paragraph at cursor"
+   * command already uses. That method's own paragraph-loading chain (see
+   * view/PartialEditView.ts's `requestLoadParagraphAtCursor` /
+   * `loadParagraphInternal`, and the cursor-based paragraph resolver those
+   * call into) re-resolves the paragraph a SECOND time, independently, from
+   * the CURRENT body text — so this call site only ever supplies a hint,
+   * never a trusted identity. This method itself does not construct a
+   * paragraph edit anchor, does not import the body-editor's cursor-based
+   * paragraph resolver, and does not reference the Pane's own
+   * paragraph-anchor field — see
+   * tests/paragraphOutlineTreeUiWiring.test.ts's own "Phase 5T-4A" describe
+   * block for the static checks that pin this down.
    *
    * `this.currentDoc`/`this.currentComplexScan` (refresh()-time cached
    * values) are used ONLY to decide which move items to show and to build
@@ -2776,20 +2801,29 @@ export class OutlineTreeView extends ItemView {
    * edit/paragraphTreeMove.ts#moveParagraphFromAnchor's own re-parse/
    * re-scan/three-stage-re-verification job, run against the editor's
    * CURRENT content at the moment "Move up"/"Move down" is actually
-   * clicked (see dispatchAndApplyParagraphMove below).
+   * clicked (see dispatchAndApplyParagraphMove below); paragraph edit
+   * safety is entirely `edit/paragraphPartialEdit.ts#applyParagraphEdit`'s
+   * own job, run again independently at Apply time inside the Partial Edit
+   * Pane — nothing here duplicates either.
    *
-   * Like showCompositeCommandMenu (and UNLIKE showStandaloneComplexBlockMenu,
-   * which always has its unconditional Partial-Edit items to fall back on),
-   * this method shows NO menu at all — not even an empty one — when
-   * neither direction is currently eligible: there is no unconditional
-   * item here for an empty menu to degrade to.
+   * Like showStandaloneComplexBlockMenu (which always has its own
+   * unconditional Partial-Edit items to fall back on), this method now
+   * ALWAYS shows at least the "段落を編集…" item once `target`/`anchor`
+   * resolve successfully — the previous "no menu at all unless a move is
+   * eligible" behavior (Phase 5T-1/5T-3A) no longer applies, since there is
+   * now an unconditional item for an otherwise-empty menu to degrade to.
+   * The method still shows NO menu at all when the paragraph itself cannot
+   * be resolved (see the early `return`s below) — that guard is unchanged.
    *
    * `findComplexSiblingTarget` (move/resolveMoveTarget.ts, Phase 5P-4) is
    * reused verbatim here purely to decide menu-time ELIGIBILITY (which
-   * items to show) — the exact same function
+   * move items to show) — the exact same function
    * edit/paragraphTreeMove.ts#moveParagraphFromAnchor calls again,
    * independently, at click time. No new adjacency/eligibility logic is
-   * written in this file.
+   * written in this file. The "段落を編集…" item has no adjacency/eligibility
+   * concept of its own — it is available whenever the paragraph itself
+   * resolves, exactly like showStandaloneComplexBlockMenu's own
+   * unconditional "Open in Partial Edit" item.
    */
   private showParagraphMoveMenu(evt: MouseEvent, nodeId: string): void {
     const doc = this.currentDoc;
@@ -2855,9 +2889,29 @@ export class OutlineTreeView extends ItemView {
     const depth = complexBlockDepth(doc, target.parentId);
     const siblingGroup = listNonAdjacentMoveTargets(complexScan, target.range, target.parentId, depth, doc);
 
-    if (!upEligible && !downEligible && siblingGroup.length === 0) return;
-
+    // Phase 5T-4A: no eligibility guard here — "段落を編集…" below is
+    // unconditional once `target`/`anchor` resolved (checked above), so
+    // there is always at least one item to show. The previous "no menu at
+    // all when no move is eligible" early return (Phase 5T-1/5T-3A) is
+    // removed accordingly — see this method's own doc comment.
     const menu = new Menu();
+
+    // Phase 5T-4A: unconditional — opens the EXISTING paragraph Partial
+    // Edit path (main.ts#activatePartialEditViewForParagraph), never a new
+    // one. `target.range.startLine` is a plain line-number hint; the Pane
+    // re-resolves the paragraph independently from the current body text
+    // before ever showing it, so a stale hint here can only ever produce a
+    // safe Notice, never a wrong paragraph loaded — see this method's own
+    // doc comment for the full contract.
+    menu.addItem((item) =>
+      item
+        .setTitle(this.plugin.t("tree.menu.paragraphEdit"))
+        .setIcon("edit-3")
+        .onClick(() =>
+          void this.plugin.activatePartialEditViewForParagraph(target.range.startLine)
+        )
+    );
+
     if (upEligible) {
       menu.addItem((item) =>
         item

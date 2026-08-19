@@ -130,11 +130,11 @@ describe("OutlineTreeView.ts paragraph wiring (static source check, Phase 5P-3)"
     expect(dragBlock.startsWith("if (!readOnly) {")).toBe(true);
   });
 
-  it("does not introduce any Tree-triggered paragraph Partial Edit entry point (no resolveParagraphAtCursor / paragraphAnchor / activatePartialEditViewForParagraph reference anywhere in this file)", () => {
+  it("REVISED by Phase 5T-4A: this file DOES now reference activatePartialEditViewForParagraph (the new 'Edit paragraph…' bridge — see the dedicated Phase 5T-4A describe block below), but still never re-implements paragraph resolution or apply logic itself — no resolveParagraphAtCursor / paragraphAnchor / openParagraphPartialEditForCursor reference anywhere in this file. Those three stay exclusively main.ts's/PartialEditView.ts's own responsibility; this file only ever hands off a line-number hint to the existing, unmodified entry point.", () => {
     expect(viewTs).not.toContain("resolveParagraphAtCursor");
     expect(viewTs).not.toContain("paragraphAnchor");
-    expect(viewTs).not.toContain("activatePartialEditViewForParagraph");
     expect(viewTs).not.toContain("openParagraphPartialEditForCursor");
+    expect(viewTs).toContain("activatePartialEditViewForParagraph");
   });
 
   it("does not introduce a Tree-triggered rename / indent-outdent / delete / insert affordance keyed on paragraph (Phase 5T-1 adds a narrow Tree-triggered MOVE only, via showParagraphMoveMenu/moveParagraphFromAnchor — checked separately in the dedicated Phase 5T-1 describe block below; every OTHER affordance stays absent)", () => {
@@ -345,14 +345,16 @@ describe("Phase 5T-1: paragraph Tree-triggered Move (narrow, safety-gated except
     expect(body).toContain("findComplexSiblingTarget(doc, unit, \"up\", complexScan)");
     expect(body).toContain("findComplexSiblingTarget(doc, unit, \"down\", complexScan)");
     expect(body).toContain("buildParagraphMoveAnchor(doc, target)");
-    // No menu at all when neither direction is eligible AND no non-adjacent
-    // sibling group exists either (Phase 5T-3A extended this guard —
-    // matches showCompositeCommandMenu's own "no menu when nothing to do"
-    // style, now also covering the new Move to top/bottom/before/after
-    // sibling items).
-    expect(body).toContain(
+    // REVISED by Phase 5T-4A: the previous "no menu at all when neither
+    // direction is eligible AND no non-adjacent sibling group exists
+    // either" guard (introduced by 5T-3A) is gone — "段落を編集…" is now
+    // unconditional once target/anchor resolve, so there is always at
+    // least one item to show. See the dedicated Phase 5T-4A describe block
+    // below for the positive checks on the new item itself.
+    expect(body).not.toContain(
       "if (!upEligible && !downEligible && siblingGroup.length === 0) return;"
     );
+    expect(body).toContain('this.plugin.t("tree.menu.paragraphEdit")');
   });
 
   it("Phase 5T-3A: showParagraphMoveMenu wires in the four new non-adjacent-move commands via edit/paragraphNonAdjacentMove.ts, without touching the existing adjacent Move up/down items", () => {
@@ -715,5 +717,117 @@ describe("Phase 5T-2: paragraph drag & drop wiring (narrow, desktop-only, plan-A
     const body = viewTs.slice(start, end);
     expect(body).toContain("anchor: ParagraphMoveAnchor;");
     expect(body).toContain("sourceTreeNodeId: string;");
+  });
+});
+
+/**
+ * Phase 5T-4A ("Tree paragraph → 既存 Partial Edit の最小実装",
+ * docs/phase5t4_tree_paragraph_partial_edit_design.md): static-source-text
+ * checks for the new "段落を編集…" context-menu item — the ONLY new
+ * behavior this ticket adds. Real pure-function coverage of the new
+ * blank-line validation lives in tests/paragraphPartialEdit.test.ts
+ * ("paragraphEditTextContainsBlankLine" and "applyParagraphEdit: blank-line
+ * input rejection" describe blocks) — this file only confirms the Tree/view
+ * layer wires the bridge in narrowly and correctly, per this file's own
+ * established "supplementary only" convention (see the Phase 5T-1 describe
+ * block's own framing above).
+ */
+describe("Phase 5T-4A: Tree paragraph → existing Partial Edit bridge ('段落を編集…')", () => {
+  const viewTs = readFileSync(path.resolve(__dirname, "../src/view/OutlineTreeView.ts"), "utf-8");
+  const i18nTs = readFileSync(path.resolve(__dirname, "../src/i18n.ts"), "utf-8");
+  const paragraphPartialEditTs = readFileSync(
+    path.resolve(__dirname, "../src/edit/paragraphPartialEdit.ts"),
+    "utf-8"
+  );
+
+  function showParagraphMoveMenuBody(): string {
+    const start = viewTs.indexOf("private showParagraphMoveMenu(evt: MouseEvent, nodeId: string): void {");
+    expect(start).toBeGreaterThan(-1);
+    const end = viewTs.indexOf("\n  private showParagraphMoveTargetPicker(", start);
+    expect(end).toBeGreaterThan(start);
+    return viewTs.slice(start, end);
+  }
+
+  it("adds exactly one new menu item, titled via the new tree.menu.paragraphEdit i18n key, with the edit-3 icon shared with the pane's own getIcon()/showStandaloneComplexBlockMenu's Partial Edit item", () => {
+    const body = showParagraphMoveMenuBody();
+    expect(body).toContain('this.plugin.t("tree.menu.paragraphEdit")');
+    const itemIdx = body.indexOf('this.plugin.t("tree.menu.paragraphEdit")');
+    const iconIdx = body.indexOf('.setIcon("edit-3")', itemIdx);
+    expect(iconIdx).toBeGreaterThan(itemIdx);
+  });
+
+  it("the item's onClick bridges to the EXISTING, unmodified main.ts#activatePartialEditViewForParagraph, passing the freshly re-resolved target's own range.startLine — never a new anchor type, never node.id, never a Tree-view-only id", () => {
+    const body = showParagraphMoveMenuBody();
+    const itemIdx = body.indexOf('this.plugin.t("tree.menu.paragraphEdit")');
+    const onClickSlice = body.slice(itemIdx, itemIdx + 400);
+    expect(onClickSlice).toContain("this.plugin.activatePartialEditViewForParagraph(target.range.startLine)");
+    expect(onClickSlice).not.toContain("nodeId)");
+    expect(onClickSlice).not.toContain("new ParagraphEditAnchor");
+  });
+
+  it("the new item is built AFTER target/anchor are already resolved (the same resolveParagraphFromTreeHint + buildParagraphMoveAnchor pair the Move items already use) — never a second, independent resolution path", () => {
+    const body = showParagraphMoveMenuBody();
+    const anchorIdx = body.indexOf("const anchor = buildParagraphMoveAnchor(doc, target);");
+    const editItemIdx = body.indexOf('this.plugin.t("tree.menu.paragraphEdit")');
+    expect(anchorIdx).toBeGreaterThan(-1);
+    expect(editItemIdx).toBeGreaterThan(anchorIdx);
+  });
+
+  it("the menu still shows NOTHING at all when the paragraph itself cannot be resolved — the early `if (!target) return;` / `if (!anchor) return;` guards before the menu is ever constructed are unchanged", () => {
+    const body = showParagraphMoveMenuBody();
+    expect(body).toContain("if (!target) return;");
+    expect(body).toContain("if (!anchor) return;");
+    // Both guards must appear BEFORE the new edit item is ever built.
+    const editItemIdx = body.indexOf('this.plugin.t("tree.menu.paragraphEdit")');
+    expect(body.indexOf("if (!target) return;")).toBeLessThan(editItemIdx);
+    expect(body.indexOf("if (!anchor) return;")).toBeLessThan(editItemIdx);
+  });
+
+  it("does not introduce a Tree row inline editor, a double-click launch, or an F2 launch for paragraph edit — only the context-menu item exists (explicitly out of 5T-4A scope). The file's pre-existing dblclick/F2 rename listener (section/list only, gated by !readOnly and by beginRenameForNode's own kind check) is untouched and never extended to paragraph.", () => {
+    // showParagraphMoveMenu itself (the sole home of the new item) wires
+    // no dblclick/F2 listener of its own — it only ever builds a Menu.
+    const body = showParagraphMoveMenuBody();
+    expect(body).not.toContain("dblclick");
+    expect(body).not.toContain("F2");
+    expect(viewTs).not.toContain("paragraph-edit-input");
+    expect(viewTs).not.toContain("paragraphEditTextarea");
+    // The pre-existing rename dblclick listener stays gated by !readOnly —
+    // a paragraph row is always in readOnlyNodeIds (checked in the
+    // "Tree read-only contract" describe block above), so it is never
+    // attached to a paragraph row; this is unchanged, pre-existing
+    // behavior, re-confirmed here rather than duplicated.
+    expect(viewTs).toContain('selfEl.addEventListener("dblclick", (evt) => {');
+  });
+
+  it("i18n.ts defines tree.menu.paragraphEdit and reason.blank-line-not-allowed in both en and ja", () => {
+    const enStart = i18nTs.indexOf("const en = {");
+    const enEnd = i18nTs.indexOf("\n} as const;", enStart);
+    const jaStart = i18nTs.indexOf("const ja: Record<TranslationKey, string> = {", enEnd);
+    const jaEnd = i18nTs.indexOf("\n};", jaStart);
+    expect(enStart).toBeGreaterThan(-1);
+    expect(jaStart).toBeGreaterThan(-1);
+    const enBlock = i18nTs.slice(enStart, enEnd);
+    const jaBlock = i18nTs.slice(jaStart, jaEnd);
+    for (const key of ["tree.menu.paragraphEdit", "reason.blank-line-not-allowed"]) {
+      expect(enBlock).toContain(`"${key}"`);
+      expect(jaBlock).toContain(`"${key}"`);
+    }
+  });
+
+  it("edit/paragraphPartialEdit.ts's blank-line validation is checked BEFORE any re-resolution against doc — appears earlier than the function's own scanComplexBlocks(doc) call", () => {
+    const start = paragraphPartialEditTs.indexOf("export function applyParagraphEdit(");
+    expect(start).toBeGreaterThan(-1);
+    const scanIdx = paragraphPartialEditTs.indexOf("scanComplexBlocks(doc)", start);
+    const blankCheckIdx = paragraphPartialEditTs.indexOf(
+      "paragraphEditTextContainsBlankLine(newText)",
+      start
+    );
+    expect(scanIdx).toBeGreaterThan(-1);
+    expect(blankCheckIdx).toBeGreaterThan(start);
+    expect(blankCheckIdx).toBeLessThan(scanIdx);
+  });
+
+  it("parseDocument.ts is not referenced by the new blank-line validation or by this bridge (paragraph identity/parsing rules are unchanged)", () => {
+    expect(paragraphPartialEditTs).not.toContain("parseDocument.ts");
   });
 });

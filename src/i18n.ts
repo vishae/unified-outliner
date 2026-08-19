@@ -271,6 +271,15 @@ const en = {
   "tree.menu.paragraphMoveBeforeSibling": "Move before sibling…",
   "tree.menu.paragraphMoveAfterSibling": "Move after sibling…",
 
+  // Phase 5T-4A ("Tree paragraph → 既存 Partial Edit の最小実装",
+  // docs/phase5t4_tree_paragraph_partial_edit_design.md): unconditional
+  // item, always shown alongside the move items above whenever the
+  // paragraph itself resolves — opens the paragraph in the EXISTING
+  // Partial Edit Pane via the existing, unmodified
+  // main.ts#activatePartialEditViewForParagraph (see
+  // view/OutlineTreeView.ts#showParagraphMoveMenu's own doc comment).
+  "tree.menu.paragraphEdit": "Edit paragraph…",
+
   // ---- Partial Edit Pane --------------------------------------------------
   "partialEdit.viewName": "Unified Outliner: Partial Edit",
   "partialEdit.noActiveNote": "Unified Outliner: no active note to load a node from.",
@@ -484,6 +493,16 @@ const en = {
     "Unified Outliner: this paragraph's position in the note changed, so the edit was not applied safely. Reopen it and try again.",
   "reason.content-changed":
     "Unified Outliner: the note changed, so the safe update to this paragraph was cancelled. Check the content and reopen it.",
+  // Phase 5T-4A ("Tree paragraph → 既存 Partial Edit の最小実装"):
+  // edit/paragraphPartialEdit.ts's NoParagraphApplyReason "blank-line-not-allowed"
+  // — a dedicated, new key (not reused from any reason above) since this
+  // rejection is about the INPUT itself, not about the target paragraph
+  // having changed or failed to resolve. Applies to every caller of
+  // applyParagraphEdit (body-editor "Edit paragraph at cursor" and the new
+  // Tree-triggered "Edit paragraph…" alike) — never section/list/composite
+  // Partial Edit, which never calls applyParagraphEdit at all.
+  "reason.blank-line-not-allowed":
+    "Unified Outliner: a paragraph's text can't contain a blank line — that would split it into multiple paragraphs. Remove the blank line and try again.",
 
   // Phase 5T-1: paragraph Tree context-menu move (edit/paragraphTreeMove.ts)
   // rejection reasons. Deliberately NEW, dedicated keys rather than reusing
@@ -705,6 +724,7 @@ const ja: Record<TranslationKey, string> = {
   "tree.menu.paragraphMoveToBottom": "末尾へ移動",
   "tree.menu.paragraphMoveBeforeSibling": "指定した段落の前へ移動…",
   "tree.menu.paragraphMoveAfterSibling": "指定した段落の後へ移動…",
+  "tree.menu.paragraphEdit": "段落を編集…",
 
   // ---- 部分編集ペイン -------------------------------------------------------
   "partialEdit.viewName": "Unified Outliner: 部分編集",
@@ -897,6 +917,8 @@ const ja: Record<TranslationKey, string> = {
     "Unified Outliner: この段落の文書内での位置が変化したため、安全に適用できなかった。開き直してもう一度試すこと。",
   "reason.content-changed":
     "Unified Outliner: 本文が変更されたため、段落への安全な反映を中止した。内容を確認してもう一度開くこと。",
+  "reason.blank-line-not-allowed":
+    "Unified Outliner: 段落の本文に空行を含めることはできない（複数の段落に分割されてしまう）。空行を削除してからもう一度試すこと。",
 
   "reason.paragraphTreeMoveResolveFailed":
     "Unified Outliner: この段落を安全に再解決できなかった（ノートが変更された可能性がある）。",

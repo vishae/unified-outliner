@@ -235,3 +235,45 @@ body-editor 起点の `openParagraphPartialEditForCursor` は `editor.listSelect
 - `src/`・`tests/`・`styles.css`・`manifest.json`・ビルド成果物は変更していない。
 - `parseDocument.ts` は変更していない。
 - 単独コミットとする。
+
+
+## 10. Phase 5T-4A: 最小実装の確定事項（追記）
+
+利用者の確定事項（案Aのみ採用、ダブルクリック/F2/inline edit は不採用、メニュー追加先は paragraph 専用メニュー、空行入力バリデーションをスコープに含める、表示条件は編集可能な paragraph にのみ、Tree を writable にしない、保存経路は既存のまま、`parseDocument.ts` は変更しない）を受けて実装した内容を記録する。
+
+### 10-1. 実装したもの
+
+- `src/view/OutlineTreeView.ts` の `showParagraphMoveMenu` に、無条件の新項目「段落を編集…」（`tree.menu.paragraphEdit`）を追加した。onClick は `this.plugin.activatePartialEditViewForParagraph(target.range.startLine)` を呼ぶのみで、既存の起動関数・保存経路は一切変更していない。
+- 従来「上下移動・非隣接移動のいずれも不可能なら menu 自体を出さない」という早期 return（5T-1/5T-3A由来）を削除した。「段落を編集…」が常に利用可能になったため、この guard は不要になった。paragraph 自体が解決できない場合（`target`/`anchor` が null）は、従来どおり menu 自体を一切表示しない。
+- `src/edit/paragraphPartialEdit.ts` に、空行を含む入力を拒否する `paragraphEditTextContainsBlankLine` を追加し、`applyParagraphEdit` の先頭（`scanComplexBlocks` より前）でこれを検査するようにした。新しい失敗理由 `"blank-line-not-allowed"` を `NoParagraphApplyReason` に追加した。
+- `src/i18n.ts` に `tree.menu.paragraphEdit`（en/ja）と `reason.blank-line-not-allowed`（en/ja）を追加した。
+
+### 10-2. 空行入力バリデーションの確定仕様
+
+- 「空行」は、trim 後に長さ0となる行（完全な空行、および空白のみの行の両方）と定義する。
+- テキストエリアの内容を `"\n"` で分割した各行のいずれか1つでも空行なら拒否する。
+- **末尾改行の扱い**: テキストの末尾に改行が1つあると、分割結果の最後の要素が空文字列になるため、これも空行として拒否する。特別扱い（自動トリム等）はしない。既存の paragraph の `originalText` スナップショットは末尾改行を含まない形で作られるため、無編集のままの Apply でこの検査に引っかかることはない。
+- **単一行内の改行**: 存在しない（改行は行の区切りそのものであるため）。
+- **単一paragraph内の複数行（空行を挟まない折り返し）**: 引き続き許可する。5P-2 時点で既にテストで固定されていた挙動（`tests/paragraphPartialEdit.test.ts` の「a multi-line paragraph can grow or shrink in line count on Apply」）であり、5T-4A はこれを変更していない。
+- 検査は `doc`/`anchor` に対する3段階再解決より前（入力内容そのものの妥当性チェックとして独立に）行う。対象 paragraph が既に解決不能であっても、空行入力自体があれば `"blank-line-not-allowed"` を優先して返す。
+- この検査は `applyParagraphEdit` にのみ追加されており、`edit/partialEdit.ts`（section/list/composite/standalone callout・blockquote の Apply 経路）には一切影響しない。
+
+### 10-3. 表示条件
+
+「段落を編集…」は、Tree 側のヒント再解決（`resolveParagraphFromTreeHint`）と `buildParagraphMoveAnchor`（`editability === "supported"` を要求）の両方が成功したときにのみ表示される。これは既存の Move 系項目と同じ資格判定であり、新しい eligibility ロジックは追加していない。両方またはいずれかが失敗した場合は、menu 自体が一切表示されない（既存の `if (!target) return;` / `if (!anchor) return;` による）。
+
+### 10-4. 起動・保存契約
+
+起動時・保存時の再解決契約は §5 で確定した内容のとおり、既存の `activatePartialEditViewForParagraph` → `requestLoadParagraphAtCursor` → `loadParagraphInternal` → `resolveParagraphAtCursor`、および `applyParagraphEdit`（空行検査を追加した以外は無変更）をそのまま使用する。`main.ts`・`view/PartialEditView.ts` は一切変更していない。
+
+### 10-5. テスト・検証結果
+
+- `npx vitest run`: 69ファイル / 1201件、全通過。
+- `npx tsc -noEmit -skipLibCheck`: エラーなし。
+- `npx eslint "src/**/*.ts"`: エラー0件（既存の無関係な警告3件のみ）。
+- `npm run build`: 成功。
+- `git diff` で `src/parser/parseDocument.ts` に差分がないことを確認済み。
+
+### 10-6. Method Vault 手動確認ノート
+
+`Method/unified-outliner/phase5t4a-tree-paragraph-partial-edit-manual-check.md` に、8項目の最小手動確認チェックリストを作成した。
