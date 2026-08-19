@@ -225,3 +225,22 @@ Phase 5T-6D の設計監査（§8候補1: `sectionMode: "stripe"` とbox-shadow�
 ### 14-3. 品質ゲート
 
 `npx vitest run`: 72ファイル/1253件全通過（新規13件を含む）。`npm run lint`: 0エラー（既存の無関係な警告3件のみ、`src/settings.ts`、本フェーズ変更対象外）。`npm run build`（`tsc -noEmit -skipLibCheck` + esbuild production）: 成功。
+
+
+## 15. Phase 5T-6A: 実機受入結果（追記）
+
+利用者により、Method Vault の `phase5t6a-section-drop-indicator-manual-check.md`
+（本実装完了時に配信済み）に基づく手動での実機確認が実施され、異常は見られなかった
+旨の報告を受けた。
+
+`sectionMode: "stripe"`（利用者の実際の設定値、Phase 5T-6D の根本原因監査で
+確認済み）を含む実機環境で before/inside/after の各indicatorが正しく表示・
+機能することを確認できたことになる。`runRelocateCommand`/`handleDragOver`/
+`computeDropMode`/`setDropIndicator` の判定・移動ロジック自体は本フェーズを
+通じて一切変更していないため、本結果はCSSのみの変更（styles.cssのbox-shadow
+/background-colorから疑似要素への分離）で実機上の表示不具合が解消されたことの
+確認である。
+
+本結果は「今回確認した範囲内で異常が観察されなかった」という報告であり、
+不具合が存在しないことの証明ではない点に留意する（design doc §11 の手順の
+とおり、あくまで指定条件下での観察記録として扱う）。
