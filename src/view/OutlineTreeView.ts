@@ -1287,6 +1287,29 @@ export class OutlineTreeView extends ItemView {
         // reference pointing at an already-detached previous render pass.
         this.beginRenameForNode(node.id);
       });
+    } else if (isParagraph) {
+      // Phase 5T-7A ("Outline Tree の paragraph Partial Edit をダブルクリッ
+      // ク／F2で起動する"): a paragraph-only dblclick trigger, layered on
+      // top of the read-only contract exactly like the paragraph context
+      // menu (5T-1) and drag wiring (5T-2) already are — deliberately NOT a
+      // relaxation of `!readOnly` above, a separate `else if` branch. Reuses
+      // the same collapseEl exclusion as the rename dblclick above for
+      // defensive parity (a paragraph row's own collapseEl is always the
+      // spacer variant — it has no children — but the guard costs nothing
+      // and keeps this branch structurally identical to its sibling). No
+      // drag-handle exclusion is needed here: dragHandleEl is null for
+      // every readOnly row (see its own creation above), and paragraph
+      // rows are always readOnly, so a paragraph row never has a drag
+      // handle element for a dblclick to land on in the first place.
+      // Delegates to openParagraphPartialEditFromTree — the exact same
+      // resolve+activate path the existing "段落を編集…" context menu item
+      // (showParagraphMoveMenu, Phase 5T-4A) already uses, so this adds no
+      // new editing model, anchor type, or resolution logic.
+      selfEl.addEventListener("dblclick", (evt) => {
+        if (collapseEl.contains(evt.target as Node)) return;
+        evt.stopPropagation();
+        this.openParagraphPartialEditFromTree(node.id);
+      });
     }
 
     if (isOutlineSectionNode(node)) {
@@ -2158,15 +2181,45 @@ export class OutlineTreeView extends ItemView {
         evt.stopPropagation();
         this.activateSelection();
         break;
-      case "F2":
+      case "F2": {
+        // Phase 5T-7A: F2 now has TWO possible destinations depending on
+        // what is currently selected. When the selection resolves to a
+        // paragraph Tree row, F2 opens the existing Paragraph Partial Edit
+        // (the same destination this.selectedId's own dblclick and the
+        // "段落を編集…" context menu item already use) INSTEAD of the
+        // rename path below — beginRenameForNode already silently no-ops
+        // for a paragraph node's kind (see its own guard), so today's F2
+        // on a selected paragraph does nothing visible at all; this gives
+        // it a real destination without touching beginRenameForNode or its
+        // section/list contract.
+        //
+        // preventDefault()/stopPropagation() for THIS branch are scoped
+        // inside it (called only once we've confirmed the selection is a
+        // paragraph and are about to act on it), per the ticket's explicit
+        // "paragraph の F2 を実際に処理した場合だけ適用する" contract. The
+        // pre-existing, UNCONDITIONAL preventDefault()/stopPropagation()
+        // for every other case (section/list/no-selection) below this is
+        // left completely untouched — same lines, same order, same
+        // behavior as before this phase.
+        if (this.selectedId) {
+          const selectedNode = this.nodeById.get(this.selectedId);
+          if (selectedNode && isOutlineParagraphNode(selectedNode)) {
+            evt.preventDefault();
+            evt.stopPropagation();
+            this.openParagraphPartialEditFromTree(this.selectedId);
+            break;
+          }
+        }
         // Auxiliary rename trigger (see "---- Inline rename" section) — the
         // primary trigger is a row's own dblclick; F2 operates on whatever
         // is currently selected, matching standard tree/list-widget rename
-        // conventions (Explorer, VS Code, etc.).
+        // conventions (Explorer, VS Code, etc.). Unchanged since before
+        // Phase 5T-7A.
         evt.preventDefault();
         evt.stopPropagation();
         if (this.selectedId) this.beginRenameForNode(this.selectedId);
         break;
+      }
     }
   };
 
@@ -3097,6 +3150,64 @@ export class OutlineTreeView extends ItemView {
     }
 
     this.showTrackedMenu(menu, evt);
+  }
+
+  /**
+   * Phase 5T-7A: the single shared resolve+activate path for BOTH the
+   * paragraph row's own dblclick listener and the F2 keyboard shortcut —
+   * deliberately the exact same two steps showParagraphMoveMenu's own
+   * unconditional "段落を編集…" item already performs (Phase 5T-4A):
+   * re-resolve the Tree node's rangeStart/rangeEnd/parentId HINT against a
+   * fresh scan via resolveParagraphFromTreeHint, then hand the resolved
+   * paragraph's own current start line to the pre-existing, unmodified
+   * main.ts#activatePartialEditViewForParagraph. No new anchor type, no
+   * new save/apply function, no new resolution logic — this method only
+   * decides WHEN to call the existing entry point, never HOW.
+   *
+   * Unlike the context menu (which simply omits/degrades its own item when
+   * `target` fails to resolve — see that method's own doc comment), a
+   * dblclick or F2 press is a single direct action with no menu to degrade
+   * to, so this method shows an explicit Notice on the same failure modes
+   * the ticket calls out ("解決不能・曖昧一致"): resolveParagraphFromTreeHint
+   * returns null uniformly for both a fully-unresolvable hint AND an
+   * ambiguous multi-match (see that function's own doc comment) — one
+   * Notice covers both, matching how the ticket itself groups them. The
+   * "active Markdown view 不在" case needs no handling here at all:
+   * activatePartialEditViewForParagraph's own downstream call chain
+   * (PartialEditView#loadParagraphInternal) already re-checks
+   * activeMarkdownView and shows its own "partialEdit.noActiveNote" Notice
+   * — duplicating that check here would just race a second, redundant
+   * check against the same live state.
+   *
+   * Never mutates this.selectedId/this.highlightedId/collapsedIds itself —
+   * a failed resolution simply returns after the Notice, leaving Tree
+   * selection/current-position/fold state exactly as they were (the
+   * ticket's own "起動失敗時に Tree selection / highlightedId / fold state
+   * を壊さない" contract), and a successful call only ever opens/reveals
+   * the Partial Edit Pane — refresh()/selection-follow for the Outline Tree
+   * itself are untouched by this method.
+   */
+  private openParagraphPartialEditFromTree(nodeId: string): void {
+    const treeNode = this.nodeById.get(nodeId);
+    if (!treeNode || !isOutlineParagraphNode(treeNode)) return;
+    const complexScan = this.currentComplexScan;
+    if (!complexScan) {
+      this.notify(this.plugin.t("reason.paragraphTreeMoveResolveFailed"));
+      return;
+    }
+    const target = resolveParagraphFromTreeHint(
+      {
+        rangeStart: treeNode.rangeStart,
+        rangeEnd: treeNode.rangeEnd,
+        parentId: treeNode.parentId,
+      },
+      complexScan
+    );
+    if (!target) {
+      this.notify(this.plugin.t("reason.paragraphTreeMoveResolveFailed"));
+      return;
+    }
+    void this.plugin.activatePartialEditViewForParagraph(target.range.startLine);
   }
 
   /**

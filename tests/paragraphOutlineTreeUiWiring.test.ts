@@ -756,7 +756,13 @@ describe("Phase 5T-4A: Tree paragraph → existing Partial Edit bridge ('段落�
   function showParagraphMoveMenuBody(): string {
     const start = viewTs.indexOf("private showParagraphMoveMenu(evt: MouseEvent, nodeId: string): void {");
     expect(start).toBeGreaterThan(-1);
-    const end = viewTs.indexOf("\n  private showParagraphMoveTargetPicker(", start);
+    // Phase 5T-7A inserted openParagraphPartialEditFromTree directly after
+    // showParagraphMoveMenu (before showParagraphMoveTargetPicker), so the
+    // end marker now bounds at THAT new method instead — otherwise this
+    // helper would sweep the new method's own doc comment (which
+    // legitimately discusses dblclick/F2, since that IS its job) into what
+    // must stay showParagraphMoveMenu's own isolated body.
+    const end = viewTs.indexOf("Phase 5T-7A: the single shared resolve+activate path", start);
     expect(end).toBeGreaterThan(start);
     return viewTs.slice(start, end);
   }
@@ -796,20 +802,55 @@ describe("Phase 5T-4A: Tree paragraph → existing Partial Edit bridge ('段落�
     expect(body.indexOf("if (!anchor) return;")).toBeLessThan(editItemIdx);
   });
 
-  it("does not introduce a Tree row inline editor, a double-click launch, or an F2 launch for paragraph edit — only the context-menu item exists (explicitly out of 5T-4A scope). The file's pre-existing dblclick/F2 rename listener (section/list only, gated by !readOnly and by beginRenameForNode's own kind check) is untouched and never extended to paragraph.", () => {
-    // showParagraphMoveMenu itself (the sole home of the new item) wires
-    // no dblclick/F2 listener of its own — it only ever builds a Menu.
+  it("(Phase 5T-4A) showParagraphMoveMenu itself still wires no dblclick/F2 listener of its own — it only ever builds a Menu, unchanged by Phase 5T-7A. No inline editor/textarea/contenteditable was introduced by this ticket or by 5T-7A's later dblclick/F2 launch.", () => {
     const body = showParagraphMoveMenuBody();
     expect(body).not.toContain("dblclick");
     expect(body).not.toContain("F2");
     expect(viewTs).not.toContain("paragraph-edit-input");
     expect(viewTs).not.toContain("paragraphEditTextarea");
-    // The pre-existing rename dblclick listener stays gated by !readOnly —
-    // a paragraph row is always in readOnlyNodeIds (checked in the
-    // "Tree read-only contract" describe block above), so it is never
-    // attached to a paragraph row; this is unchanged, pre-existing
-    // behavior, re-confirmed here rather than duplicated.
-    expect(viewTs).toContain('selfEl.addEventListener("dblclick", (evt) => {');
+  });
+
+  it("(Phase 5T-7A) a paragraph row's OWN dblclick listener now exists (a separate `else if (isParagraph)` branch, never a relaxation of the pre-existing `!readOnly` rename-dblclick gate) and delegates to openParagraphPartialEditFromTree — the same resolve+activate path as showParagraphMoveMenu's own \"段落を編集…\" item, never a new editing model.", () => {
+    const elseIfIdx = viewTs.indexOf("} else if (isParagraph) {", viewTs.indexOf("private renderNode("));
+    expect(elseIfIdx).toBeGreaterThan(-1);
+    const dblclickIdx = viewTs.indexOf('selfEl.addEventListener("dblclick"', elseIfIdx);
+    const nextElseOrIfIdx = viewTs.indexOf("\n    if (isOutlineSectionNode(node)) {", elseIfIdx);
+    expect(dblclickIdx).toBeGreaterThan(elseIfIdx);
+    expect(nextElseOrIfIdx).toBeGreaterThan(dblclickIdx);
+    const branchBody = viewTs.slice(elseIfIdx, nextElseOrIfIdx);
+    expect(branchBody).toContain("this.openParagraphPartialEditFromTree(node.id)");
+    expect(branchBody).not.toContain("paragraph-edit-input");
+    expect(branchBody).not.toContain("contenteditable");
+  });
+
+  it("(Phase 5T-7A) handleTreeKeyDown's F2 case opens Paragraph Partial Edit only when the CURRENT selection resolves to a paragraph node, and preventDefault/stopPropagation for that branch are scoped inside it — the pre-existing unconditional preventDefault/stopPropagation + beginRenameForNode fallback for section/list/no-selection is untouched below it.", () => {
+    const caseIdx = viewTs.indexOf('case "F2": {');
+    expect(caseIdx).toBeGreaterThan(-1);
+    const caseEndIdx = viewTs.indexOf("\n    }\n  };", caseIdx);
+    expect(caseEndIdx).toBeGreaterThan(caseIdx);
+    const caseBody = viewTs.slice(caseIdx, caseEndIdx);
+    expect(caseBody).toContain("isOutlineParagraphNode(selectedNode)");
+    expect(caseBody).toContain("this.openParagraphPartialEditFromTree(this.selectedId)");
+    expect(caseBody).toContain("if (this.selectedId) this.beginRenameForNode(this.selectedId);");
+  });
+
+  it("(Phase 5T-7A) openParagraphPartialEditFromTree resolves via resolveParagraphFromTreeHint (the exact same function showParagraphMoveMenu's own item uses) and hands off to the EXISTING, unmodified main.ts#activatePartialEditViewForParagraph — never a new anchor type, never node.id, never a Tree-view-only id — and Notices rather than silently no-ops on an unresolved hint.", () => {
+    const start = viewTs.indexOf("private openParagraphPartialEditFromTree(nodeId: string): void {");
+    expect(start).toBeGreaterThan(-1);
+    const end = viewTs.indexOf("\n  }\n", start);
+    const body = viewTs.slice(start, end);
+    expect(body).toContain("resolveParagraphFromTreeHint(");
+    expect(body).toContain("this.plugin.activatePartialEditViewForParagraph(target.range.startLine)");
+    expect(body).toContain('this.notify(this.plugin.t("reason.paragraphTreeMoveResolveFailed"));');
+    // The final call must be keyed off the freshly re-resolved target's
+    // own range.startLine, never a raw Tree-view-only node id — checked as
+    // a slice around the call site itself (unlike the earlier check,
+    // "nodeId)" alone would spuriously match this method's OWN parameter,
+    // e.g. inside `this.nodeById.get(nodeId)`).
+    const activateIdx = body.indexOf("this.plugin.activatePartialEditViewForParagraph(");
+    expect(activateIdx).toBeGreaterThan(-1);
+    expect(body.slice(activateIdx, activateIdx + 60)).not.toContain("(nodeId)");
+    expect(body).not.toContain("new ParagraphEditAnchor");
   });
 
   it("i18n.ts defines tree.menu.paragraphEdit and reason.blank-line-not-allowed in both en and ja", () => {
