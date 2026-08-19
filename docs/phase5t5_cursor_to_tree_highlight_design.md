@@ -252,3 +252,24 @@ Method Vault の手動シナリオメモは §7 直前に作成してよいが�
 - `selectedId` の書き込み箇所は `OutlineTreeView.ts` 内の7箇所のみ。move/edit dispatch 関数はいずれも selectedId を触らない。
 - `pendingMoveFlash`（`queueOutlineTreeMoveFlash`/`applyPendingMoveFlash`）: line/nodeIdHint による再マッチングという、案Cと構造的に同種の既存先例。
 - cursor→highlight のトリガーは CM6 selection リスナーではなく、`active-leaf-change`/`file-open`/`editor-change` + `keyup`/`mouseup` の 150ms debounce プロキシ。
+
+## §8 Phase 5T-5A 実装確定事項（実装フェーズによる追記）
+
+5T-5D の設計を受け、Phase 5T-5A として実装した。利用者判断事項（§7）は次の通り確定した。
+
+1. fenced-code/table は今回の対象外（現状 Tree row を持たないため）。
+2. selectedId が修復不能な場合の既定方針は `null` クリア（祖先フォールバックによる誤選択は行わない）。
+3. 折り畳まれた再解決対象のために fold を勝手に開かない。
+4. current-position highlight では、必要に応じて最も近い可視祖先へフォールバックしてよい。
+5. selection follow は論理対象へ再解決できる場合のみ追随し、できなければ clear する。
+6. pendingMoveFlash の nodeIdHint 陳腐化修正は本フェーズに含めた（常に `outcome.newStartLine` を使う設計へ単純化）。
+7. highlightedId の拡張と selectedId repair は分割せず、同じ実装フェーズで実装した。
+8. `parseDocument.ts` は変更していない。
+
+実装は新規 `src/tree/resolveCurrentPositionNodeId.ts`（案A: 現在位置解決の専用純粋関数）と、`src/tree/outlineNavigation.ts` への `isOutlineNodeVisible`/`resolveNearestVisibleAncestorId` の追加、`src/view/OutlineTreeView.ts`/`src/main.ts`/`src/view/PartialEditView.ts` への selection-follow 配線（`queueSelectionFollow`/`resolveSelectionAfterRefresh`/`queueOutlineTreeSelectionFollow`）で構成した。詳細はコミット `2198dc0` を正とする。新規・変更テスト39件を含め `npx vitest run` は71ファイル/1240件全通過、tsc/lint/build も成功した。
+
+## §9 実機受入結果
+
+2026-08-19、利用者により Method Vault の `phase5t5a-cursor-tree-highlight-selection-follow-manual-check.md` に基づく8項目の確認手順が実施され、すべて手動で正常に機能したことが確認された。これは実施した範囲内での観察結果であり、不具合が存在しないことの証明ではない。
+
+なお、この確認作業の中で、本フェーズのスコープ外の別事象として、見出し（section）行をマウスでドラッグした際に移動先を示す区切り線（drop indicator の "before"/"after" 表示）が表示されない場合があるとの報告を利用者から受けた。この点は本フェーズの変更（`runRelocateCommand`/`handleDragOver`/`computeDropMode`/`setDropIndicator` はいずれも本フェーズで変更していない）とは無関係の、既存コードパスに関する別の論点であり、本ドキュメントの対象外として扱う。
