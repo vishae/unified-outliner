@@ -122,6 +122,17 @@ describe("OutlineTreeView.ts paragraph dblclick/F2 launch wiring (Phase 5T-7A, p
     expect(recognizedBranch).toContain("evt.stopPropagation();");
   });
 
+  it("onDoubleClick is invoked via a deferred this.treeRootEl.win.setTimeout(...), never called synchronously inside the pointerdown handler — beginRenameForNode (heading/list) synchronously empties this row's own innerEl and steals focus onto a new <textarea>, which races the still-in-flight native mousedown/mouseup/click sequence of the SAME press if run synchronously on pointerdown (confirmed on a real device: heading/list dblclick silently did nothing, while paragraph's own onDoubleClick — which never touches this row's DOM/focus — was unaffected)", () => {
+    const start = viewTs.indexOf("private handleRowPointerDownForDoubleClick(");
+    const end = viewTs.indexOf("\n  }\n", start);
+    const body = viewTs.slice(start, end);
+    const recognizedIdx = body.indexOf("if (isDoubleClickPointerDown(current, this.lastRowPointerDown)) {");
+    const recognizedBranchEnd = body.indexOf("return;", recognizedIdx) + "return;".length;
+    const recognizedBranch = body.slice(recognizedIdx, recognizedBranchEnd);
+    expect(recognizedBranch).not.toContain("      onDoubleClick();\n");
+    expect(recognizedBranch).toContain("this.treeRootEl.win.setTimeout(() => onDoubleClick(), 0);");
+  });
+
   it("the lastRowPointerDown state field exists exactly once, typed RowPointerDownRecord | null, so double-click state survives renderTree()'s full DOM rebuild across the two presses of a double click", () => {
     const occurrences = viewTs.split("private lastRowPointerDown: RowPointerDownRecord | null = null;").length - 1;
     expect(occurrences).toBe(1);

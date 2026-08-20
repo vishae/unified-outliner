@@ -128,3 +128,26 @@ Phase 5T-7A の完了後、利用者による実機確認で以下2件の不具�
 - 自動テストはいずれも静的ソーステキスト検証であり、実際に実機で二重クリックとして安定検出されるかどうかの核心部分は検証できていない。実機確認が必須。
 - モバイル（`Platform.isMobile`）に対する明示的な条件分岐は追加していない（旧 `dblclick` リスナーも同様にモバイルを特別扱いしていなかったため、最小変更の原則に従い踏襲）。モバイルの長押し検出用 `pointerdown` リスナーとは独立に共存するが、理論上は長押しの最初の押下も本検出の「1回目」として記録され得る（従来の dblclick 依存でも類似の曖昧さは存在しており、新規に持ち込んだ問題ではない）。
 - 時間閾値（400ms）・距離閾値（6px）は暫定値であり、実機確認の結果次第で調整が必要になる可能性がある。
+
+## 9. Phase 5T-7C 実機確認で発覚した回帰と修正（追記）
+
+5T-7C 実装完了後の実機確認で、以下の非対称な結果が報告された。
+
+- paragraph: ダブルクリックで Partial Edit Pane が正常に開く。
+- heading／list: ダブルクリックしても rename が起動せず、何も起こらない。
+
+### 原因
+
+`beginRenameForNode`（heading/list の rename 起動先）は、呼び出されると同期的に行の `innerEl` を空にして `<textarea>` を差し込み、`inputEl.focus()` を呼ぶ（`beginRename` 内、`innerEl.empty()` → `inputEl.focus(); inputEl.select();`）。これを `pointerdown` ハンドラの中から同期的に呼び出すと、2回目の押下自身のネイティブな mousedown→mouseup→click という一連の処理がまだ完了していない最中に、その mousedown の対象要素そのもの（行のラベル）を DOM から取り除き、フォーカスを奪うことになる。これにより、後から発火する mouseup／click がもはや存在しない要素を対象にすることになり、さらに `<textarea>` の blur ハンドラ（未編集なら `cancelRename()` を呼ぶ仕様）が、同じジェスチャの残処理によって即座に blur を引き起こし、開いた直後に rename が自動キャンセルされていたと考えられる。
+
+一方 paragraph 側の起動先 `openParagraphPartialEditFromTree` は、この行自身の DOM やフォーカスには一切触れず、別ペイン（Partial Edit Pane）を非同期に開くだけであるため、この競合の影響を受けなかった。これが非対称な結果の理由である。
+
+### 修正
+
+`handleRowPointerDownForDoubleClick` 内で、二重クリックが成立した際の `onDoubleClick()` 呼び出しを `this.treeRootEl.win.setTimeout(() => onDoubleClick(), 0)` により1タスク遅延させた。これにより、この2回目の押下自身のネイティブなクリック処理が完了してから `beginRenameForNode`／`openParagraphPartialEditFromTree` が実行されるようになり、旧来のネイティブ `dblclick`（2回のクリックが完全に完了した後にのみ発火する）と同じ「クリーンな」タイミングを再現している。`onDoubleClick` のクロージャは常にノードidのみを保持し、`beginRenameForNode`／`openParagraphPartialEditFromTree` はいずれも呼び出しごとにDOM/ノードを再取得するため、遅延中に `renderTree()` が挟まっても安全である。
+
+D&D 判定・移動ロジック、`draggable` 属性、F2、context menu、`parseDocument.ts`、`styles.css` には今回も一切触れていない。
+
+### テスト
+
+`tests/paragraphPartialEditLaunchUiWiring.test.ts` に新規1件を追加し、`onDoubleClick` が同期的に呼ばれず `this.treeRootEl.win.setTimeout(...)` 経由で遅延呼び出しされることを検証した（74ファイル/1290件全通過、tsc/lint/build成功）。

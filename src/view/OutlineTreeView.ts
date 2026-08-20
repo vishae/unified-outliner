@@ -3287,7 +3287,38 @@ export class OutlineTreeView extends ItemView {
     if (isDoubleClickPointerDown(current, this.lastRowPointerDown)) {
       this.lastRowPointerDown = null;
       evt.stopPropagation();
-      onDoubleClick();
+      // Real-device fix (post-5T-7C initial ship): `onDoubleClick` is
+      // deferred to the next task rather than called synchronously here.
+      // beginRenameForNode (heading/list) synchronously empties the row's
+      // `innerEl` — the very element this `pointerdown` targeted — and
+      // steals DOM focus onto a brand-new <textarea> (see beginRename's own
+      // `innerEl.empty()` / `inputEl.focus()`). Doing that WHILE this
+      // second press's own native mousedown→mouseup→click sequence is still
+      // in flight (pointerdown fires before that sequence completes) races
+      // the browser's own click/blur handling: the mousedown's original
+      // target is gone by the time mouseup/click would fire for it, and the
+      // textarea's own blur-cancels-when-unchanged guard (see its "blur"
+      // listener's own doc comment) can fire before the user ever typed
+      // anything, silently closing the rename the instant it opened —
+      // confirmed on a real device as "dblclick does nothing" for
+      // heading/list specifically (paragraph's own onDoubleClick,
+      // openParagraphPartialEditFromTree, never touches this row's DOM/focus
+      // at all, so it was unaffected). Deferring by one task lets this
+      // press's native mouseup/click finish first, so beginRenameForNode
+      // only ever mutates the DOM/focus once no mouse gesture is still in
+      // flight — the same "clean" ordering the old native `dblclick` event
+      // always had for free (dblclick only ever fires AFTER both full
+      // click sequences have already completed). `this.treeRootEl.win` (not
+      // the bare global `window`) matches this file's own established
+      // popout-window convention — see scrollSelectedIntoView's own doc
+      // comment. onDoubleClick's own closures only ever carry a primitive
+      // node id (never a DOM/element reference), and both
+      // beginRenameForNode and openParagraphPartialEditFromTree already
+      // re-resolve fresh from that id on every call — see their own doc
+      // comments — so this deferral is safe even if a `renderTree()`
+      // happens to run (e.g. from this same click's own "click" listener)
+      // before the deferred callback fires.
+      this.treeRootEl.win.setTimeout(() => onDoubleClick(), 0);
       return;
     }
     this.lastRowPointerDown = current;
