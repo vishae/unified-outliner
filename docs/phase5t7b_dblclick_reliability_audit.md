@@ -151,3 +151,9 @@ D&D 判定・移動ロジック、`draggable` 属性、F2、context menu、`pars
 ### テスト
 
 `tests/paragraphPartialEditLaunchUiWiring.test.ts` に新規1件を追加し、`onDoubleClick` が同期的に呼ばれず `this.treeRootEl.win.setTimeout(...)` 経由で遅延呼び出しされることを検証した（74ファイル/1290件全通過、tsc/lint/build成功）。
+
+## 10. Phase 5T-7C 実機受入結果（追記）
+
+修正コミット（`e4b4e5d`）を反映した状態で利用者による実機再確認を行い、「実機ですべて正常に機能するようになった」との報告を受けた。Method Vault の `phase5t7c-pointerdown-doubleclick-manual-check.md` の9項目（左右サイドバーでの heading/list/paragraph のダブルクリック、drag handle／collapse toggle での誤起動なし、F2、D&D／drop indicator、Partial Edit 保存後の Tree 状態）を含め、異常は報告されていない。
+
+これにより、Phase 5T-7B（設計監査）・5T-7C（pointerdown ベースの独立二重クリック検出への置き換え、および実機確認で発覚した回帰の修正）の一連の作業は完了とする。
