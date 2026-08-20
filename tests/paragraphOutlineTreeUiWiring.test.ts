@@ -137,11 +137,10 @@ describe("OutlineTreeView.ts paragraph wiring (static source check, Phase 5P-3)"
     expect(viewTs).toContain("activatePartialEditViewForParagraph");
   });
 
-  it("does not introduce a Tree-triggered rename / indent-outdent / insert affordance keyed on paragraph (Phase 5T-1 adds a narrow Tree-triggered MOVE, via showParagraphMoveMenu/moveParagraphFromAnchor — checked separately in the dedicated Phase 5T-1 describe block below; Phase 5T-9A adds a narrow Tree-triggered DELETE, via edit/deleteParagraph.ts/dispatchAndApplyParagraphDelete — checked separately in the dedicated Phase 5T-9A describe block further down; every OTHER affordance, including insert, stays absent this phase)", () => {
+  it("does not introduce a Tree-triggered rename-as-a-distinct-command / indent-outdent affordance keyed on paragraph (Phase 5T-1 adds a narrow Tree-triggered MOVE, via showParagraphMoveMenu/moveParagraphFromAnchor — checked separately in the dedicated Phase 5T-1 describe block below; Phase 5T-9A adds a narrow Tree-triggered DELETE — checked in the dedicated Phase 5T-9A describe block; Phase 5T-10A adds a narrow Tree-triggered INSERT — checked in the dedicated Phase 5T-10A describe block further down; indent/outdent and a separate `renameParagraph` command stay absent this phase)", () => {
     expect(viewTs).not.toContain("renameParagraph");
     expect(viewTs).not.toContain("indentParagraph");
     expect(viewTs).not.toContain("outdentParagraph");
-    expect(viewTs).not.toContain("insertParagraph");
   });
 });
 
@@ -962,5 +961,150 @@ describe("Phase 5T-9A: paragraph Tree-triggered delete (narrow, confirm-modal-ga
     const dispatchBody = viewTs.slice(start, end);
     expect(dispatchBody).not.toContain("insertParagraph");
     expect(dispatchBody).not.toContain("insertBlockAt");
+  });
+});
+
+describe("Phase 5T-10A: paragraph Tree-triggered insert (before/after, auto-rename, Cancel rollback)", () => {
+  const viewTs = readFileSync(path.resolve(__dirname, "../src/view/OutlineTreeView.ts"), "utf-8");
+  const i18nTs = readFileSync(path.resolve(__dirname, "../src/i18n.ts"), "utf-8");
+
+  function showParagraphMoveMenuBody(): string {
+    const start = viewTs.indexOf("private showParagraphMoveMenu(evt: MouseEvent, nodeId: string): void {");
+    expect(start).toBeGreaterThan(-1);
+    const end = viewTs.indexOf("Phase 5T-7A: the single shared resolve+activate path", start);
+    expect(end).toBeGreaterThan(start);
+    return viewTs.slice(start, end);
+  }
+
+  function methodBody(signature: string): string {
+    const start = viewTs.indexOf(signature);
+    expect(start).toBeGreaterThan(-1);
+    const end = viewTs.indexOf("\n  }\n", start);
+    expect(end).toBeGreaterThan(start);
+    return viewTs.slice(start, end);
+  }
+
+  it("adds two new, in-scope-gated insert items (insert before / insert after), positioned after the Edit item and before Move up/down, sharing the SAME in-scope gate the delete item uses", () => {
+    const body = showParagraphMoveMenuBody();
+    expect(body).toContain(
+      "const inScopeForInsertAndDelete = isInScopeParagraphParent(doc, target.parentId);"
+    );
+    const gateIdx = body.indexOf("const inScopeForInsertAndDelete =");
+    const editIdx = body.indexOf('this.plugin.t("tree.menu.paragraphEdit")');
+    const insertBeforeIdx = body.indexOf('this.plugin.t("tree.menu.insertParagraphBefore")');
+    const insertAfterIdx = body.indexOf('this.plugin.t("tree.menu.insertParagraphAfter")');
+    const moveUpIdx = body.indexOf('this.plugin.t("tree.menu.paragraphMoveUp")');
+    const deleteIdx = body.indexOf('this.plugin.t("tree.menu.deleteParagraph")');
+    expect(editIdx).toBeGreaterThan(-1);
+    expect(gateIdx).toBeGreaterThan(editIdx);
+    expect(insertBeforeIdx).toBeGreaterThan(gateIdx);
+    expect(insertAfterIdx).toBeGreaterThan(insertBeforeIdx);
+    expect(moveUpIdx).toBeGreaterThan(insertAfterIdx);
+    // delete's own gate now reuses the same computed boolean rather than
+    // re-calling isInScopeParagraphParent a second time.
+    expect(deleteIdx).toBeGreaterThan(insertAfterIdx);
+    expect(body.split("isInScopeParagraphParent(doc, target.parentId)").length - 1).toBe(1);
+  });
+
+  it("both insert items dispatch to dispatchAndApplyParagraphInsert with the menu-time anchor and the correct position literal", () => {
+    const body = showParagraphMoveMenuBody();
+    expect(body).toContain('this.dispatchAndApplyParagraphInsert(anchor, "before")');
+    expect(body).toContain('this.dispatchAndApplyParagraphInsert(anchor, "after")');
+  });
+
+  it("dispatchAndApplyParagraphInsert mirrors dispatchAndApplyParagraphDelete's own shape: multi-cursor guard, insertParagraph(text, anchor, position, rules), applyLineEditOutcome — and, unlike delete, calls refresh() then autoRenameAfterParagraphInsert() rather than queueSelectionFollow (insertParagraph's own newCursorCh already places the cursor exactly on the new placeholder)", () => {
+    const body = methodBody(
+      "private dispatchAndApplyParagraphInsert(\n    anchor: ParagraphMoveAnchor,\n    position: ParagraphInsertPosition\n  ): boolean {"
+    );
+    expect(body).toContain("editor.listSelections().length > 1");
+    expect(body).toContain("getEnabledCompositeBlockRules(this.plugin.settings.compositeBlocks)");
+    expect(body).toContain("insertParagraph(text, anchor, position, rules)");
+    expect(body).toContain("applyLineEditOutcome(");
+    expect(body).toContain("paragraphInsertReasonText(");
+    expect(body).toContain("this.refresh();");
+    expect(body).toContain("this.autoRenameAfterParagraphInsert();");
+    expect(body).not.toContain("queueSelectionFollow");
+  });
+
+  it("does not touch D&D / drop-indicator / relocate machinery, and does not reference edit/listBodyRange.ts — insert stays out of scope for list-item-child paragraphs", () => {
+    const menuBody = showParagraphMoveMenuBody();
+    const dispatchBody = methodBody(
+      "private dispatchAndApplyParagraphInsert(\n    anchor: ParagraphMoveAnchor,\n    position: ParagraphInsertPosition\n  ): boolean {"
+    );
+    for (const forbidden of ["draggable", "computeDropMode", "runRelocateCommand", "extractListItemBodyText"]) {
+      expect(menuBody).not.toContain(forbidden);
+      expect(dispatchBody).not.toContain(forbidden);
+    }
+  });
+
+  it("autoRenameAfterParagraphInsert reads this.highlightedId (set by dispatchAndApplyParagraphInsert's own refresh() call) and calls beginParagraphRenameForNode with pendingParagraphInsert = true — never the section/list-only beginRenameForNode/autoRenameAfterInsert, which cannot handle kind \"paragraph\"", () => {
+    const body = methodBody("private autoRenameAfterParagraphInsert(): void {");
+    expect(body).toContain("if (this.highlightedId) this.beginParagraphRenameForNode(this.highlightedId, true);");
+  });
+
+  it("beginParagraphRenameForNode/beginRename thread pendingParagraphInsert through to renameState — additive only, default false, existing dblclick call site (this.beginParagraphRenameForNode(nodeId)) is unchanged and therefore still implicitly false", () => {
+    expect(viewTs).toContain(
+      "private beginParagraphRenameForNode(nodeId: string, pendingParagraphInsert = false): void {"
+    );
+    const beginParagraphBody = methodBody(
+      "private beginParagraphRenameForNode(nodeId: string, pendingParagraphInsert = false): void {"
+    );
+    expect(beginParagraphBody).toContain(
+      'this.beginRename(nodeId, "paragraph", innerEl, rowSelfEl, anchor, pendingParagraphInsert);'
+    );
+    expect(viewTs).toContain(
+      "paragraphSnapshot?: ParagraphMoveAnchor,\n    pendingParagraphInsert = false\n  ): void {"
+    );
+    expect(viewTs).toContain("pendingParagraphInsert?: boolean;");
+  });
+
+  it("cancelRename branches on pendingParagraphInsert BEFORE its own pre-existing 'never touch the document' body, which stays otherwise byte-for-byte reachable for every non-pending-insert rename", () => {
+    const body = methodBody("private cancelRename(): void {");
+    const branchIdx = body.indexOf(
+      'if (this.renameState.pendingParagraphInsert && this.renameState.kind === "paragraph") {'
+    );
+    const rollbackCallIdx = body.indexOf("this.rollbackPendingParagraphInsert(");
+    const preExistingTailIdx = body.indexOf('this.renameState.rowSelfEl.setAttribute("draggable", "true");');
+    expect(branchIdx).toBeGreaterThan(-1);
+    expect(rollbackCallIdx).toBeGreaterThan(branchIdx);
+    expect(preExistingTailIdx).toBeGreaterThan(rollbackCallIdx);
+    expect(body).toContain("this.renderTree();");
+  });
+
+  it("rollbackPendingParagraphInsert verifies via canSafelyRollbackParagraphInsert before ever calling editor.undo() — never calls applyLineEditOutcome or editor.replaceRange (Obsidian's own Editor#undo() is the sole write-adjacent call in this method)", () => {
+    const body = methodBody("private rollbackPendingParagraphInsert(anchor: ParagraphMoveAnchor): void {");
+    expect(body).toContain("canSafelyRollbackParagraphInsert(view.editor.getValue(), anchor)");
+    const checkIdx = body.indexOf("canSafelyRollbackParagraphInsert(");
+    const undoIdx = body.indexOf("view.editor.undo();");
+    expect(undoIdx).toBeGreaterThan(checkIdx);
+    expect(body).not.toContain("applyLineEditOutcome");
+    expect(body).not.toContain("editor.replaceRange");
+  });
+
+  it("i18n.ts defines tree.menu.insertParagraphBefore/After in both en and ja", () => {
+    const enStart = i18nTs.indexOf("const en = {");
+    const enEnd = i18nTs.indexOf("\n} as const;", enStart);
+    const jaStart = i18nTs.indexOf("const ja: Record<TranslationKey, string> = {", enEnd);
+    const jaEnd = i18nTs.indexOf("\n};", jaStart);
+    const enBlock = i18nTs.slice(enStart, enEnd);
+    const jaBlock = i18nTs.slice(jaStart, jaEnd);
+    for (const key of ["tree.menu.insertParagraphBefore", "tree.menu.insertParagraphAfter"]) {
+      expect(enBlock).toContain(`"${key}"`);
+      expect(jaBlock).toContain(`"${key}"`);
+    }
+  });
+
+  it("edit/insertParagraph.ts reuses parser/parseDocument.ts's existing exports (parseDocument/isBlankLine) exactly like edit/deleteParagraph.ts already does, rather than adding any new export to that module — this file's own scope forbids MODIFYING parser/parseDocument.ts, not importing its pre-existing API", () => {
+    const insertParagraphTs = readFileSync(
+      path.resolve(__dirname, "../src/edit/insertParagraph.ts"),
+      "utf-8"
+    );
+    expect(insertParagraphTs).toContain('from "../parser/parseDocument"');
+    // The module's own top doc comment DOES mention edit/listBodyRange.ts
+    // by name (documenting it as deliberately out of scope, the same
+    // convention edit/deleteParagraph.ts's own top doc comment already
+    // uses) — this only checks there is no actual IMPORT from it.
+    expect(insertParagraphTs).not.toContain('from "./listBodyRange"');
+    expect(insertParagraphTs).not.toContain('from "../edit/listBodyRange"');
   });
 });

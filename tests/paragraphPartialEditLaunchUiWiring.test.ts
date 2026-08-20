@@ -176,15 +176,23 @@ describe("OutlineTreeView.ts paragraph dblclick/F2 launch wiring (Phase 5T-7A, p
     expect(onlyCallIdx).toBeGreaterThan(f2CaseIdx);
   });
 
-  it("(Phase 5T-8A) beginParagraphRenameForNode is called from exactly ONE site — the paragraph pointerdown branch's onDoubleClick callback — never from F2 or the context menu, which both keep opening Partial Edit", () => {
+  it("(Phase 5T-8A, revised by Phase 5T-10A) beginParagraphRenameForNode is called from exactly TWO sites — the paragraph pointerdown branch's onDoubleClick callback, and Phase 5T-10A's autoRenameAfterParagraphInsert (the post-insert auto-rename entry point) — never from F2 or the context menu, which both keep opening Partial Edit", () => {
     const occurrences = viewTs.split("this.beginParagraphRenameForNode(").length - 1;
-    // 1 call site (the pointerdown branch) + 1 for the method's own
-    // `private beginParagraphRenameForNode(nodeId: string): void {`
+    // 2 call sites (the pointerdown branch's plain `this.beginParagraphRenameForNode(node.id)`,
+    // and autoRenameAfterParagraphInsert's `this.beginParagraphRenameForNode(this.highlightedId, true)`)
+    // + 1 for the method's own
+    // `private beginParagraphRenameForNode(nodeId: string, pendingParagraphInsert = false): void {`
     // declaration line, which also contains the substring
     // "beginParagraphRenameForNode(" — split on the call-with-`this.`
     // form specifically avoids counting the declaration itself, so this
-    // should be exactly 1.
-    expect(occurrences).toBe(1);
+    // should be exactly 2.
+    expect(occurrences).toBe(2);
+    const autoRenameIdx = viewTs.indexOf("private autoRenameAfterParagraphInsert(): void {");
+    expect(autoRenameIdx).toBeGreaterThan(-1);
+    const secondCallIdx = viewTs.indexOf(
+      "this.beginParagraphRenameForNode(this.highlightedId, true);"
+    );
+    expect(secondCallIdx).toBeGreaterThan(autoRenameIdx);
   });
 
   it("the paragraph row's existing right-click context menu (\"段落を編集…\", showParagraphMoveMenu) is untouched by this ticket — still wired via a plain `contextmenu` listener, entirely independent of the pointerdown double-click detector", () => {

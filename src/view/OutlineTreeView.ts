@@ -234,6 +234,12 @@ import {
   isInScopeParagraphParent,
   paragraphDeleteReasonText,
 } from "../edit/deleteParagraph";
+import {
+  canSafelyRollbackParagraphInsert,
+  insertParagraph,
+  ParagraphInsertPosition,
+  paragraphInsertReasonText,
+} from "../edit/insertParagraph";
 import { ConfirmParagraphDeleteModal } from "./ConfirmParagraphDeleteModal";
 import { findComplexSiblingTarget, ResolvedMoveUnit } from "../move/resolveMoveTarget";
 import { getEnabledCompositeBlockRules } from "../settingsDefaults";
@@ -535,6 +541,19 @@ export class OutlineTreeView extends ItemView {
     inputEl: HTMLTextAreaElement;
     rowSelfEl: HTMLElement;
     snapshot: SectionRenameSnapshot | ListRenameSnapshot | ParagraphMoveAnchor;
+    /**
+     * Phase 5T-10A: true only for the inline rename auto-opened immediately
+     * after a Tree-triggered paragraph insert (see
+     * dispatchAndApplyParagraphInsert/autoRenameAfterParagraphInsert below).
+     * Always false/undefined for every other rename (dblclick/F2/context
+     * menu on an EXISTING section/list/paragraph, and section/list's own
+     * pre-existing insert-then-auto-rename flow, which has no rollback
+     * concept at all — see beginRenameForNode's own doc comment). When
+     * true, cancelRename() branches to rollbackPendingParagraphInsert
+     * instead of its normal "never touch the document" behavior — see that
+     * method's own doc comment for the full rollback design.
+     */
+    pendingParagraphInsert?: boolean;
   } | null = null;
 
   /**
@@ -3148,6 +3167,31 @@ export class OutlineTreeView extends ItemView {
         )
     );
 
+    // Phase 5T-10A: insert-before/insert-after items — the SAME in-scope
+    // gate 5T-9A's own delete item uses (isInScopeParagraphParent),
+    // computed once here and reused below for delete's own gate too, so
+    // the two can never drift apart. Positioned right after "段落を編集…"
+    // and before Move up/down — see edit/insertParagraph.ts's own top doc
+    // comment for the full insert contract; choosing either item creates
+    // the placeholder immediately and opens inline rename on it (no
+    // confirmation modal — the rename commit/cancel itself IS the
+    // confirm/rollback gate, per the 5T-10A ticket's own §4/§6).
+    const inScopeForInsertAndDelete = isInScopeParagraphParent(doc, target.parentId);
+    if (inScopeForInsertAndDelete) {
+      menu.addItem((item) =>
+        item
+          .setTitle(this.plugin.t("tree.menu.insertParagraphBefore"))
+          .setIcon("plus")
+          .onClick(() => this.dispatchAndApplyParagraphInsert(anchor, "before"))
+      );
+      menu.addItem((item) =>
+        item
+          .setTitle(this.plugin.t("tree.menu.insertParagraphAfter"))
+          .setIcon("plus")
+          .onClick(() => this.dispatchAndApplyParagraphInsert(anchor, "after"))
+      );
+    }
+
     if (upEligible) {
       menu.addItem((item) =>
         item
@@ -3213,7 +3257,7 @@ export class OutlineTreeView extends ItemView {
     // establishes. `treeNode.label` is the exact same truncated preview
     // text already shown in the Tree row — passed straight through to the
     // confirmation modal, never re-derived.
-    if (isInScopeParagraphParent(doc, target.parentId)) {
+    if (inScopeForInsertAndDelete) {
       menu.addItem((item) =>
         item
           .setTitle(this.plugin.t("tree.menu.deleteParagraph"))
@@ -3606,6 +3650,46 @@ export class OutlineTreeView extends ItemView {
       );
       this.queueSelectionFollow(outcome.newStartLine);
       this.refresh();
+    }
+    return changed;
+  }
+
+  private dispatchAndApplyParagraphInsert(
+    anchor: ParagraphMoveAnchor,
+    position: ParagraphInsertPosition
+  ): boolean {
+    const view = this.activeMarkdownView.get();
+    if (!view) return false;
+    const editor: Editor = view.editor;
+
+    if (editor.listSelections().length > 1) {
+      this.notify(this.plugin.t("notice.multipleCursors"));
+      return false;
+    }
+
+    const text = editor.getValue();
+    const rules = getEnabledCompositeBlockRules(this.plugin.settings.compositeBlocks);
+    const outcome = insertParagraph(text, anchor, position, rules);
+
+    const cursor = { line: anchor.rangeStart, ch: 0 };
+    const changed = applyLineEditOutcome(
+      editor,
+      cursor,
+      anchor.rangeStart,
+      text.split("\n"),
+      outcome,
+      () => this.notify(paragraphInsertReasonText((k) => this.plugin.t(k), outcome.reason))
+    );
+
+    if (changed) {
+      const cur = editor.getCursor();
+      const lineLen = editor.getLine(cur.line)?.length ?? 0;
+      editor.scrollIntoView(
+        { from: { line: cur.line, ch: 0 }, to: { line: cur.line, ch: lineLen } },
+        true
+      );
+      this.refresh();
+      this.autoRenameAfterParagraphInsert();
     }
     return changed;
   }
@@ -4093,7 +4177,8 @@ export class OutlineTreeView extends ItemView {
     kind: "section" | "list" | "paragraph",
     innerEl: HTMLElement,
     rowSelfEl: HTMLElement,
-    paragraphSnapshot?: ParagraphMoveAnchor
+    paragraphSnapshot?: ParagraphMoveAnchor,
+    pendingParagraphInsert = false
   ): void {
     // Already renaming this exact node (e.g. a second dblclick landed on
     // the now-open input, which is still inside innerEl and still carries
@@ -4309,7 +4394,7 @@ export class OutlineTreeView extends ItemView {
     // same line, but this is the more literally correct scoping).
     inputEl.addEventListener("click", (evt) => evt.stopPropagation());
 
-    this.renameState = { nodeId, kind, inputEl, rowSelfEl, snapshot };
+    this.renameState = { nodeId, kind, inputEl, rowSelfEl, snapshot, pendingParagraphInsert };
     inputEl.focus();
     inputEl.select();
   }
@@ -4405,7 +4490,7 @@ export class OutlineTreeView extends ItemView {
    * docs/phase5t8a_paragraph_dblclick_inline_rename_design.md for the full
    * writeup.
    */
-  private beginParagraphRenameForNode(nodeId: string): void {
+  private beginParagraphRenameForNode(nodeId: string, pendingParagraphInsert = false): void {
     const treeNode = this.nodeById.get(nodeId);
     if (!treeNode || !isOutlineParagraphNode(treeNode)) return;
     const doc = this.currentDoc;
@@ -4427,7 +4512,23 @@ export class OutlineTreeView extends ItemView {
     );
     const innerEl = rowSelfEl?.querySelector<HTMLElement>(".tree-item-inner") ?? null;
     if (!rowSelfEl || !innerEl) return;
-    this.beginRename(nodeId, "paragraph", innerEl, rowSelfEl, anchor);
+    this.beginRename(nodeId, "paragraph", innerEl, rowSelfEl, anchor, pendingParagraphInsert);
+  }
+
+  /**
+   * Phase 5T-10A: the paragraph counterpart to autoRenameAfterInsert
+   * (which cannot itself handle paragraph — beginRenameForNode's own
+   * `node.kind !== "section" && node.kind !== "list"` guard rejects it).
+   * Called only from dispatchAndApplyParagraphInsert, only after its own
+   * refresh() has already recomputed this.highlightedId from the editor
+   * cursor insertParagraph placed exactly on the new placeholder (5T-5A's
+   * resolveCurrentPositionNodeId) — same "highlightedId already IS the new
+   * node's id here" reasoning autoRenameAfterInsert's own doc comment
+   * documents. `pendingParagraphInsert = true` is the one thing that
+   * differs from an ordinary paragraph double-click rename.
+   */
+  private autoRenameAfterParagraphInsert(): void {
+    if (this.highlightedId) this.beginParagraphRenameForNode(this.highlightedId, true);
   }
 
   /**
@@ -4564,9 +4665,63 @@ export class OutlineTreeView extends ItemView {
    * first place. */
   private cancelRename(): void {
     if (!this.renameState) return;
+    // Phase 5T-10A: a rename that began as a post-insert auto-rename must
+    // roll back the insert itself on Cancel/Escape (ticket §6/§7) rather
+    // than fall through to this method's own pre-existing "never touch the
+    // document" behavior below — see rollbackPendingParagraphInsert's own
+    // doc comment for the full design. Every other rename (this branch not
+    // taken) is completely unaffected, byte-for-byte, by this addition.
+    if (this.renameState.pendingParagraphInsert && this.renameState.kind === "paragraph") {
+      this.rollbackPendingParagraphInsert(this.renameState.snapshot as ParagraphMoveAnchor);
+      return;
+    }
     this.renameState.rowSelfEl.setAttribute("draggable", "true");
     this.renameState = null;
     this.renderTree();
+  }
+
+  /**
+   * Phase 5T-10A: rolls back a paragraph insert whose immediately-following
+   * inline rename was cancelled (Escape, or blur-with-unchanged-placeholder
+   * text — beginRename's own blur handler already routes both to
+   * cancelRename, which is this method's only caller for a
+   * pendingParagraphInsert rename).
+   *
+   * Uses Obsidian's own `Editor#undo()` rather than a manual reverse-splice:
+   * the rename textarea is a DOM-only overlay that never touches editor
+   * content until commitRename() runs; beginRename's own "already renaming
+   * -> cancel first" guard means no OTHER Tree-triggered edit can interleave
+   * while this rename is open; and clicking into the body editor itself
+   * fires this same textarea's blur handler FIRST (routing here, since the
+   * placeholder text is unchanged), before any body edit could happen. So
+   * the editor's most-recent Undo-history entry, at the moment this runs,
+   * is guaranteed to be exactly the insertParagraph replaceRange call this
+   * rename followed — editor.undo() reverts precisely that (placeholder
+   * plus whichever separator blank line(s) were actually added), with ZERO
+   * new Undo-history entries, and a subsequent Redo naturally restores it.
+   *
+   * canSafelyRollbackParagraphInsert (edit/insertParagraph.ts) runs first as
+   * a lightweight safety check: if the placeholder can no longer be
+   * re-resolved as itself, unedited (some external change to the note in
+   * the interim), this refuses to call undo() and instead just closes the
+   * rename box, leaving the placeholder as ordinary, permanent body text —
+   * the ticket's own explicit "resolve不能な場合は安全側no-op" allowance.
+   */
+  private rollbackPendingParagraphInsert(anchor: ParagraphMoveAnchor): void {
+    const state = this.renameState;
+    if (!state) return;
+    const view = this.activeMarkdownView.get();
+    const canRollback = !!view && canSafelyRollbackParagraphInsert(view.editor.getValue(), anchor);
+    if (canRollback && view) {
+      view.editor.undo();
+    }
+    state.rowSelfEl.setAttribute("draggable", "true");
+    this.renameState = null;
+    if (canRollback) {
+      this.refresh();
+    } else {
+      this.renderTree();
+    }
   }
 
   // ---- Phase 3A: drag & drop ------------------------------------------

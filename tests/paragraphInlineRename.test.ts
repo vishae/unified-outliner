@@ -52,7 +52,9 @@ describe("OutlineTreeView.ts paragraph inline rename (Phase 5T-8A)", () => {
 
   describe("beginParagraphRenameForNode", () => {
     function body(): string {
-      return methodBody("private beginParagraphRenameForNode(nodeId: string): void {");
+      return methodBody(
+        "private beginParagraphRenameForNode(nodeId: string, pendingParagraphInsert = false): void {"
+      );
     }
 
     it("guards on isOutlineParagraphNode(treeNode) via this.nodeById — never accepts a section/list/composite/complex-member id", () => {
@@ -99,7 +101,9 @@ describe("OutlineTreeView.ts paragraph inline rename (Phase 5T-8A)", () => {
 
     it("delegates to beginRename with kind \"paragraph\" and the resolved anchor — never constructs its own textarea/DOM, never calls applyLineEditOutcome/applyParagraphEdit directly itself", () => {
       const b = body();
-      expect(b).toContain('this.beginRename(nodeId, "paragraph", innerEl, rowSelfEl, anchor);');
+      expect(b).toContain(
+        'this.beginRename(nodeId, "paragraph", innerEl, rowSelfEl, anchor, pendingParagraphInsert);'
+      );
       expect(b).not.toContain("createEl(\"textarea\"");
       expect(b).not.toContain("applyLineEditOutcome(");
       expect(b).not.toContain("applyParagraphEdit(");
@@ -156,7 +160,9 @@ describe("OutlineTreeView.ts paragraph inline rename (Phase 5T-8A)", () => {
       const sharedTail = b.slice(sharedIdx);
       // Exactly one textarea is ever created per beginRename call, regardless of kind.
       expect(sharedTail.split('innerEl.createEl("textarea"').length - 1).toBe(1);
-      expect(sharedTail).toContain("this.renameState = { nodeId, kind, inputEl, rowSelfEl, snapshot };");
+      expect(sharedTail).toContain(
+        "this.renameState = { nodeId, kind, inputEl, rowSelfEl, snapshot, pendingParagraphInsert };"
+      );
     });
 
     it("the \"already renaming this exact node -> refocus\" and \"different row already renaming -> cancel first\" guards run BEFORE the kind branch, so they apply uniformly to paragraph rename too", () => {

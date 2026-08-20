@@ -280,6 +280,16 @@ const en = {
   // view/OutlineTreeView.ts#showParagraphMoveMenu's own doc comment).
   "tree.menu.paragraphEdit": "Edit paragraph…",
 
+  // Phase 5T-10A ("paragraph insert の最小スコープ実装"): a top-level or
+  // section-direct paragraph row's own insert-before/insert-after items —
+  // shown only when the paragraph is in-scope (same
+  // edit/deleteParagraph.ts#isInScopeParagraphParent gate 5T-9A's delete
+  // item already uses). Choosing either immediately creates a placeholder
+  // paragraph and enters inline rename on it — see
+  // edit/insertParagraph.ts's own top doc comment.
+  "tree.menu.insertParagraphBefore": "Insert paragraph before",
+  "tree.menu.insertParagraphAfter": "Insert paragraph after",
+
   // Phase 5T-9A ("paragraph delete の最小スコープ実装"): a top-level or
   // section-direct paragraph row's own delete item — shown only when the
   // paragraph is in-scope for delete this phase (see
@@ -577,6 +587,23 @@ const en = {
     "Unified Outliner: this paragraph is inside a list item, which can't be deleted from the Outline Tree yet.",
   "reason.paragraphDeleteCompositeMember":
     "Unified Outliner: this paragraph is part of an extended block; delete the extended block instead.",
+
+  // Phase 5T-10A ("paragraph insert の最小スコープ実装",
+  // edit/insertParagraph.ts): deliberately NEW, dedicated keys, mirroring
+  // reason.paragraphDelete*'s own precedent of not reusing
+  // reason.paragraphTreeMove*'s "...so the move was cancelled" wording.
+  "reason.paragraphInsertResolveFailed":
+    "Unified Outliner: this paragraph could not be safely re-resolved (the note may have changed).",
+  "reason.paragraphInsertIdentityChanged":
+    "Unified Outliner: this paragraph's position in the note changed, so the insert was cancelled.",
+  "reason.paragraphInsertContentChanged":
+    "Unified Outliner: the note changed, so the insert was cancelled.",
+  "reason.paragraphInsertAmbiguous":
+    "Unified Outliner: this paragraph could not be uniquely identified, so the insert was cancelled.",
+  "reason.paragraphInsertListItemParent":
+    "Unified Outliner: this paragraph is inside a list item, which can't have a paragraph inserted from the Outline Tree yet.",
+  "reason.paragraphInsertCompositeMember":
+    "Unified Outliner: this paragraph is part of an extended block; insert is not available there.",
 } as const;
 
 export type TranslationKey = keyof typeof en;
@@ -758,6 +785,11 @@ const ja: Record<TranslationKey, string> = {
   "tree.menu.paragraphMoveBeforeSibling": "指定した段落の前へ移動…",
   "tree.menu.paragraphMoveAfterSibling": "指定した段落の後へ移動…",
   "tree.menu.paragraphEdit": "段落を編集…",
+
+  // Phase 5T-10A（paragraph insert の最小スコープ実装）: top-level または
+  // section 直下の paragraph 行専用の insert-before/insert-after 項目。
+  "tree.menu.insertParagraphBefore": "段落を前に挿入",
+  "tree.menu.insertParagraphAfter": "段落を後に挿入",
 
   // Phase 5T-9A（paragraph delete の最小スコープ実装）: top-level または
   // section 直下の paragraph 行専用の delete 項目。
@@ -1001,6 +1033,20 @@ const ja: Record<TranslationKey, string> = {
     "Unified Outliner: この段落はリスト項目内にあり、まだアウトラインツリーから削除できない。",
   "reason.paragraphDeleteCompositeMember":
     "Unified Outliner: この段落は拡張ブロックの一部である。拡張ブロックごと削除してほしい。",
+
+  // Phase 5T-10A（paragraph insert の最小スコープ実装、edit/insertParagraph.ts）
+  "reason.paragraphInsertResolveFailed":
+    "Unified Outliner: この段落を安全に再解決できなかった（本文が変更された可能性がある）。",
+  "reason.paragraphInsertIdentityChanged":
+    "Unified Outliner: この段落の本文中の位置が変更されたため、挿入を取り消した。",
+  "reason.paragraphInsertContentChanged":
+    "Unified Outliner: 本文が変更されたため、挿入を取り消した。",
+  "reason.paragraphInsertAmbiguous":
+    "Unified Outliner: この段落を一意に特定できなかったため、挿入を取り消した。",
+  "reason.paragraphInsertListItemParent":
+    "Unified Outliner: この段落はリスト項目内にあり、まだアウトラインツリーから段落を挿入できない。",
+  "reason.paragraphInsertCompositeMember":
+    "Unified Outliner: この段落は拡張ブロックの一部であるため、挿入は利用できない。",
 };
 
 const DICTIONARIES: Record<SupportedLocale, Record<TranslationKey, string>> = {
