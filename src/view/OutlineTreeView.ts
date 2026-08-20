@@ -229,6 +229,12 @@ import {
   paragraphNonAdjacentMoveReasonText,
   SiblingTargetAnchor,
 } from "../edit/paragraphNonAdjacentMove";
+import {
+  deleteParagraph,
+  isInScopeParagraphParent,
+  paragraphDeleteReasonText,
+} from "../edit/deleteParagraph";
+import { ConfirmParagraphDeleteModal } from "./ConfirmParagraphDeleteModal";
 import { findComplexSiblingTarget, ResolvedMoveUnit } from "../move/resolveMoveTarget";
 import { getEnabledCompositeBlockRules } from "../settingsDefaults";
 import { resolveCurrentPositionNodeId } from "../tree/resolveCurrentPositionNodeId";
@@ -3198,6 +3204,29 @@ export class OutlineTreeView extends ItemView {
       );
     }
 
+    // Phase 5T-9A: delete item — shown ONLY for a top-level or
+    // section-direct paragraph (edit/deleteParagraph.ts's own in-scope
+    // check, reused verbatim here so this menu-time gate can never drift
+    // from the pure function's own scope contract). A list-item-child
+    // paragraph's menu simply never gets this item, the same "omit rather
+    // than show disabled" convention showCompositeCommandMenu already
+    // establishes. `treeNode.label` is the exact same truncated preview
+    // text already shown in the Tree row — passed straight through to the
+    // confirmation modal, never re-derived.
+    if (isInScopeParagraphParent(doc, target.parentId)) {
+      menu.addItem((item) =>
+        item
+          .setTitle(this.plugin.t("tree.menu.deleteParagraph"))
+          .setIcon("trash-2")
+          .setWarning(true)
+          .onClick(() => {
+            new ConfirmParagraphDeleteModal(this.app, this.plugin, treeNode.label, anchor, (confirmed) => {
+              if (confirmed) this.dispatchAndApplyParagraphDelete(anchor);
+            }).open();
+          })
+      );
+    }
+
     this.showTrackedMenu(menu, evt);
   }
 
@@ -3504,6 +3533,68 @@ export class OutlineTreeView extends ItemView {
       text.split("\n"),
       outcome,
       () => this.notify(paragraphTreeMoveReasonText((k) => this.plugin.t(k), outcome.reason))
+    );
+
+    if (changed) {
+      const cur = editor.getCursor();
+      const lineLen = editor.getLine(cur.line)?.length ?? 0;
+      editor.scrollIntoView(
+        { from: { line: cur.line, ch: 0 }, to: { line: cur.line, ch: lineLen } },
+        true
+      );
+      this.queueSelectionFollow(outcome.newStartLine);
+      this.refresh();
+    }
+    return changed;
+  }
+
+  /**
+   * Phase 5T-9A: dedicated, thin dispatch for a paragraph Tree-triggered
+   * delete — mirrors dispatchAndApplyParagraphMove immediately above almost
+   * exactly (same multi-cursor guard, same "read the editor's CURRENT text
+   * and hand it to the pure function along with the menu-time anchor"
+   * shape, same applyLineEditOutcome/scroll/refresh tail). All re-parsing,
+   * the three-stage re-verification, the scope/composite-member checks, the
+   * blank-line-merge safety fix, and the post-delete fallback line are
+   * edit/deleteParagraph.ts#deleteParagraph's job — nothing here duplicates
+   * any of it.
+   *
+   * Unlike runDeleteCommand's own dispatchAndApply call (which passes
+   * `followSelection = false`, since a generic section/list delete has "no
+   * logical target left to follow"), this method DOES call
+   * `queueSelectionFollow(outcome.newStartLine)` on success — the 5T-9A
+   * ticket's own §6 explicitly defines a post-delete selection target
+   * (next sibling → previous sibling → parent section, computed inside
+   * deleteParagraph itself), so following it is the deliberately correct
+   * choice here, not an oversight relative to the generic-delete pattern.
+   *
+   * `anchor` reaches this function only via a closure captured at
+   * menu-build time (showParagraphMoveMenu -> ConfirmParagraphDeleteModal ->
+   * here) — never a bare scan-local id, for the same reason every other
+   * paragraph dispatch method in this class already requires.
+   */
+  private dispatchAndApplyParagraphDelete(anchor: ParagraphMoveAnchor): boolean {
+    const view = this.activeMarkdownView.get();
+    if (!view) return false;
+    const editor: Editor = view.editor;
+
+    if (editor.listSelections().length > 1) {
+      this.notify(this.plugin.t("notice.multipleCursors"));
+      return false;
+    }
+
+    const text = editor.getValue();
+    const rules = getEnabledCompositeBlockRules(this.plugin.settings.compositeBlocks);
+    const outcome = deleteParagraph(text, anchor, rules);
+
+    const cursor = { line: anchor.rangeStart, ch: 0 };
+    const changed = applyLineEditOutcome(
+      editor,
+      cursor,
+      anchor.rangeStart,
+      text.split("\n"),
+      outcome,
+      () => this.notify(paragraphDeleteReasonText((k) => this.plugin.t(k), outcome.reason))
     );
 
     if (changed) {

@@ -280,6 +280,15 @@ const en = {
   // view/OutlineTreeView.ts#showParagraphMoveMenu's own doc comment).
   "tree.menu.paragraphEdit": "Edit paragraph…",
 
+  // Phase 5T-9A ("paragraph delete の最小スコープ実装"): a top-level or
+  // section-direct paragraph row's own delete item — shown only when the
+  // paragraph is in-scope for delete this phase (see
+  // edit/deleteParagraph.ts#isInScopeParagraphParent); opens
+  // ConfirmParagraphDeleteModal rather than deleting immediately, mirroring
+  // tree.menu.deleteCompositeBlock's own confirm-then-delete UX, not
+  // tree.menu.deleteListSubtree's immediate-no-confirm one.
+  "tree.menu.deleteParagraph": "Delete paragraph",
+
   // ---- Partial Edit Pane --------------------------------------------------
   "partialEdit.viewName": "Unified Outliner: Partial Edit",
   "partialEdit.noActiveNote": "Unified Outliner: no active note to load a node from.",
@@ -325,6 +334,12 @@ const en = {
   "modal.deleteCompositeBlockBody":
     'This will remove "{label}" ({memberCount} items, lines {startLine}–{endLine}) from the note.',
   "modal.deleteCompositeBlockUndoNote": "This can be undone with Obsidian's own Undo.",
+
+  // ---- Paragraph delete confirmation modal (ConfirmParagraphDeleteModal.ts,
+  // Phase 5T-9A) ------------------------------------------------------------
+  "modal.deleteParagraphTitle": "Unified Outliner: delete paragraph",
+  "modal.deleteParagraphBody": 'This will remove "{label}" (lines {startLine}–{endLine}) from the note.',
+  "modal.deleteParagraphUndoNote": "This can be undone with Obsidian's own Undo.",
 
   // ---- Shared button labels ------------------------------------------------
   "common.apply": "Apply",
@@ -544,6 +559,24 @@ const en = {
     "Unified Outliner: the destination is not at the same nesting depth, so the move was cancelled.",
   "reason.paragraphNonAdjacentRangeOverlap":
     "Unified Outliner: the destination overlaps the paragraph being moved, so the move was cancelled.",
+
+  // Phase 5T-9A ("paragraph delete の最小スコープ実装",
+  // edit/deleteParagraph.ts): deliberately NEW, dedicated keys rather than
+  // reusing "reason.paragraphTreeMove*" above — those are worded "...so the
+  // move was cancelled", which would be misleading for a delete. See
+  // edit/deleteParagraph.ts#paragraphDeleteReasonText's own doc comment.
+  "reason.paragraphDeleteResolveFailed":
+    "Unified Outliner: this paragraph could not be safely re-resolved (the note may have changed).",
+  "reason.paragraphDeleteIdentityChanged":
+    "Unified Outliner: this paragraph's position in the note changed, so the delete was cancelled.",
+  "reason.paragraphDeleteContentChanged":
+    "Unified Outliner: the note changed, so the delete was cancelled.",
+  "reason.paragraphDeleteAmbiguous":
+    "Unified Outliner: this paragraph could not be uniquely identified, so the delete was cancelled.",
+  "reason.paragraphDeleteListItemParent":
+    "Unified Outliner: this paragraph is inside a list item, which can't be deleted from the Outline Tree yet.",
+  "reason.paragraphDeleteCompositeMember":
+    "Unified Outliner: this paragraph is part of an extended block; delete the extended block instead.",
 } as const;
 
 export type TranslationKey = keyof typeof en;
@@ -726,6 +759,10 @@ const ja: Record<TranslationKey, string> = {
   "tree.menu.paragraphMoveAfterSibling": "指定した段落の後へ移動…",
   "tree.menu.paragraphEdit": "段落を編集…",
 
+  // Phase 5T-9A（paragraph delete の最小スコープ実装）: top-level または
+  // section 直下の paragraph 行専用の delete 項目。
+  "tree.menu.deleteParagraph": "段落を削除",
+
   // ---- 部分編集ペイン -------------------------------------------------------
   "partialEdit.viewName": "Unified Outliner: 部分編集",
   "partialEdit.noActiveNote": "Unified Outliner: ノードを読み込むアクティブなノートがない。",
@@ -766,6 +803,11 @@ const ja: Record<TranslationKey, string> = {
   "modal.deleteCompositeBlockBody":
     "「{label}」（{memberCount}件、{startLine}〜{endLine}行目）をノートから削除する。",
   "modal.deleteCompositeBlockUndoNote": "この操作はObsidian本体のUndoで元に戻せる。",
+
+  // ---- 段落削除確認モーダル（ConfirmParagraphDeleteModal.ts、Phase 5T-9A） --
+  "modal.deleteParagraphTitle": "Unified Outliner: 段落を削除",
+  "modal.deleteParagraphBody": "「{label}」（{startLine}〜{endLine}行目）をノートから削除する。",
+  "modal.deleteParagraphUndoNote": "この操作はObsidian本体のUndoで元に戻せる。",
 
   // ---- 共有ボタンラベル -----------------------------------------------------
   "common.apply": "適用",
@@ -945,6 +987,20 @@ const ja: Record<TranslationKey, string> = {
     "Unified Outliner: 移動先が同じ深さにないため、移動を取り消した。",
   "reason.paragraphNonAdjacentRangeOverlap":
     "Unified Outliner: 移動先が移動対象の段落と重なっているため、移動を取り消した。",
+
+  // Phase 5T-9A（paragraph delete の最小スコープ実装、edit/deleteParagraph.ts）
+  "reason.paragraphDeleteResolveFailed":
+    "Unified Outliner: この段落を安全に再解決できなかった（本文が変更された可能性がある）。",
+  "reason.paragraphDeleteIdentityChanged":
+    "Unified Outliner: この段落の本文中の位置が変更されたため、削除を取り消した。",
+  "reason.paragraphDeleteContentChanged":
+    "Unified Outliner: 本文が変更されたため、削除を取り消した。",
+  "reason.paragraphDeleteAmbiguous":
+    "Unified Outliner: この段落を一意に特定できなかったため、削除を取り消した。",
+  "reason.paragraphDeleteListItemParent":
+    "Unified Outliner: この段落はリスト項目内にあり、まだアウトラインツリーから削除できない。",
+  "reason.paragraphDeleteCompositeMember":
+    "Unified Outliner: この段落は拡張ブロックの一部である。拡張ブロックごと削除してほしい。",
 };
 
 const DICTIONARIES: Record<SupportedLocale, Record<TranslationKey, string>> = {

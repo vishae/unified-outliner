@@ -137,11 +137,10 @@ describe("OutlineTreeView.ts paragraph wiring (static source check, Phase 5P-3)"
     expect(viewTs).toContain("activatePartialEditViewForParagraph");
   });
 
-  it("does not introduce a Tree-triggered rename / indent-outdent / delete / insert affordance keyed on paragraph (Phase 5T-1 adds a narrow Tree-triggered MOVE only, via showParagraphMoveMenu/moveParagraphFromAnchor — checked separately in the dedicated Phase 5T-1 describe block below; every OTHER affordance stays absent)", () => {
+  it("does not introduce a Tree-triggered rename / indent-outdent / insert affordance keyed on paragraph (Phase 5T-1 adds a narrow Tree-triggered MOVE, via showParagraphMoveMenu/moveParagraphFromAnchor — checked separately in the dedicated Phase 5T-1 describe block below; Phase 5T-9A adds a narrow Tree-triggered DELETE, via edit/deleteParagraph.ts/dispatchAndApplyParagraphDelete — checked separately in the dedicated Phase 5T-9A describe block further down; every OTHER affordance, including insert, stays absent this phase)", () => {
     expect(viewTs).not.toContain("renameParagraph");
     expect(viewTs).not.toContain("indentParagraph");
     expect(viewTs).not.toContain("outdentParagraph");
-    expect(viewTs).not.toContain("deleteParagraph");
     expect(viewTs).not.toContain("insertParagraph");
   });
 });
@@ -888,5 +887,80 @@ describe("Phase 5T-4A: Tree paragraph → existing Partial Edit bridge ('段落�
 
   it("parseDocument.ts is not referenced by the new blank-line validation or by this bridge (paragraph identity/parsing rules are unchanged)", () => {
     expect(paragraphPartialEditTs).not.toContain("parseDocument.ts");
+  });
+});
+
+describe("Phase 5T-9A: paragraph Tree-triggered delete (narrow, confirm-modal-gated exception)", () => {
+  const viewTs = readFileSync(path.resolve(__dirname, "../src/view/OutlineTreeView.ts"), "utf-8");
+
+  function showParagraphMoveMenuBody(): string {
+    const start = viewTs.indexOf("private showParagraphMoveMenu(evt: MouseEvent, nodeId: string): void {");
+    expect(start).toBeGreaterThan(-1);
+    const end = viewTs.indexOf("Phase 5T-7A: the single shared resolve+activate path", start);
+    expect(end).toBeGreaterThan(start);
+    return viewTs.slice(start, end);
+  }
+
+  it("adds exactly one new, in-scope-gated delete item — gated by edit/deleteParagraph.ts#isInScopeParagraphParent, never shown unconditionally like the Edit item above it", () => {
+    const body = showParagraphMoveMenuBody();
+    expect(body).toContain("isInScopeParagraphParent(doc, target.parentId)");
+    const gateIdx = body.indexOf("isInScopeParagraphParent(doc, target.parentId)");
+    const deleteItemIdx = body.indexOf('this.plugin.t("tree.menu.deleteParagraph")');
+    expect(deleteItemIdx).toBeGreaterThan(gateIdx);
+  });
+
+  it("the delete item opens ConfirmParagraphDeleteModal (never deletes immediately, unlike tree.menu.deleteListSubtree's no-confirm pattern) and only dispatches on confirmed === true", () => {
+    const body = showParagraphMoveMenuBody();
+    const itemIdx = body.indexOf('this.plugin.t("tree.menu.deleteParagraph")');
+    expect(itemIdx).toBeGreaterThan(-1);
+    const onClickSlice = body.slice(itemIdx, itemIdx + 400);
+    expect(onClickSlice).toContain("new ConfirmParagraphDeleteModal(");
+    expect(onClickSlice).toContain("if (confirmed) this.dispatchAndApplyParagraphDelete(anchor);");
+  });
+
+  it("the modal is built from treeNode.label (the same truncated preview already shown in the Tree row) and the menu-time anchor — never a bare nodeId, never re-deriving a fresh label", () => {
+    const body = showParagraphMoveMenuBody();
+    const itemIdx = body.indexOf('this.plugin.t("tree.menu.deleteParagraph")');
+    const onClickSlice = body.slice(itemIdx, itemIdx + 400);
+    expect(onClickSlice).toContain("treeNode.label, anchor,");
+  });
+
+  it("dispatchAndApplyParagraphDelete mirrors dispatchAndApplyParagraphMove's own shape: multi-cursor guard, deleteParagraph(text, anchor, rules), applyLineEditOutcome, and — unlike the generic runDeleteCommand/dispatchAndApply(..., false) path — DOES call queueSelectionFollow on success (the ticket's own §6 post-delete selection contract)", () => {
+    const start = viewTs.indexOf("private dispatchAndApplyParagraphDelete(anchor: ParagraphMoveAnchor): boolean {");
+    expect(start).toBeGreaterThan(-1);
+    const end = viewTs.indexOf("\n  }\n", start);
+    const body = viewTs.slice(start, end);
+    expect(body).toContain("editor.listSelections().length > 1");
+    expect(body).toContain("getEnabledCompositeBlockRules(this.plugin.settings.compositeBlocks)");
+    expect(body).toContain("deleteParagraph(text, anchor, rules)");
+    expect(body).toContain("applyLineEditOutcome(");
+    expect(body).toContain("paragraphDeleteReasonText(");
+    expect(body).toContain("this.queueSelectionFollow(outcome.newStartLine);");
+  });
+
+  it("does not touch D&D / drop-indicator / relocate machinery: draggable, computeDropMode, runRelocateCommand are absent from both the menu body and the dispatch method", () => {
+    const menuBody = showParagraphMoveMenuBody();
+    const start = viewTs.indexOf("private dispatchAndApplyParagraphDelete(anchor: ParagraphMoveAnchor): boolean {");
+    const end = viewTs.indexOf("\n  }\n", start);
+    const dispatchBody = viewTs.slice(start, end);
+    for (const forbidden of ["draggable", "computeDropMode", "runRelocateCommand"]) {
+      expect(menuBody).not.toContain(forbidden);
+      expect(dispatchBody).not.toContain(forbidden);
+    }
+  });
+
+  it("does not reference edit/listBodyRange.ts's extractListItemBodyText — this phase's delete is explicitly out of scope for list-item-child paragraphs and does not touch that module", () => {
+    const start = viewTs.indexOf("private dispatchAndApplyParagraphDelete(anchor: ParagraphMoveAnchor): boolean {");
+    const end = viewTs.indexOf("\n  }\n", start);
+    const dispatchBody = viewTs.slice(start, end);
+    expect(dispatchBody).not.toContain("extractListItemBodyText");
+  });
+
+  it("does not introduce paragraph insert alongside delete — insertParagraph/insertBlockAt are not referenced by the new delete wiring", () => {
+    const start = viewTs.indexOf("private dispatchAndApplyParagraphDelete(anchor: ParagraphMoveAnchor): boolean {");
+    const end = viewTs.indexOf("\n  }\n", start);
+    const dispatchBody = viewTs.slice(start, end);
+    expect(dispatchBody).not.toContain("insertParagraph");
+    expect(dispatchBody).not.toContain("insertBlockAt");
   });
 });
