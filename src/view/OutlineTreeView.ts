@@ -282,6 +282,7 @@ import {
   RowPointerDownRecord,
 } from "./rowDoubleClickDetector";
 import { applyLineEditOutcome, LineEditOutcome } from "../commands/applyLineEditOutcome";
+import { applyParagraphEdit } from "../edit/paragraphPartialEdit";
 import { TranslationKey } from "../i18n";
 
 export const OUTLINE_TREE_VIEW_TYPE = "unified-outliner-outline-tree";
@@ -496,23 +497,38 @@ export class OutlineTreeView extends ItemView {
   private activeMenu: Menu | null = null;
 
   /**
-   * Inline rename state (section/list only — see edit/renameBlock.ts).
+   * Inline rename state (section/list/paragraph — see edit/renameBlock.ts
+   * for section/list and edit/paragraphPartialEdit.ts for paragraph).
    * Non-null exactly while a row's label is replaced with a <textarea>.
-   * `snapshot` is whichever of SectionRenameSnapshot/ListRenameSnapshot
-   * matches `kind`, captured fresh when the rename began — never the
-   * possibly-stale this.currentDoc — and re-verified against a FRESH
-   * re-parse at commit time (see commitRename). While this is set,
-   * refresh() bails out immediately (see its own guard) so an unrelated
-   * debounced editor-change/active-leaf-change/keyup/mouseup refresh never
-   * tears down the input mid-edit; only this view's own commitRename /
-   * cancelRename ever clear it and re-render.
+   * `snapshot` is whichever of SectionRenameSnapshot/ListRenameSnapshot/
+   * ParagraphMoveAnchor matches `kind`, captured fresh when the rename
+   * began — never the possibly-stale this.currentDoc — and re-verified
+   * against a FRESH re-parse at commit time (see commitRename). While this
+   * is set, refresh() bails out immediately (see its own guard) so an
+   * unrelated debounced editor-change/active-leaf-change/keyup/mouseup
+   * refresh never tears down the input mid-edit; only this view's own
+   * commitRename / cancelRename ever clear it and re-render.
+   *
+   * Phase 5T-8A ("paragraph のダブルクリック動作を Partial Edit 起動から
+   * inline rename へ統一する"): `kind: "paragraph"` reuses this SAME
+   * textarea/keydown/blur/click UI and this SAME renameState shape as
+   * section/list — only beginRename's own snapshot-construction branch and
+   * commitRename's own outcome-dispatch branch differ per kind (see both
+   * methods' own doc comments). `snapshot` for a paragraph rename is a
+   * `ParagraphMoveAnchor` (edit/paragraphTreeMove.ts) — the exact same
+   * anchor shape showParagraphMoveMenu/handleParagraphDragStart already
+   * build via resolveParagraphFromTreeHint + buildParagraphMoveAnchor, and
+   * a structural superset of edit/paragraphPartialEdit.ts's own
+   * `ParagraphEditAnchor` (complexBlockId/parentId/depth/originalText), so
+   * it can be passed directly to applyParagraphEdit at commit time with no
+   * conversion.
    */
   private renameState: {
     nodeId: string;
-    kind: "section" | "list";
+    kind: "section" | "list" | "paragraph";
     inputEl: HTMLTextAreaElement;
     rowSelfEl: HTMLElement;
-    snapshot: SectionRenameSnapshot | ListRenameSnapshot;
+    snapshot: SectionRenameSnapshot | ListRenameSnapshot | ParagraphMoveAnchor;
   } | null = null;
 
   /**
@@ -1315,22 +1331,32 @@ export class OutlineTreeView extends ItemView {
       });
     } else if (isParagraph) {
       // Phase 5T-7A originally wired this branch as a native `dblclick`
-      // listener; Phase 5T-7C replaces it with the same shared
-      // pointerdown-based detector as the rename branch above, for the same
-      // reason. Still layered on top of the read-only contract exactly like
+      // listener opening Paragraph Partial Edit; Phase 5T-7C replaced it
+      // with the same shared pointerdown-based detector as the rename
+      // branch above (for the native-dblclick-vs-draggable conflict — see
+      // rowDoubleClickDetector.ts's own top doc comment). Phase 5T-8A
+      // ("paragraph のダブルクリック動作を Partial Edit 起動から inline
+      // rename へ統一する") now changes ONLY the destination: a recognized
+      // double click delegates to beginParagraphRenameForNode (inline
+      // rename, matching heading/list) instead of
+      // openParagraphPartialEditFromTree (Partial Edit Pane) — the
+      // detection mechanics themselves (handleRowPointerDownForDoubleClick,
+      // the setTimeout(0) deferral, hit-target eligibility) are entirely
+      // unchanged. Paragraph Partial Edit itself is NOT removed — it
+      // remains reachable via the paragraph context menu's "段落を編集…"
+      // item (showParagraphMoveMenu, untouched) and via F2
+      // (handleTreeKeyDown's F2 case, untouched) — see
+      // beginParagraphRenameForNode's own doc comment for the full role
+      // split. Still layered on top of the read-only contract exactly like
       // the paragraph context menu (5T-1) and drag wiring (5T-2) — this
       // remains a separate `else if` branch, never a relaxation of
       // `!readOnly` above. dragHandleEl is always null here (paragraph rows
       // never have one — see its own creation above), so the shared
       // handler's drag-handle exclusion is simply a no-op for this branch,
-      // exactly as it was a no-op before this ticket. Delegates to
-      // openParagraphPartialEditFromTree — the exact same resolve+activate
-      // path the existing "段落を編集…" context menu item
-      // (showParagraphMoveMenu, Phase 5T-4A) already uses, so this adds no
-      // new editing model, anchor type, or resolution logic.
+      // exactly as it was before this ticket.
       selfEl.addEventListener("pointerdown", (evt) => {
         this.handleRowPointerDownForDoubleClick(evt, node.id, collapseEl, dragHandleEl, () =>
-          this.openParagraphPartialEditFromTree(node.id)
+          this.beginParagraphRenameForNode(node.id)
         );
       });
     }
@@ -3948,15 +3974,35 @@ export class OutlineTreeView extends ItemView {
   /**
    * Begin renaming `nodeId`. `innerEl`/`rowSelfEl` are the row's own DOM
    * elements — renderNode's dblclick listener already has them on hand;
-   * beginRenameForNode (F2 / context menu / auto-rename-after-insert)
-   * re-locates them by the row's stable `unified-outliner-row-<id>` DOM id
-   * first, then delegates here.
+   * beginRenameForNode (F2 / context menu / auto-rename-after-insert) /
+   * beginParagraphRenameForNode re-locate them by the row's stable
+   * `unified-outliner-row-<id>` DOM id first, then delegate here.
+   *
+   * Phase 5T-8A: `kind: "paragraph"` is a NEW third arm, added ONLY as a
+   * sibling to the pre-existing section/list snapshot-construction branch
+   * below — that branch's own code (the `else` block just below) is
+   * unmodified line-for-line by this ticket, satisfying "heading / list の
+   * 既存 rename 契約を変えない". `paragraphSnapshot` is required (and always
+   * provided by beginParagraphRenameForNode) exactly when `kind ===
+   * "paragraph"`; the caller has already re-resolved it fresh via
+   * resolveParagraphFromTreeHint + buildParagraphMoveAnchor (the same
+   * pair showParagraphMoveMenu/handleParagraphDragStart already use), so
+   * this method does not re-derive it from `nodeId`/`doc.nodes` the way it
+   * does for section/list — a paragraph has no entry in `doc.nodes` at all
+   * (it is a ComplexBlockInfo, not a BlockNode). Everything from
+   * `innerEl.empty()` onward (textarea construction, keydown/input/blur/
+   * click wiring, the "already renaming this node -> refocus" / "different
+   * row -> cancel" guards above, and the final `this.renameState =`
+   * assignment) is fully kind-agnostic and shared, unchanged, across all
+   * three kinds — this is the literal "既存 inline rename UI を再利用す
+   * る" the ticket calls for, not a parallel reimplementation.
    */
   private beginRename(
     nodeId: string,
-    kind: "section" | "list",
+    kind: "section" | "list" | "paragraph",
     innerEl: HTMLElement,
-    rowSelfEl: HTMLElement
+    rowSelfEl: HTMLElement,
+    paragraphSnapshot?: ParagraphMoveAnchor
   ): void {
     // Already renaming this exact node (e.g. a second dblclick landed on
     // the now-open input, which is still inside innerEl and still carries
@@ -3972,38 +4018,52 @@ export class OutlineTreeView extends ItemView {
     // "input 外へのフォーカス移動は cancel を既定とする" applied to switching targets.
     if (this.renameState) this.cancelRename();
 
-    const view = this.activeMarkdownView.get();
-    if (!view) {
-      this.notify(this.plugin.t("reason.no-active-editor"));
-      return;
-    }
-    const doc = parseDocument(view.editor.getValue());
-    const node = doc.nodes.get(nodeId);
-    if (!node) {
-      this.notify(this.plugin.t("reason.resolve-failed"));
-      return;
-    }
-    if ((kind === "section") !== isSectionNode(node)) {
-      this.notify(this.plugin.t("reason.type-changed"));
-      return;
-    }
-
     let initialText: string;
-    let snapshot: SectionRenameSnapshot | ListRenameSnapshot;
-    if (kind === "section") {
-      const section = node as SectionBlockNode;
-      // The REAL heading text, never the "(Untitled heading)" fallback
-      // display string — per this ticket's explicit requirement.
-      initialText = section.headingText;
-      snapshot = { headingLevel: section.headingLevel };
+    let snapshot: SectionRenameSnapshot | ListRenameSnapshot | ParagraphMoveAnchor;
+
+    if (kind === "paragraph") {
+      // Structurally unreachable given beginParagraphRenameForNode's own
+      // contract (it never calls beginRename with kind "paragraph" unless
+      // it already has a resolved anchor in hand) — defensive rather than
+      // trusted blindly, same convention as this method's other guards.
+      if (!paragraphSnapshot) {
+        this.notify(this.plugin.t("reason.resolve-failed"));
+        return;
+      }
+      initialText = paragraphSnapshot.originalText;
+      snapshot = paragraphSnapshot;
     } else {
-      const item = node as ListBlockNode;
-      initialText = listItemDisplayText(doc, item);
-      snapshot = {
-        marker: item.listMarker,
-        indentColumns: item.indentColumns,
-        contentColumn: contentColumnOf(doc, item),
-      };
+      const view = this.activeMarkdownView.get();
+      if (!view) {
+        this.notify(this.plugin.t("reason.no-active-editor"));
+        return;
+      }
+      const doc = parseDocument(view.editor.getValue());
+      const node = doc.nodes.get(nodeId);
+      if (!node) {
+        this.notify(this.plugin.t("reason.resolve-failed"));
+        return;
+      }
+      if ((kind === "section") !== isSectionNode(node)) {
+        this.notify(this.plugin.t("reason.type-changed"));
+        return;
+      }
+
+      if (kind === "section") {
+        const section = node as SectionBlockNode;
+        // The REAL heading text, never the "(Untitled heading)" fallback
+        // display string — per this ticket's explicit requirement.
+        initialText = section.headingText;
+        snapshot = { headingLevel: section.headingLevel };
+      } else {
+        const item = node as ListBlockNode;
+        initialText = listItemDisplayText(doc, item);
+        snapshot = {
+          marker: item.listMarker,
+          indentColumns: item.indentColumns,
+          contentColumn: contentColumnOf(doc, item),
+        };
+      }
     }
 
     // textContent-only DOM construction throughout (innerEl.empty() +
@@ -4202,6 +4262,84 @@ export class OutlineTreeView extends ItemView {
   }
 
   /**
+   * Phase 5T-8A ("paragraph のダブルクリック動作を Partial Edit 起動から
+   * inline rename へ統一する"): the paragraph counterpart to
+   * beginRenameForNode above — a SEPARATE entry point, not a relaxation of
+   * that method's own `node.kind !== "section" && node.kind !== "list"`
+   * guard, because a paragraph has no persistent id in `doc.nodes` at all
+   * (see edit/paragraphPartialEdit.ts's own top doc comment) and resolves
+   * through a structurally different path.
+   *
+   * Resolution mirrors showParagraphMoveMenu's / handleParagraphDragStart's
+   * own anchor construction EXACTLY — the same resolveParagraphFromTreeHint
+   * + buildParagraphMoveAnchor pair, over `this.currentDoc`/
+   * `this.currentComplexScan` (the last refresh()'s own live state, not a
+   * fresh re-parse — same convention every other Tree-triggered paragraph
+   * anchor construction in this file already uses), no new resolution
+   * logic. `this.readOnlyNodeIds.has(nodeId)` is deliberately NOT checked
+   * here (unlike beginRenameForNode): every paragraph node is
+   * unconditionally in that set (collectReadOnlyOutlineNodeIds — Phase
+   * 5P-3's "a paragraph row is read-only navigation only" default), so the
+   * same check here would always be true and would make this method a
+   * permanent no-op; paragraph eligibility for inline rename is instead
+   * governed entirely by isOutlineParagraphNode + a successful
+   * resolveParagraphFromTreeHint/buildParagraphMoveAnchor resolution —
+   * exactly the same two-function gate Partial Edit's own paragraph launch
+   * (openParagraphPartialEditFromTree) already relies on, which already
+   * excludes CompositeBlock members, callout/blockquote/fenced-code/table-
+   * internal lines, and boundary-ambiguous paragraphs by construction (see
+   * parser/complexBlocks.ts's scanParagraphBlocks/mergeBlockRangesSafely —
+   * those lines never reach editability "supported" kind "paragraph" in
+   * the first place, so they never become an OutlineTreeParagraphNode to
+   * begin with).
+   *
+   * Silently no-ops (never a Notice) on every failure mode — unresolved
+   * hint, ambiguous match, missing rowSelfEl/innerEl (row not currently
+   * rendered) — matching this ticket's own "再解決不能・曖昧状態では no-op
+   * とする" requirement; a double-click has no menu to degrade to and no
+   * user-visible "did nothing" signal is worse here than for
+   * openParagraphPartialEditFromTree's own explicit Notice (that Notice
+   * exists because a dblclick/F2 there is the ONLY way to open Partial
+   * Edit and silent failure would be confusing; inline rename failing here
+   * simply leaves the row showing its normal read-only paragraph text,
+   * which is self-explanatory).
+   *
+   * Paragraph Partial Edit itself is entirely unaffected: it remains
+   * reachable via the paragraph context menu ("段落を編集…",
+   * showParagraphMoveMenu) and via F2 (handleTreeKeyDown's F2 case) —
+   * neither of those call sites is touched by this method or by this
+   * ticket. Role split: double-click -> quick inline rename of this one
+   * paragraph's own text (this method); F2 / context menu -> full Partial
+   * Edit Pane; body editor -> ordinary text editing. See
+   * docs/phase5t8a_paragraph_dblclick_inline_rename_design.md for the full
+   * writeup.
+   */
+  private beginParagraphRenameForNode(nodeId: string): void {
+    const treeNode = this.nodeById.get(nodeId);
+    if (!treeNode || !isOutlineParagraphNode(treeNode)) return;
+    const doc = this.currentDoc;
+    const complexScan = this.currentComplexScan;
+    if (!doc || !complexScan) return;
+    const target = resolveParagraphFromTreeHint(
+      {
+        rangeStart: treeNode.rangeStart,
+        rangeEnd: treeNode.rangeEnd,
+        parentId: treeNode.parentId,
+      },
+      complexScan
+    );
+    if (!target) return;
+    const anchor = buildParagraphMoveAnchor(doc, target);
+    if (!anchor) return;
+    const rowSelfEl = this.treeRootEl.querySelector<HTMLElement>(
+      `#${CSS.escape("unified-outliner-row-" + nodeId)}`
+    );
+    const innerEl = rowSelfEl?.querySelector<HTMLElement>(".tree-item-inner") ?? null;
+    if (!rowSelfEl || !innerEl) return;
+    this.beginRename(nodeId, "paragraph", innerEl, rowSelfEl, anchor);
+  }
+
+  /**
    * Commit service: re-resolves nodeId against a FRESH re-parse of the
    * active editor's CURRENT content (never the snapshot's own doc, never
    * this.currentDoc) and re-verifies structure via
@@ -4249,6 +4387,27 @@ export class OutlineTreeView extends ItemView {
    * immediately before or after it (move, indent, another rename, etc.) —
    * no CM6 `isolateHistory` annotation or other extra plumbing was needed
    * or added.
+   *
+   * Phase 5T-8A: `state.kind === "paragraph"` is a NEW third arm in the
+   * outcome dispatch just below — it calls
+   * edit/paragraphPartialEdit.ts#applyParagraphEdit (the EXACT SAME
+   * function view/PartialEditView.ts's own Apply already calls for a
+   * paragraph, per this ticket's explicit "Partial Edit と同じ source 再解
+   * 決契約を再利用すること" requirement) rather than a new write primitive.
+   * `applyParagraphEdit` re-scans `doc` fresh and independently re-verifies
+   * complexBlockId/parentId/depth/content before ever splicing — the exact
+   * same "never trust the caller's snapshot, always re-resolve against a
+   * fresh parse" contract renameSection/renameListItem already apply for
+   * section/list, just via a different (paragraph-specific) re-resolution
+   * module. `ApplyParagraphEditOutcome`'s shape ({changed, lines,
+   * newStartLine, reason?}) is a structural subset of `LineEditOutcome`
+   * (no `newCursorCh`), so applyLineEditOutcome below accepts it unchanged
+   * — a paragraph commit lands the cursor at column 0 of the paragraph's
+   * new start line (the "preserve caller's offset within the block" branch
+   * with cursor/resolvedNodeStartLine both `{line: 0, ch: 0}`/`0`, same as
+   * section/list here), which refresh()'s own ensureSelection/highlightedId
+   * fallback then takes over from exactly like every other Tree-dispatched
+   * edit.
    */
   private commitRename(): void {
     const state = this.renameState;
@@ -4270,7 +4429,9 @@ export class OutlineTreeView extends ItemView {
     const outcome =
       state.kind === "section"
         ? renameSection(doc, state.nodeId, state.snapshot as SectionRenameSnapshot, rawValue)
-        : renameListItem(doc, state.nodeId, state.snapshot as ListRenameSnapshot, rawValue);
+        : state.kind === "list"
+          ? renameListItem(doc, state.nodeId, state.snapshot as ListRenameSnapshot, rawValue)
+          : applyParagraphEdit(doc, state.snapshot as ParagraphMoveAnchor, rawValue);
 
     const changed = applyLineEditOutcome(
       editor,

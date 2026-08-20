@@ -35,6 +35,16 @@ import path from "node:path";
  * resolve/activate contract) — the file split predates 5T-7C and still
  * matches the same "resolve+activate logic tests vs. event wiring tests"
  * separation the original 5T-7A ticket asked for.
+ *
+ * Phase 5T-8A ("paragraph のダブルクリック動作を Partial Edit 起動から inline
+ * rename へ統一する") changes ONLY the paragraph pointerdown branch's
+ * onDoubleClick destination (openParagraphPartialEditFromTree ->
+ * beginParagraphRenameForNode) — the detection wiring tests below are
+ * otherwise untouched. beginParagraphRenameForNode's OWN resolve+open
+ * contract (resolveParagraphFromTreeHint/buildParagraphMoveAnchor reuse,
+ * beginRename's paragraph branch, commitRename's applyParagraphEdit branch)
+ * is covered separately in tests/paragraphInlineRename.test.ts, mirroring
+ * this same "wiring tests vs. resolve/activate logic tests" split.
  */
 describe("OutlineTreeView.ts paragraph dblclick/F2 launch wiring (Phase 5T-7A, pointerdown-based since Phase 5T-7C)", () => {
   const viewTs = readFileSync(path.resolve(__dirname, "../src/view/OutlineTreeView.ts"), "utf-8");
@@ -69,7 +79,7 @@ describe("OutlineTreeView.ts paragraph dblclick/F2 launch wiring (Phase 5T-7A, p
     expect(pointerdownOccurrences).toBeGreaterThanOrEqual(2);
   });
 
-  it("the paragraph pointerdown branch lives in its OWN `else if (isParagraph)` branch, sibling to (never nested inside, never a relaxation of) the pre-existing `if (!readOnly)` rename branch, and its onDoubleClick callback delegates to openParagraphPartialEditFromTree(node.id) — the same resolve+activate path as showParagraphMoveMenu's own \"段落を編集…\" item, never a new editing model", () => {
+  it("(Phase 5T-8A) the paragraph pointerdown branch lives in its OWN `else if (isParagraph)` branch, sibling to (never nested inside, never a relaxation of) the pre-existing `if (!readOnly)` rename branch, and its onDoubleClick callback now delegates to beginParagraphRenameForNode(node.id) — inline rename, matching heading/list — never openParagraphPartialEditFromTree (Partial Edit Pane) directly", () => {
     const slice = renderNodeSlice();
     const renameBranchIdx = slice.indexOf("if (!readOnly) {");
     expect(renameBranchIdx).toBeGreaterThan(-1);
@@ -79,7 +89,8 @@ describe("OutlineTreeView.ts paragraph dblclick/F2 launch wiring (Phase 5T-7A, p
     expect(nextTopLevelIdx).toBeGreaterThan(paragraphBranchIdx);
     const paragraphBranchBody = slice.slice(paragraphBranchIdx, nextTopLevelIdx);
     expect(paragraphBranchBody).toContain('selfEl.addEventListener("pointerdown"');
-    expect(paragraphBranchBody).toContain("this.openParagraphPartialEditFromTree(node.id)");
+    expect(paragraphBranchBody).toContain("this.beginParagraphRenameForNode(node.id)");
+    expect(paragraphBranchBody).not.toContain("this.openParagraphPartialEditFromTree(node.id)");
     expect(paragraphBranchBody).not.toContain("paragraph-edit-input");
     expect(paragraphBranchBody).not.toContain("contenteditable");
   });
@@ -157,9 +168,23 @@ describe("OutlineTreeView.ts paragraph dblclick/F2 launch wiring (Phase 5T-7A, p
     expect(readOnlyDeclIdx).toBeGreaterThan(-1);
   });
 
-  it("section/list/standalone-complex-block rows never call openParagraphPartialEditFromTree — only the paragraph pointerdown branch's onDoubleClick callback and the F2 case do (2 call sites total in the whole file)", () => {
+  it("(Phase 5T-8A) openParagraphPartialEditFromTree is called from exactly ONE site now — handleTreeKeyDown's F2 case — since the paragraph pointerdown branch's onDoubleClick callback no longer calls it (it calls beginParagraphRenameForNode instead, per the ticket's explicit 'paragraph Partial Edit Pane はダブルクリックでは開かない' requirement)", () => {
     const occurrences = viewTs.split("this.openParagraphPartialEditFromTree(").length - 1;
-    expect(occurrences).toBe(2);
+    expect(occurrences).toBe(1);
+    const f2CaseIdx = viewTs.indexOf('case "F2": {');
+    const onlyCallIdx = viewTs.indexOf("this.openParagraphPartialEditFromTree(");
+    expect(onlyCallIdx).toBeGreaterThan(f2CaseIdx);
+  });
+
+  it("(Phase 5T-8A) beginParagraphRenameForNode is called from exactly ONE site — the paragraph pointerdown branch's onDoubleClick callback — never from F2 or the context menu, which both keep opening Partial Edit", () => {
+    const occurrences = viewTs.split("this.beginParagraphRenameForNode(").length - 1;
+    // 1 call site (the pointerdown branch) + 1 for the method's own
+    // `private beginParagraphRenameForNode(nodeId: string): void {`
+    // declaration line, which also contains the substring
+    // "beginParagraphRenameForNode(" — split on the call-with-`this.`
+    // form specifically avoids counting the declaration itself, so this
+    // should be exactly 1.
+    expect(occurrences).toBe(1);
   });
 
   it("the paragraph row's existing right-click context menu (\"段落を編集…\", showParagraphMoveMenu) is untouched by this ticket — still wired via a plain `contextmenu` listener, entirely independent of the pointerdown double-click detector", () => {

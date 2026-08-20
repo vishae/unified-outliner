@@ -810,7 +810,7 @@ describe("Phase 5T-4A: Tree paragraph → existing Partial Edit bridge ('段落�
     expect(viewTs).not.toContain("paragraphEditTextarea");
   });
 
-  it("(Phase 5T-7A, updated for Phase 5T-7C) a paragraph row's OWN pointerdown-based double-click trigger exists (a separate `else if (isParagraph)` branch, never a relaxation of the pre-existing `!readOnly` rename branch) and delegates — via the shared handleRowPointerDownForDoubleClick — to openParagraphPartialEditFromTree, the same resolve+activate path as showParagraphMoveMenu's own \"段落を編集…\" item, never a new editing model. (5T-7A originally wired this as a native `dblclick` listener; 5T-7C replaced it with the pointerdown-based detector — see tests/rowDoubleClickDetector.test.ts and tests/paragraphPartialEditLaunchUiWiring.test.ts for the detector-specific coverage.)", () => {
+  it("(Phase 5T-7A, updated for Phase 5T-7C, updated for Phase 5T-8A) a paragraph row's OWN pointerdown-based double-click trigger exists (a separate `else if (isParagraph)` branch, never a relaxation of the pre-existing `!readOnly` rename branch) and delegates — via the shared handleRowPointerDownForDoubleClick — to beginParagraphRenameForNode (inline rename, matching heading/list). (5T-7A originally wired this as a native `dblclick` listener opening Partial Edit; 5T-7C replaced it with the pointerdown-based detector, still opening Partial Edit; 5T-8A changes ONLY the destination to inline rename — see tests/rowDoubleClickDetector.test.ts, tests/paragraphPartialEditLaunchUiWiring.test.ts, and tests/paragraphInlineRename.test.ts for the detector/wiring/resolve-logic-specific coverage respectively.)", () => {
     const elseIfIdx = viewTs.indexOf("} else if (isParagraph) {", viewTs.indexOf("private renderNode("));
     expect(elseIfIdx).toBeGreaterThan(-1);
     const pointerdownIdx = viewTs.indexOf('selfEl.addEventListener("pointerdown"', elseIfIdx);
@@ -822,7 +822,8 @@ describe("Phase 5T-4A: Tree paragraph → existing Partial Edit bridge ('段落�
     expect(branchBody).toContain(
       "this.handleRowPointerDownForDoubleClick(evt, node.id, collapseEl, dragHandleEl, () =>"
     );
-    expect(branchBody).toContain("this.openParagraphPartialEditFromTree(node.id)");
+    expect(branchBody).toContain("this.beginParagraphRenameForNode(node.id)");
+    expect(branchBody).not.toContain("this.openParagraphPartialEditFromTree(node.id)");
     expect(branchBody).not.toContain("paragraph-edit-input");
     expect(branchBody).not.toContain("contenteditable");
   });
