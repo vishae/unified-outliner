@@ -23,15 +23,29 @@
  * ---- New in this file ----
  *
  *   - `PARAGRAPH_INSERT_PLACEHOLDER_TEXT` — a fixed, non-empty placeholder
- *     string ("新しい段落"), inserted so the new line is immediately
- *     recognized by parser/complexBlocks.ts#scanParagraphBlocks as its own
- *     paragraph (a blank line would NOT qualify — scanParagraphBlocks only
- *     ever begins a candidate run at a non-blank line). This is the exact
- *     string 5T-10A's own §11 item 6 requires be documented in the
- *     completion report; chosen deliberately short/generic since it is
- *     never meant to be read — view/OutlineTreeView.ts's own
- *     post-insert auto-rename immediately opens this text pre-selected in
- *     the inline rename box, so the very next keystroke replaces it.
+ *     string (a single U+200B ZERO WIDTH SPACE), inserted so the new line
+ *     is immediately recognized by
+ *     parser/complexBlocks.ts#scanParagraphBlocks as its own paragraph (a
+ *     blank line would NOT qualify — scanParagraphBlocks only ever begins
+ *     a candidate run at a non-blank line, and parser/parseDocument.ts's
+ *     own `isBlankLine` only ever matches literal space/tab runs, never
+ *     U+200B, so this one character is enough to keep the line "non-blank"
+ *     for every purpose that matters here). Originally a visible Japanese
+ *     word ("新しい段落"), replaced with this invisible-but-non-blank
+ *     character after real-device feedback: that word was visibly written
+ *     into the note body between the insert's own edit and the
+ *     auto-rename's commit edit, so a single Undo right after confirming a
+ *     rename revealed it sitting in the body instead of cleanly returning
+ *     to "nothing typed yet". U+200B renders as nothing in Obsidian's
+ *     editor (both before the user types over it and, if they Undo once
+ *     after confirming, when it reappears), while still satisfying every
+ *     structural requirement a real placeholder paragraph needs (it is a
+ *     stable anchor `resolveAnchorUnit`/`canSafelyRollbackParagraphInsert`
+ *     can re-resolve, and view/OutlineTreeView.ts's own post-insert
+ *     auto-rename opens it pre-selected in the inline rename box exactly
+ *     as before — selecting one invisible character is visually
+ *     indistinguishable from an empty box, and the very next keystroke
+ *     replaces it either way).
  *   - Bidirectional blank-line-separator logic, structurally mirroring
  *     edit/paragraphNonAdjacentMove.ts#ensureBlankSeparation's own
  *     "check both real sides independently, insert only where actually
@@ -175,12 +189,13 @@ function isParagraphCandidateLine(line: string | undefined): boolean {
 /**
  * The fixed placeholder text inserted for a brand-new paragraph — see this
  * module's top doc comment for why a non-empty, Markdown-paragraph-shaped
- * string is required, and why this exact string was chosen. Exported so
- * view/OutlineTreeView.ts's tests (and any future caller) can assert
- * against it directly rather than a magic string duplicated at each call
- * site.
+ * string is required, and why this exact single-character string (U+200B
+ * ZERO WIDTH SPACE, chosen so the placeholder renders as blank rather than
+ * as a visible word) was chosen. Exported so view/OutlineTreeView.ts's
+ * tests (and any future caller) can assert against it directly rather than
+ * a magic string/character duplicated at each call site.
  */
-export const PARAGRAPH_INSERT_PLACEHOLDER_TEXT = "新しい段落";
+export const PARAGRAPH_INSERT_PLACEHOLDER_TEXT = "​";
 
 /**
  * Inserts a new placeholder paragraph immediately before/after the

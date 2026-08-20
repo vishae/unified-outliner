@@ -459,3 +459,39 @@ D&D・Undo/Redo のいずれにも回帰は報告されていない。
 - **`edit/listBodyRange.ts` の技術的負債**: 本フェーズでも一切変更していない。5T-9A から
   引き続き別チケットとして切り出すことを推奨する。
 - **`parseDocument.ts` / `styles.css`**: 無変更（`git diff --stat` で確認済み）。
+
+## 14. 実機フィードバックに基づく修正（プレースホルダ文言、2026-08-20）
+
+§13 実装後の実機確認で、利用者より次のフィードバックを受けた。
+
+- 挿入 → rename 確定 → Undo という操作をすると、確定した文言の代わりに「新しい段落」という
+  語が本文に見えてしまう。
+- この問題を含め、挿入時にそもそも「新しい段落」という語は不要であり、空欄にしてほしい。
+
+原因は、§9 の検討時点ですでに識別され `利用者判断事項` として §10 へ持ち越されていた
+トレードオフ（「`"## "`/`"- "` は空文字に近い簡潔な記法であるのに対し、paragraph の
+プレースホルダは非空白の文言である必要があるため、キャンセル時に本文へ意味のある文言が
+そのまま残る点は heading/list より目立つ」）が、Cancel/Escape 経路だけでなく
+「rename 確定後に Undo を1回押した場合」にも同様に現れていたことによる。commitRename は
+insert 自身の `replaceRange` とは別の、独立した2つ目の Undo ステップとして書き込まれるため
+（§13「Undo/Redo契約」参照）、確定後の1回目の Undo は insert 時点の状態、すなわち
+プレースホルダ文言そのものへ本文を巻き戻す。これは実装上のバグではなく、可視のプレースホルダ
+文言を採用したこと自体に起因する、design-doc 上ですでに指摘済みの挙動だった。
+
+対応として、`edit/insertParagraph.ts#PARAGRAPH_INSERT_PLACEHOLDER_TEXT` を可視の日本語
+文言 `"新しい段落"` から、U+200B（ZERO WIDTH SPACE）1文字へ変更した。この文字は
+`parser/parseDocument.ts#isBlankLine`（半角スペース/タブのみを対象とする正規表現）に
+マッチしないため、`scanParagraphBlocks` からは引き続き「非空白の候補行」として認識され、
+paragraph としての構造的な有効性（`resolveAnchorUnit`/`canSafelyRollbackParagraphInsert`
+による再解決可能性を含む）は変更前と完全に同一のまま保たれる。一方で Obsidian のエディタ
+上では幅ゼロの不可視文字として描画されるため、挿入直後に自動的に開く inline rename の
+入力欄は（プレースホルダが選択状態で表示される点も含め）見た目上「空欄」になり、Cancel/
+Escape でロールバックされなかった場合や、rename 確定後に Undo を1回押した場合に本文へ
+現れるのも、可視の単語ではなく不可視の1文字になる。
+
+この変更は `PARAGRAPH_INSERT_PLACEHOLDER_TEXT` という単一の定数の値のみを変更したもので
+あり、`insertParagraph`/`canSafelyRollbackParagraphInsert`/`rollbackPendingParagraphInsert`
+自体のロジック、空行補正ロジック、rename との接続、Cancel/rollback 契約、Undo/Redo 契約は
+§13 記載のとおり無変更である。`tests/insertParagraph.test.ts` は文言をハードコードせず
+すべて `PARAGRAPH_INSERT_PLACEHOLDER_TEXT` 経由で参照しているため、変更後もテスト内容の
+更新は不要だった（値の変化に自動的に追従する）。
