@@ -47,13 +47,15 @@ describe("OutlineTreeView.ts paragraph inline rename (Phase 5T-8A)", () => {
   }
 
   it("applyParagraphEdit is imported from edit/paragraphPartialEdit.ts — the exact same function view/PartialEditView.ts's own Apply flow already uses — no new write primitive was introduced", () => {
-    expect(viewTs).toContain('import { applyParagraphEdit } from "../edit/paragraphPartialEdit";');
+    expect(viewTs).toContain(
+      'import { applyParagraphEdit, paragraphEditTextContainsBlankLine } from "../edit/paragraphPartialEdit";'
+    );
   });
 
   describe("beginParagraphRenameForNode", () => {
     function body(): string {
       return methodBody(
-        "private beginParagraphRenameForNode(nodeId: string, pendingParagraphInsert = false): void {"
+        "private beginParagraphRenameForNode(\n    nodeId: string,\n    pendingParagraphInsert = false,\n    insertOrigin?: { anchor: ParagraphMoveAnchor; position: ParagraphInsertPosition }\n  ): void {"
       );
     }
 
@@ -102,7 +104,7 @@ describe("OutlineTreeView.ts paragraph inline rename (Phase 5T-8A)", () => {
     it("delegates to beginRename with kind \"paragraph\" and the resolved anchor — never constructs its own textarea/DOM, never calls applyLineEditOutcome/applyParagraphEdit directly itself", () => {
       const b = body();
       expect(b).toContain(
-        'this.beginRename(nodeId, "paragraph", innerEl, rowSelfEl, anchor, pendingParagraphInsert);'
+        'this.beginRename(\n      nodeId,\n      "paragraph",\n      innerEl,\n      rowSelfEl,\n      anchor,\n      pendingParagraphInsert,\n      insertOrigin\n    );'
       );
       expect(b).not.toContain("createEl(\"textarea\"");
       expect(b).not.toContain("applyLineEditOutcome(");
@@ -161,7 +163,7 @@ describe("OutlineTreeView.ts paragraph inline rename (Phase 5T-8A)", () => {
       // Exactly one textarea is ever created per beginRename call, regardless of kind.
       expect(sharedTail.split('innerEl.createEl("textarea"').length - 1).toBe(1);
       expect(sharedTail).toContain(
-        "this.renameState = { nodeId, kind, inputEl, rowSelfEl, snapshot, pendingParagraphInsert };"
+        "this.renameState = {\n      nodeId,\n      kind,\n      inputEl,\n      rowSelfEl,\n      snapshot,\n      pendingParagraphInsert,\n      insertOrigin,\n    };"
       );
     });
 

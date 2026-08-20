@@ -206,12 +206,28 @@ export const PARAGRAPH_INSERT_PLACEHOLDER_TEXT = "​";
  *
  * `rules` must be the CALLER's currently-enabled CompositeBlockRule set,
  * exactly as edit/deleteParagraph.ts#deleteParagraph already requires.
+ *
+ * `bodyText` defaults to `PARAGRAPH_INSERT_PLACEHOLDER_TEXT` (every
+ * pre-existing call site omits it and is byte-for-byte unaffected by this
+ * parameter's addition). view/OutlineTreeView.ts's own
+ * commitPendingParagraphInsert passes the user's CONFIRMED rename text
+ * here instead, immediately after reverting the original placeholder
+ * insert with `Editor#undo()` — collapsing "insert placeholder, then
+ * separately patch its text on rename-confirm" into a single fresh insert
+ * of the real text, which is a single `replaceRange` call (and therefore a
+ * single Undo step) at the call site instead of two. Multi-line `bodyText`
+ * (soft-wrapped, no blank interior line — see
+ * edit/paragraphPartialEdit.ts#paragraphEditTextContainsBlankLine, which
+ * callers are expected to have already checked) is supported: each of its
+ * own lines becomes its own array element, exactly like any other
+ * multi-line paragraph body already spliced elsewhere in this codebase.
  */
 export function insertParagraph(
   text: string,
   anchor: ParagraphMoveAnchor,
   position: ParagraphInsertPosition,
-  rules: CompositeBlockRule[]
+  rules: CompositeBlockRule[],
+  bodyText: string = PARAGRAPH_INSERT_PLACEHOLDER_TEXT
 ): ParagraphInsertOutcome {
   const doc: ParsedDocument = parseDocument(text);
   const resolved = resolveAnchorUnit(doc, anchor);
@@ -243,9 +259,11 @@ export function insertParagraph(
   const needsBefore = isParagraphCandidateLine(lineBefore);
   const needsAfter = isParagraphCandidateLine(lineAfter);
 
+  const bodyLines = bodyText.split("\n");
+
   const segment: string[] = [];
   if (needsBefore) segment.push("");
-  segment.push(PARAGRAPH_INSERT_PLACEHOLDER_TEXT);
+  segment.push(...bodyLines);
   if (needsAfter) segment.push("");
 
   const outLines = [...doc.lines.slice(0, insertAt), ...segment, ...doc.lines.slice(insertAt)];
@@ -255,7 +273,7 @@ export function insertParagraph(
     changed: true,
     lines: outLines,
     newStartLine: placeholderLine,
-    newCursorCh: PARAGRAPH_INSERT_PLACEHOLDER_TEXT.length,
+    newCursorCh: bodyLines[bodyLines.length - 1].length,
   };
 }
 

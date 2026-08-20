@@ -1022,7 +1022,7 @@ describe("Phase 5T-10A: paragraph Tree-triggered insert (before/after, auto-rena
     expect(body).toContain("applyLineEditOutcome(");
     expect(body).toContain("paragraphInsertReasonText(");
     expect(body).toContain("this.refresh();");
-    expect(body).toContain("this.autoRenameAfterParagraphInsert();");
+    expect(body).toContain("this.autoRenameAfterParagraphInsert(anchor, position);");
     expect(body).not.toContain("queueSelectionFollow");
   });
 
@@ -1037,25 +1037,32 @@ describe("Phase 5T-10A: paragraph Tree-triggered insert (before/after, auto-rena
     }
   });
 
-  it("autoRenameAfterParagraphInsert reads this.highlightedId (set by dispatchAndApplyParagraphInsert's own refresh() call) and calls beginParagraphRenameForNode with pendingParagraphInsert = true — never the section/list-only beginRenameForNode/autoRenameAfterInsert, which cannot handle kind \"paragraph\"", () => {
-    const body = methodBody("private autoRenameAfterParagraphInsert(): void {");
-    expect(body).toContain("if (this.highlightedId) this.beginParagraphRenameForNode(this.highlightedId, true);");
+  it("autoRenameAfterParagraphInsert reads this.highlightedId (set by dispatchAndApplyParagraphInsert's own refresh() call) and calls beginParagraphRenameForNode with pendingParagraphInsert = true, plus the origin anchor/position passed straight through from dispatchAndApplyParagraphInsert — never the section/list-only beginRenameForNode/autoRenameAfterInsert, which cannot handle kind \"paragraph\"", () => {
+    const body = methodBody(
+      "private autoRenameAfterParagraphInsert(\n    originAnchor: ParagraphMoveAnchor,\n    originPosition: ParagraphInsertPosition\n  ): void {"
+    );
+    expect(body).toContain(
+      "if (this.highlightedId) {\n      this.beginParagraphRenameForNode(this.highlightedId, true, {\n        anchor: originAnchor,\n        position: originPosition,\n      });\n    }"
+    );
   });
 
-  it("beginParagraphRenameForNode/beginRename thread pendingParagraphInsert through to renameState — additive only, default false, existing dblclick call site (this.beginParagraphRenameForNode(nodeId)) is unchanged and therefore still implicitly false", () => {
+  it("beginParagraphRenameForNode/beginRename thread pendingParagraphInsert AND insertOrigin through to renameState — additive only, insertOrigin defaults to undefined, existing dblclick call site (this.beginParagraphRenameForNode(nodeId)) is unchanged and therefore still implicitly false/undefined", () => {
     expect(viewTs).toContain(
-      "private beginParagraphRenameForNode(nodeId: string, pendingParagraphInsert = false): void {"
+      "private beginParagraphRenameForNode(\n    nodeId: string,\n    pendingParagraphInsert = false,\n    insertOrigin?: { anchor: ParagraphMoveAnchor; position: ParagraphInsertPosition }\n  ): void {"
     );
     const beginParagraphBody = methodBody(
-      "private beginParagraphRenameForNode(nodeId: string, pendingParagraphInsert = false): void {"
+      "private beginParagraphRenameForNode(\n    nodeId: string,\n    pendingParagraphInsert = false,\n    insertOrigin?: { anchor: ParagraphMoveAnchor; position: ParagraphInsertPosition }\n  ): void {"
     );
     expect(beginParagraphBody).toContain(
-      'this.beginRename(nodeId, "paragraph", innerEl, rowSelfEl, anchor, pendingParagraphInsert);'
+      'this.beginRename(\n      nodeId,\n      "paragraph",\n      innerEl,\n      rowSelfEl,\n      anchor,\n      pendingParagraphInsert,\n      insertOrigin\n    );'
     );
     expect(viewTs).toContain(
-      "paragraphSnapshot?: ParagraphMoveAnchor,\n    pendingParagraphInsert = false\n  ): void {"
+      "paragraphSnapshot?: ParagraphMoveAnchor,\n    pendingParagraphInsert = false,\n    insertOrigin?: { anchor: ParagraphMoveAnchor; position: ParagraphInsertPosition }\n  ): void {"
     );
     expect(viewTs).toContain("pendingParagraphInsert?: boolean;");
+    expect(viewTs).toContain(
+      "insertOrigin?: { anchor: ParagraphMoveAnchor; position: ParagraphInsertPosition };"
+    );
   });
 
   it("cancelRename branches on pendingParagraphInsert BEFORE its own pre-existing 'never touch the document' body, which stays otherwise byte-for-byte reachable for every non-pending-insert rename", () => {
@@ -1092,6 +1099,55 @@ describe("Phase 5T-10A: paragraph Tree-triggered insert (before/after, auto-rena
       expect(enBlock).toContain(`"${key}"`);
       expect(jaBlock).toContain(`"${key}"`);
     }
+  });
+
+  it("(real-device follow-up) commitRename branches to commitPendingParagraphInsert only when BOTH pendingParagraphInsert and insertOrigin are set on renameState — every other rename (section/list, an ordinary EXISTING paragraph dblclick rename) is unaffected", () => {
+    const body = methodBody("private commitRename(): void {");
+    expect(body).toContain(
+      'if (state.kind === "paragraph" && state.pendingParagraphInsert && state.insertOrigin) {'
+    );
+    expect(body).toContain("this.commitPendingParagraphInsert(state.insertOrigin);");
+    const branchIdx = body.indexOf(
+      'if (state.kind === "paragraph" && state.pendingParagraphInsert && state.insertOrigin) {'
+    );
+    const ternaryIdx = body.indexOf('state.kind === "section"');
+    expect(ternaryIdx).toBeGreaterThan(branchIdx);
+  });
+
+  it("(real-device follow-up) commitPendingParagraphInsert collapses insert+confirm into a SINGLE Undo step: rejects a blank-line rawValue first, then — only if canSafelyRollbackParagraphInsert passes — calls editor.undo() BEFORE the fresh insertParagraph(revertedText, insertOrigin.anchor, insertOrigin.position, rules, rawValue) call, so exactly one replaceRange (via one applyLineEditOutcome call) reaches the editor for the whole gesture", () => {
+    const body = methodBody(
+      "private commitPendingParagraphInsert(insertOrigin: {\n    anchor: ParagraphMoveAnchor;\n    position: ParagraphInsertPosition;\n  }): void {"
+    );
+    expect(body).toContain("paragraphEditTextContainsBlankLine(rawValue)");
+    expect(body).toContain(
+      "canSafelyRollbackParagraphInsert(editor.getValue(), placeholderAnchor)"
+    );
+    const undoIdx = body.indexOf("editor.undo();");
+    const insertIdx = body.indexOf(
+      "insertParagraph(\n      revertedText,\n      insertOrigin.anchor,\n      insertOrigin.position,\n      rules,\n      rawValue\n    );"
+    );
+    expect(undoIdx).toBeGreaterThan(-1);
+    expect(insertIdx).toBeGreaterThan(undoIdx);
+    // Exactly one applyLineEditOutcome call reaches the editor on the
+    // collapsed (canCollapse === true, outcome.changed === true) success
+    // path — the in-place fallback (canCollapse === false) and the
+    // defensive redo-then-fallback branch each also call it exactly once,
+    // but never together with the collapsed path in the same run, so the
+    // METHOD BODY as a whole legitimately contains it more than once
+    // (one per branch) — this only asserts the collapsed path's own call
+    // comes strictly after the undo()+insertParagraph() pair above.
+    const applyAfterInsertIdx = body.indexOf("applyLineEditOutcome(", insertIdx);
+    expect(applyAfterInsertIdx).toBeGreaterThan(insertIdx);
+    expect(body).toContain("this.finishRenameCommit(editor);");
+  });
+
+  it("(real-device follow-up) commitPendingParagraphInsert falls back to the ORIGINAL in-place patch (applyParagraphEdit against the still-existing placeholder) when canSafelyRollbackParagraphInsert returns false — the same safe-side no-op allowance rollbackPendingParagraphInsert already documents, applied here too", () => {
+    const body = methodBody(
+      "private commitPendingParagraphInsert(insertOrigin: {\n    anchor: ParagraphMoveAnchor;\n    position: ParagraphInsertPosition;\n  }): void {"
+    );
+    expect(body).toContain("applyParagraphEdit(doc, placeholderAnchor, rawValue)");
+    expect(body).toContain("if (!canCollapse) {");
+    expect(body).toContain("editor.redo();");
   });
 
   it("edit/insertParagraph.ts reuses parser/parseDocument.ts's existing exports (parseDocument/isBlankLine) exactly like edit/deleteParagraph.ts already does, rather than adding any new export to that module — this file's own scope forbids MODIFYING parser/parseDocument.ts, not importing its pre-existing API", () => {

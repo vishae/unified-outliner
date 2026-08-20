@@ -495,3 +495,51 @@ Escape でロールバックされなかった場合や、rename 確定後に Un
 §13 記載のとおり無変更である。`tests/insertParagraph.test.ts` は文言をハードコードせず
 すべて `PARAGRAPH_INSERT_PLACEHOLDER_TEXT` 経由で参照しているため、変更後もテスト内容の
 更新は不要だった（値の変化に自動的に追従する）。
+
+## 15. 実機フィードバックに基づく修正（Undo の1ステップ化、2026-08-20）
+
+§14 の修正後の実機確認で、利用者より次のフィードバックを受けた。
+
+- 「新しい段落」の問題（§14）は解消された。
+- ただし、rename 確定後に Undo を1回押すと、確定した文字行は消えるが空行が残り、
+  Outline Tree に「Paragraph 1」という（プレースホルダの）行が表示されたままになる。
+  これは §13 で文書化した「2ステップ化」の正常動作そのものだが、利用者としては Undo
+  1回で挿入前の状態へ完全に戻ってほしい。
+
+原因は §13 の Undo/Redo 契約そのものである: insert 自身の `replaceRange` と、rename 確定
+（commitRename）の `replaceRange` が独立した2つの Undo ステップとして記録されるため、
+確定後の Undo 1回目は commitRename の書き込みのみを取り消し、insert 自身の書き込み
+（プレースホルダ本体＋区切り空行）はそのまま残っていた。
+
+対応として、insert と rename 確定の2つの書き込みを1つの Undo ステップへ実質的に統合する
+よう `commitRename`/新設 `commitPendingParagraphInsert` を変更した。具体的には、rename
+確定時（`pendingParagraphInsert && insertOrigin` が両方成立する場合のみ、新設の
+`renameState.insertOrigin` — `dispatchAndApplyParagraphInsert` 自身の `anchor`/
+`position` をそのまま `autoRenameAfterParagraphInsert` → `beginParagraphRenameForNode` →
+`beginRename` 経由で保持したもの — が必要）:
+
+1. `canSafelyRollbackParagraphInsert` でプレースホルダ paragraph が未編集のまま再解決
+   可能かを確認する（`rollbackPendingParagraphInsert` と同じ安全確認）。
+2. 確認できた場合、まず `Editor#undo()` で insert 自身の書き込みを取り消し、挿入前の
+   状態（プレースホルダも区切り空行も存在しない状態）へ戻す。
+3. 直後に、同じ `insertParagraph` 関数を、元の `insertOrigin.anchor`/`insertOrigin.position`
+   と、利用者が確定したテキスト（`rawValue`）を新設の `bodyText` 引数として渡して
+   もう一度呼び、確定済みテキストを直接本文に挿入する。これは1回の `applyLineEditOutcome`
+   （＝1回の `replaceRange`）で完了する。
+
+結果として、insert から rename 確定までの全体が本文へは1回の `replaceRange` としてしか
+反映されなくなり、Undo を1回押すだけで、確定した文字行・区切り空行を含めた挿入全体が
+完全に取り消される。安全確認（1）が false を返した場合（何らかの理由でプレースホルダが
+再解決できない場合）は、`Editor#undo()` を呼ばず、§13 のもともとの実装どおり
+`applyParagraphEdit` によるプレースホルダ本文の直接置き換えにフォールバックする
+（この場合のみ2ステップの Undo が残るが、ticket §6/§7 の「resolve不能な場合は安全側
+no-op」という既存の許容に相当する）。`insertParagraph` の第2回目の呼び出しが
+`outcome.changed: false` を返した場合（現状の不変条件からは到達不能だが防御的に処理）は
+`Editor#redo()` でプレースホルダを復元したうえで同じフォールバックへ合流する。
+
+`edit/insertParagraph.ts#insertParagraph` は、新設の任意引数 `bodyText`（既定値は
+`PARAGRAPH_INSERT_PLACEHOLDER_TEXT`）を受け取れるように拡張した。既存の呼び出し箇所
+（`dispatchAndApplyParagraphInsert`）は引数を省略しているため挙動は無変更であり、
+`tests/insertParagraph.test.ts` も無修正で全通過する。空行補正ロジック・再解決契約・
+スコープ判定・composite-member 判定は無変更。`parseDocument.ts` / `styles.css` /
+`edit/listBodyRange.ts` は本修正でも diff なし（`git diff --stat` で確認済み）。

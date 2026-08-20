@@ -187,10 +187,12 @@ describe("OutlineTreeView.ts paragraph dblclick/F2 launch wiring (Phase 5T-7A, p
     // form specifically avoids counting the declaration itself, so this
     // should be exactly 2.
     expect(occurrences).toBe(2);
-    const autoRenameIdx = viewTs.indexOf("private autoRenameAfterParagraphInsert(): void {");
+    const autoRenameIdx = viewTs.indexOf(
+      "private autoRenameAfterParagraphInsert(\n    originAnchor: ParagraphMoveAnchor,\n    originPosition: ParagraphInsertPosition\n  ): void {"
+    );
     expect(autoRenameIdx).toBeGreaterThan(-1);
     const secondCallIdx = viewTs.indexOf(
-      "this.beginParagraphRenameForNode(this.highlightedId, true);"
+      "this.beginParagraphRenameForNode(this.highlightedId, true, {"
     );
     expect(secondCallIdx).toBeGreaterThan(autoRenameIdx);
   });

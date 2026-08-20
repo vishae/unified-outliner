@@ -294,7 +294,7 @@ import {
   RowPointerDownRecord,
 } from "./rowDoubleClickDetector";
 import { applyLineEditOutcome, LineEditOutcome } from "../commands/applyLineEditOutcome";
-import { applyParagraphEdit } from "../edit/paragraphPartialEdit";
+import { applyParagraphEdit, paragraphEditTextContainsBlankLine } from "../edit/paragraphPartialEdit";
 import { TranslationKey } from "../i18n";
 
 export const OUTLINE_TREE_VIEW_TYPE = "unified-outliner-outline-tree";
@@ -554,6 +554,21 @@ export class OutlineTreeView extends ItemView {
      * method's own doc comment for the full rollback design.
      */
     pendingParagraphInsert?: boolean;
+    /**
+     * Phase 5T-10A follow-up (real-device feedback: confirming this rename
+     * left a stray blank line behind after a single Undo, because insert
+     * and confirm were two independent Undo steps): the ORIGINAL target
+     * anchor + before/after position captured when the Tree's "段落を前/
+     * 後に挿入" menu item was clicked — i.e. `dispatchAndApplyParagraphInsert`'s
+     * own two parameters, threaded all the way through
+     * autoRenameAfterParagraphInsert/beginParagraphRenameForNode/beginRename
+     * so commitRename can reach them. Only ever set together with
+     * `pendingParagraphInsert: true`. commitRename uses this to revert the
+     * placeholder insert with `Editor#undo()` and re-insert the CONFIRMED
+     * text fresh, in one single `replaceRange` — see
+     * commitPendingParagraphInsert's own doc comment for the full design.
+     */
+    insertOrigin?: { anchor: ParagraphMoveAnchor; position: ParagraphInsertPosition };
   } | null = null;
 
   /**
@@ -3689,7 +3704,7 @@ export class OutlineTreeView extends ItemView {
         true
       );
       this.refresh();
-      this.autoRenameAfterParagraphInsert();
+      this.autoRenameAfterParagraphInsert(anchor, position);
     }
     return changed;
   }
@@ -4178,7 +4193,8 @@ export class OutlineTreeView extends ItemView {
     innerEl: HTMLElement,
     rowSelfEl: HTMLElement,
     paragraphSnapshot?: ParagraphMoveAnchor,
-    pendingParagraphInsert = false
+    pendingParagraphInsert = false,
+    insertOrigin?: { anchor: ParagraphMoveAnchor; position: ParagraphInsertPosition }
   ): void {
     // Already renaming this exact node (e.g. a second dblclick landed on
     // the now-open input, which is still inside innerEl and still carries
@@ -4394,7 +4410,15 @@ export class OutlineTreeView extends ItemView {
     // same line, but this is the more literally correct scoping).
     inputEl.addEventListener("click", (evt) => evt.stopPropagation());
 
-    this.renameState = { nodeId, kind, inputEl, rowSelfEl, snapshot, pendingParagraphInsert };
+    this.renameState = {
+      nodeId,
+      kind,
+      inputEl,
+      rowSelfEl,
+      snapshot,
+      pendingParagraphInsert,
+      insertOrigin,
+    };
     inputEl.focus();
     inputEl.select();
   }
@@ -4490,7 +4514,11 @@ export class OutlineTreeView extends ItemView {
    * docs/phase5t8a_paragraph_dblclick_inline_rename_design.md for the full
    * writeup.
    */
-  private beginParagraphRenameForNode(nodeId: string, pendingParagraphInsert = false): void {
+  private beginParagraphRenameForNode(
+    nodeId: string,
+    pendingParagraphInsert = false,
+    insertOrigin?: { anchor: ParagraphMoveAnchor; position: ParagraphInsertPosition }
+  ): void {
     const treeNode = this.nodeById.get(nodeId);
     if (!treeNode || !isOutlineParagraphNode(treeNode)) return;
     const doc = this.currentDoc;
@@ -4512,7 +4540,15 @@ export class OutlineTreeView extends ItemView {
     );
     const innerEl = rowSelfEl?.querySelector<HTMLElement>(".tree-item-inner") ?? null;
     if (!rowSelfEl || !innerEl) return;
-    this.beginRename(nodeId, "paragraph", innerEl, rowSelfEl, anchor, pendingParagraphInsert);
+    this.beginRename(
+      nodeId,
+      "paragraph",
+      innerEl,
+      rowSelfEl,
+      anchor,
+      pendingParagraphInsert,
+      insertOrigin
+    );
   }
 
   /**
@@ -4526,9 +4562,24 @@ export class OutlineTreeView extends ItemView {
    * node's id here" reasoning autoRenameAfterInsert's own doc comment
    * documents. `pendingParagraphInsert = true` is the one thing that
    * differs from an ordinary paragraph double-click rename.
+   *
+   * `originAnchor`/`originPosition` are `dispatchAndApplyParagraphInsert`'s
+   * own two parameters, passed straight through (untouched by refresh()) so
+   * a later commitPendingParagraphInsert can re-run the insert against the
+   * ORIGINAL target — see renameState.insertOrigin's own doc comment for
+   * why this is threaded all the way through rather than re-derived from
+   * the placeholder's own (post-insert) anchor.
    */
-  private autoRenameAfterParagraphInsert(): void {
-    if (this.highlightedId) this.beginParagraphRenameForNode(this.highlightedId, true);
+  private autoRenameAfterParagraphInsert(
+    originAnchor: ParagraphMoveAnchor,
+    originPosition: ParagraphInsertPosition
+  ): void {
+    if (this.highlightedId) {
+      this.beginParagraphRenameForNode(this.highlightedId, true, {
+        anchor: originAnchor,
+        position: originPosition,
+      });
+    }
   }
 
   /**
@@ -4605,6 +4656,20 @@ export class OutlineTreeView extends ItemView {
     const state = this.renameState;
     if (!state) return;
 
+    // Phase 5T-10A follow-up (real-device feedback: a single Undo right
+    // after confirming this rename left a stray blank line behind instead
+    // of cleanly reverting) — a rename that began as a post-insert
+    // auto-rename AND still carries its origin commits through a dedicated
+    // path that collapses the insert + confirm into a single Undo step.
+    // Every other rename (section/list, an ordinary EXISTING paragraph
+    // dblclick rename, or a pendingParagraphInsert rename that lost its
+    // insertOrigin — structurally shouldn't happen, but defensively falls
+    // through to the unchanged code below) is completely unaffected.
+    if (state.kind === "paragraph" && state.pendingParagraphInsert && state.insertOrigin) {
+      this.commitPendingParagraphInsert(state.insertOrigin);
+      return;
+    }
+
     const view = this.activeMarkdownView.get();
     if (!view) {
       this.notify(this.plugin.t("reason.no-active-editor"));
@@ -4635,7 +4700,131 @@ export class OutlineTreeView extends ItemView {
     );
 
     if (!changed) return;
+    this.finishRenameCommit(editor);
+  }
 
+  /**
+   * Phase 5T-10A follow-up: commitRename's dedicated path for a rename
+   * that began as a post-insert auto-rename (`pendingParagraphInsert` +
+   * `insertOrigin` both set — see renameState's own doc comment).
+   *
+   * Real-device feedback on the original design (insert the placeholder
+   * via its own `replaceRange`, later patch its text in place via a
+   * SECOND, independent `replaceRange` on confirm) was that a single Undo
+   * right after confirming reverted only the second edit, leaving the
+   * placeholder's own blank-line separator(s) behind in the note and a
+   * lingering paragraph row in the Tree — technically the documented
+   * "2-step Undo" behavior (5T-10A §13), but confusing in practice: the
+   * user expects one Undo to cleanly restore the note to exactly how it
+   * looked before the insert.
+   *
+   * This method collapses the two edits into one: it first reverts the
+   * ORIGINAL placeholder insert with `Editor#undo()` (the exact same
+   * mechanism, and the exact same `canSafelyRollbackParagraphInsert`
+   * safety check, rollbackPendingParagraphInsert already uses for
+   * Cancel/Escape — see that method's own doc comment for the full
+   * "why undo() is safe here" reasoning, which applies identically at
+   * commit time: nothing can have interleaved between the insert and this
+   * confirm either), then performs a SINGLE fresh `insertParagraph` call
+   * against the now-reverted (pre-insert) text, passing the user's
+   * CONFIRMED value as `bodyText` instead of the placeholder constant, and
+   * applies that as one `applyLineEditOutcome` write. Net result: exactly
+   * one `replaceRange` call reaches the editor for the whole
+   * insert-then-rename gesture, so exactly one Undo now reverts it
+   * completely (text, separators, and all) — matching every other
+   * Tree-triggered command in this codebase, where one user-visible action
+   * is one Undo step.
+   *
+   * If the safety check fails (something else changed the placeholder in
+   * the meantime — the same "resolve不能な場合は安全側no-op" allowance
+   * rollbackPendingParagraphInsert already documents), this falls back to
+   * the ORIGINAL two-step behavior: patch the placeholder's own text in
+   * place via `applyParagraphEdit`, exactly as commitRename's own
+   * pre-5T-10A-follow-up code did. That fallback is still fully correct,
+   * just not collapsed into a single Undo step.
+   */
+  private commitPendingParagraphInsert(insertOrigin: {
+    anchor: ParagraphMoveAnchor;
+    position: ParagraphInsertPosition;
+  }): void {
+    const state = this.renameState;
+    if (!state) return;
+
+    const view = this.activeMarkdownView.get();
+    if (!view) {
+      this.notify(this.plugin.t("reason.no-active-editor"));
+      return;
+    }
+    const editor = view.editor;
+    if (editor.listSelections().length > 1) {
+      this.notify(this.plugin.t("notice.multipleCursors"));
+      return;
+    }
+
+    const rawValue = state.inputEl.value;
+    if (paragraphEditTextContainsBlankLine(rawValue)) {
+      this.notify(this.reasonText("blank-line-not-allowed"));
+      return;
+    }
+
+    const placeholderAnchor = state.snapshot as ParagraphMoveAnchor;
+    const canCollapse = canSafelyRollbackParagraphInsert(editor.getValue(), placeholderAnchor);
+
+    const commitInPlace = (): void => {
+      const doc = parseDocument(editor.getValue());
+      const outcome = applyParagraphEdit(doc, placeholderAnchor, rawValue);
+      const changed = applyLineEditOutcome(editor, { line: 0, ch: 0 }, 0, doc.lines, outcome, () =>
+        this.notify(this.reasonText(outcome.reason))
+      );
+      if (changed) this.finishRenameCommit(editor);
+    };
+
+    if (!canCollapse) {
+      commitInPlace();
+      return;
+    }
+
+    editor.undo();
+    const revertedText = editor.getValue();
+    const rules = getEnabledCompositeBlockRules(this.plugin.settings.compositeBlocks);
+    const outcome = insertParagraph(
+      revertedText,
+      insertOrigin.anchor,
+      insertOrigin.position,
+      rules,
+      rawValue
+    );
+
+    if (!outcome.changed) {
+      // Structurally unreachable given the same "nothing can interleave"
+      // invariant rollbackPendingParagraphInsert's own doc comment already
+      // proves for Cancel/Escape — kept defensively: redo the placeholder
+      // back rather than leave the note mid-undo with the user's confirmed
+      // text dropped, then fall back to the in-place patch above.
+      editor.redo();
+      commitInPlace();
+      return;
+    }
+
+    const changed = applyLineEditOutcome(
+      editor,
+      { line: 0, ch: 0 },
+      0,
+      revertedText.split("\n"),
+      outcome,
+      () => this.notify(paragraphInsertReasonText((k) => this.plugin.t(k), outcome.reason))
+    );
+    if (changed) this.finishRenameCommit(editor);
+  }
+
+  /**
+   * Shared commit tail: clear renameState, scroll the new cursor position
+   * into view, and refresh() the Tree — factored out of commitRename so
+   * commitPendingParagraphInsert's several success paths (in-place patch,
+   * collapsed single insert, redo-then-in-place-patch fallback) can share
+   * it rather than duplicate it.
+   */
+  private finishRenameCommit(editor: Editor): void {
     this.renameState = null;
     const cur = editor.getCursor();
     const lineLen = editor.getLine(cur.line)?.length ?? 0;
