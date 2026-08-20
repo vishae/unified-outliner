@@ -323,3 +323,49 @@ delete は既存の move/CompositeBlock delete の再解決契約をほぼその
    修正を、本フェーズと同時に行うか、別チケットとして切り出すか（list item 子 paragraph を
    対象外とする限り本フェーズの実装には影響しないが、いずれ解消が必要な既存の技術的負債
    として記録する）。
+
+## 11. 実装確定内容（Phase 5T-9A、2026-08-20）
+
+上記§10の5問への回答が確定し、delete が最小スコープで実装された（コミット `188c932`）。
+insert は本フェーズでは未実装のまま据え置く。
+
+- **採用した delete UX**: 案B（専用コマンド + 確認モーダル）。CompositeBlock delete の
+  `ConfirmCompositeDeleteModal` パターンを `view/ConfirmParagraphDeleteModal.ts` として
+  そのまま踏襲した（`resolved` フラグ、Cancel先頭・非focus、Delete は `mod-warning`、
+  `onClose` の暗黙キャンセルは常に `onChoice(false)`）。折衷案（案A→実機確認後に判断）は
+  不採用。
+- **初期スコープ**: top-level paragraph と section 直下 paragraph のみ。list item 子
+  paragraph は明示的に対象外とし、`edit/deleteParagraph.ts#isInScopeParagraphParent` で
+  メニュー表示時とコマンド実行時の両方に同じスコープ判定を適用する。
+- **再解決契約**: 新規モジュールを起こさず、`edit/paragraphTreeMove.ts#resolveAnchorUnit`
+  （id候補 → parentId/depth構造一致 → 本文バイト一致 + 文書全体の曖昧一致検査、の3段階＋
+  曖昧性チェック）をそのまま再利用した。delete固有の追加チェックは2つ:
+  (1) 親が list item の場合は `"list-item-parent"` で拒否、
+  (2) `matchCompositeBlocks` を再実行し CompositeBlock のメンバーであれば `"composite-member"`
+  で拒否（ただし `parser/compositeBlocks.ts#collectCandidates` が `kind === "paragraph"` を
+  合成候補から常に除外しているため、現状はこの分岐に到達し得ないことを
+  `tests/deleteParagraph.test.ts` で直接検証した — 将来 paragraph が合成メンバーとして
+  設計された場合に備えた防御的実装として維持する）。
+- **空行結合防止**: `paragraphNonAdjacentMove.ts#ensureBlankSeparation` と同種の、削除後に
+  新しく隣接する2行が両方とも「段落候補行」（非空白・非見出し・非リストマーカー）である
+  場合にのみ空行を1行だけ挿入する条件付き補正を実装した。ただし
+  `scanParagraphBlocks` の貪欲な候補走査の性質上、独立して解決可能な paragraph は既に
+  両側が空行・見出し・リストマーカー・文書端のいずれかで区切られていることが構造的に
+  保証されるため、この分岐も現状は理論上到達不能である（`tests/deleteParagraph.test.ts`
+  内に、この性質を明示的に検証・文書化したテストを含む）。`deleteCompositeBlock.ts`の
+  `NoCompositeDeleteReason` が既に持つ「現状到達不能な理由を将来のための防御として残す」
+  という本コードベースの既存方針にならった。
+- **delete 後の選択/フォーカス**: 次の兄弟（同じ parentId/depth を共有する
+  paragraph/callout/blockquote のうち削除範囲より後で最も近いもの）→ 前の兄弟（同条件で
+  最も近いもの）→ 親セクションの見出し行 → 削除開始行（クランプ）、の順で `newStartLine`
+  を決定し、`queueSelectionFollow` に渡す。これは section/list の汎用 delete
+  （`runDeleteCommand`/`dispatchAndApply(..., false)`）が selection-follow を行わない
+  方針とは異なる、本チケット§6の明示的要求に基づく意図的な違いである。
+- **UI 導線**: `showParagraphMoveMenu` の既存メニュー構造に「段落を削除」項目を追加した
+  （新規の専用メニューは作らなかった）。表示は `isInScopeParagraphParent` によるスコープ
+  ゲートのみで、他の move/edit 項目とは独立して判定される。
+- **`edit/listBodyRange.ts` の技術的負債**: 本フェーズでは一切変更していない。list item
+  子 paragraph を対象外としたため直接の影響はないが、Phase 5P-1 未追随（同一行がツール
+  チップと独立 paragraph Tree ノードの両方に二重表現される問題）は未解消のまま残っている。
+  別チケットとして切り出すことを推奨する。
+- **`parseDocument.ts` / `styles.css`**: 無変更（`git diff --stat` で確認済み）。
