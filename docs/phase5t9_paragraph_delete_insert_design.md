@@ -380,3 +380,82 @@ D&D・Undo/Redo のいずれにも回帰は報告されていない。
 
 これをもって Phase 5T-9A の delete 実装（コミット `188c932`／docs `634e0f5`）は実機受入
 完了とする。insert は引き続き未着手であり、次フェーズへ持ち越す。
+
+## 13. 実装確定内容（Phase 5T-10A、2026-08-20）
+
+5T-9A の実機受入完了を受けて、Outline Tree paragraph insert（top-level / section 直下、
+最小スコープ）を実装した。
+
+- **Insert UI**: 既存の `showParagraphMoveMenu` を拡張し、「段落を前に挿入」「段落を後に
+  挿入」の2項目を「段落を編集…」の直後・Move up/down の直前に追加した。表示は delete 項目
+  と同じ `isInScopeParagraphParent` ゲート（計算を1回にまとめ、insert 2項目・delete 1項目
+  で共有）。
+- **スコープ**: top-level / section 直下 paragraph の insert-before / insert-after のみ。
+  list item 子 paragraph、parent 先頭/末尾への insert、section/list 境界を跨ぐ insert は
+  すべて対象外（据え置き）。
+- **採用したプレースホルダ文言**: `"新しい段落"`
+  （`edit/insertParagraph.ts#PARAGRAPH_INSERT_PLACEHOLDER_TEXT`）。paragraph は見出し/リスト
+  と異なり構文マーカーを持たないため、空文字列では `scanParagraphBlocks` に候補行として
+  認識されない — Markdown として即座に paragraph と認識される非空文字列が必要という制約
+  への対応。挿入直後に inline rename が自動的に開き、この文言は選択状態で表示されるため、
+  次の1打鍵で置き換わることを前提とした最小限の文言とした。
+  Cancel/Escape で確定されなかった場合は insert 自体がロールバックされるため、この文言が
+  本文に永続することは正常フローでは想定していない。
+- **再解決契約**: delete と同じ `edit/paragraphTreeMove.ts#resolveAnchorUnit` を再利用。
+  スコープ判定も `edit/deleteParagraph.ts#isInScopeParagraphParent` をそのまま import
+  して再利用し、delete と insert のスコープ契約が構造的に乖離しないようにした。
+  composite-member チェックも delete と同じ理由（`collectCandidates` が paragraph を合成
+  候補から常に除外）で現状到達不能だが、防御的実装として維持した
+  （`tests/insertParagraph.test.ts` で明示的に検証）。
+- **空行補正**: `paragraphNonAdjacentMove.ts#ensureBlankSeparation` と同種の、双方向・
+  条件付きの空行挿入ロジックを実装した。挿入位置の直前・直後それぞれについて独立に
+  「段落候補行（非空白・非見出し・非リストマーカー）かどうか」を判定し、必要な側にのみ
+  空行を1行だけ挿入する。delete のケースと異なり insert は新しい境界を2つ生成するため、
+  片側（対象paragraphに接する側）は常に空行が必要、もう片側（対象paragraphの外側、既存の
+  行に接する側）は構造的にほぼ常に不要（対象paragraph自身が独立して解決可能であった
+  ことがその境界の非候補性を保証するため）だが、この分岐は決め打ちにせず、両側とも実際の
+  行内容を再チェックする汎用実装とした。
+- **rename との接続**: `renameState`（`beginRename`/`beginParagraphRenameForNode`）に
+  追加専用の `pendingParagraphInsert` フラグを導入。insert 直後は新しい
+  `autoRenameAfterParagraphInsert()`（`dispatchAndApplyParagraphInsert` 内の `refresh()`
+  完了後に呼ばれ、`this.highlightedId`—5T-5A の `resolveCurrentPositionNodeId` が
+  `newCursorCh` で置かれたカーソル位置から自動的に解決する—を使って
+  `beginParagraphRenameForNode(id, true)` を呼ぶ）が inline rename を自動的に開始する。
+  rename を確定（Enter／内容が変化した状態での blur）した場合のみ paragraph は本文に残る。
+  既存の heading/list/既存 paragraph の rename パスは完全に無変更（`pendingParagraphInsert`
+  は追加専用のオプショナルフィールド・引数で、デフォルト `false`）。
+- **Cancel/rollback 契約**: Escape、またはプレースホルダ未変更のまま blur（既存の
+  blur ハンドラが「値が initialText と同じなら cancelRename()」という判定を既に持って
+  いるため、5T-10A 用の特別分岐は不要だった）は、いずれも既存の `cancelRename()` に到達
+  する。`cancelRename()` は `pendingParagraphInsert && kind === "paragraph"` の場合のみ
+  新設の `rollbackPendingParagraphInsert(anchor)` に分岐する（それ以外の既存パス — 通常の
+  heading/list/paragraph rename の cancel — は一切変更していない）。
+  `rollbackPendingParagraphInsert` は `edit/insertParagraph.ts#canSafelyRollbackParagraphInsert`
+  でプレースホルダ paragraph が未編集のまま再解決可能かを検証したうえで、Obsidian の
+  `Editor#undo()` を呼ぶ。手動での逆スプライス関数は実装しなかった: (1) rename の textarea
+  は commitRename() が走るまで本文に一切書き込まない DOM オーバーレイである、
+  (2) `beginRename` 自身の「既に rename 中なら先に cancel する」ガードにより、この rename
+  が開いている間に他の Tree 起動編集が割り込むことはない、(3) 本文エディタ自体をクリック
+  すると、その操作は必ずこの textarea 自身の blur ハンドラを先に発火させる（プレースホルダ
+  未変更のため cancel に帰着する）ため、undo 実行時点でエディタの直近の Undo 履歴エントリ
+  は必ず insert 自身の `replaceRange` 呼び出し1件のみであることが構造的に保証される。
+  これにより `editor.undo()` は新規の Undo 履歴エントリを一切生成せずに insert
+  （プレースホルダ本体＋実際に追加された区切り空行）を正確に取り消し、その後の Redo も
+  自然に正しく復元する。`canSafelyRollbackParagraphInsert` が false を返した場合（＝
+  何らかの理由でプレースホルダが未編集のまま再解決できない場合）は undo を呼ばず、
+  rename box を閉じるだけに留める（プレースホルダは通常の本文として残る）— チケット
+  §6/§7 の「resolve不能な場合は安全側no-op」要求への対応。
+- **Undo/Redo契約**: 上記の通り、(A) insert から rename 確定までは
+  `editor.replaceRange()` が2回（insert 自身の1回、commitRename の1回）呼ばれるため、
+  厳密には2つの独立した Undo ステップになる（5T-8A の commitRename 自身の doc comment
+  が既に検証している通り、このコードベースでは個々の `replaceRange` 呼び出しは呼び出し
+  タイミングや `origin` 引数に関わらず常に独立した Undo ステップになるという Obsidian の
+  実測済み挙動があるため、新規の Undo グルーピング機構を追加しない限り単一ステップ化は
+  できない）。ただし (B) Cancel/Escape 経路は `editor.undo()` を使うため新規 Undo 履歴を
+  一切残さず、プレースホルダの残骸も残らない — これは (B) の「最低限、Cancel/Escape は
+  本文にゴミを残さず、Undo 履歴を過度に汚さない」という §7 の最低要件を満たす。(A) の
+  2ステップ化は、体感として「insert → 続けて Undo を2回押すと元に戻る」という形になる
+  （1回目の Undo で rename 確定分が、2回目の Undo で insert 自体が取り消される）。
+- **`edit/listBodyRange.ts` の技術的負債**: 本フェーズでも一切変更していない。5T-9A から
+  引き続き別チケットとして切り出すことを推奨する。
+- **`parseDocument.ts` / `styles.css`**: 無変更（`git diff --stat` で確認済み）。
