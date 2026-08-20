@@ -190,3 +190,17 @@ Paragraph Partial Edit Pane 自体（`view/PartialEditView.ts`・
 - `npm run lint`: エラーなし（`src/settings.ts` の既存・本フェーズ無関係の警告3件のみ）
 - `npm run build`: 成功
 - `git diff -- src/parser/parseDocument.ts styles.css`: 差分なし（0行）
+
+## 10. 実機受入結果（追記）
+
+実装コミット（`919dfe2`）を反映した状態で利用者による実機確認を行い、「実機で正常に動作する
+ことを確認した」との報告を受けた。Method Vault の
+`phase5t8a-paragraph-inline-rename-manual-check.md` の12項目（左右サイドバーでの paragraph
+inline rename の起動・保存・キャンセル、Partial Edit Pane がダブルクリックでは開かないこと、
+context menu「段落を編集…」/F2 からの Partial Edit 起動、heading/list rename の非回帰、
+drag handle/collapse toggle での誤起動なし、D&D/drop indicator の非回帰、Tree
+選択・ハイライト・現在位置表示の保持、Undo/Redo）を含め、異常は報告されていない。
+
+これにより、Phase 5T-7B（設計監査）・5T-7C（pointerdown ベースの独立二重クリック検出への
+置き換え）・5T-8A（paragraph ダブルクリックの inline rename への統一）の一連の作業は完了
+とする。
