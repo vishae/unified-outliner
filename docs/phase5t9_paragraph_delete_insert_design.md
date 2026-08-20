@@ -543,3 +543,18 @@ no-op」という既存の許容に相当する）。`insertParagraph` の第2�
 `tests/insertParagraph.test.ts` も無修正で全通過する。空行補正ロジック・再解決契約・
 スコープ判定・composite-member 判定は無変更。`parseDocument.ts` / `styles.css` /
 `edit/listBodyRange.ts` は本修正でも diff なし（`git diff --stat` で確認済み）。
+
+## 16. 実機受入結果（Phase 5T-10A、2026-08-20）
+
+§14/§15 の2回の修正を経て、Method Vault のチェックリスト
+（`phase5t10a-paragraph-insert-manual-check.md`、14項目）に基づく実機確認の結果、
+利用者より「redo 一回で元に戻った。これで手動確認は完了した。」との報告を受けた。
+insert → rename 確定 → Undo 1回で挿入全体（文字行・空行とも）が完全に取り消され、
+続けて Redo 1回で確定済みの状態へ正確に復元されることを確認済み。プレースホルダ文言
+（§14）、Undo の1ステップ化（§15）を含め、top-level / section 直下 paragraph の
+insert-before / insert-after、確認済み rename での確定、Cancel/Escape によるロール
+バック、既存の paragraph rename・delete・Paragraph Partial Edit・heading/list rename・
+D&D への回帰のいずれにも問題は報告されていない。
+
+これをもって Phase 5T-10A の insert 実装（実装コミット `11560ed`、docs `a657800`、
+プレースホルダ修正 `635b029`、Undo 1ステップ化修正 `ff0ca0c`）は実機受入完了とする。
