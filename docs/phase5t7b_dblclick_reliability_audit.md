@@ -93,3 +93,38 @@ Phase 5T-7A の完了後、利用者による実機確認で以下2件の不具�
 1. 上記6節の追加切り分けテストを先に実施するか、それとも現時点の情報（左右差の報告）だけで4節のいずれかの改善案に進むか。
 2. 改善に進む場合、D&D 判定ロジックへの変更（案A・B）を許可するか、Partial Edit Pane の配置ロジック変更（案D、UXP-03bの方針変更を伴う）を許可するか、あるいは静観（案C）を選ぶか。
 3. 根本原因が Obsidian コア側（候補②）であった場合、プラグイン側での完全な解決が困難である可能性を許容できるか（その場合、案Cのような運用上の回避策が現実的な着地点になる）。
+
+## 8. Phase 5T-7C 実装確定事項（追記）
+
+利用者による追加切り分け試験（heading/list rename のみ、Partial Edit Pane 不使用、左右サイドバー各8試行以上）の結果、**左右いずれのサイドバーでもダブルクリックが不安定**であることが確認された。これにより、3節の候補②（サイドバーをまたぐ `workspace.revealLeaf` のフォーカス遷移）は主要因から除外され、候補①（`draggable="true"` とネイティブ `dblclick` の一般衝突）を主対象として、Phase 5T-7C を実施した。
+
+### 採用した方針
+
+4節の改善案のうち、**案Aでも案Bでもない、両者の折衷**を採用した。すなわち、`draggable` 属性・`dragstart`/`dragover`/`drop`/`dragend`・`computeDropMode`・`runRelocateCommand` には一切触れず、rename／paragraph Partial Edit 起動のトリガーだけを、ネイティブ `dblclick` から `pointerdown` ベースの独立二重クリック検出へ置き換えた。既存の native `dblclick` リスナーは完全に削除し、並存させていない。
+
+### 実装
+
+- 新規ファイル `src/view/rowDoubleClickDetector.ts`: Obsidian/DOM ランタイム非依存の純粋関数。
+  - `isDoubleClickPointerDown(current, previous)`: 同一 `nodeId`、時間差 `DOUBLE_CLICK_TIME_THRESHOLD_MS`（400ms）以内、距離 `DOUBLE_CLICK_DISTANCE_THRESHOLD_PX`（6px、ユークリッド距離）以内の3条件で二重クリックと判定。
+  - `isEligibleRowBodyPointerDown(...)`: 主ボタン（`button === 0`）かつ主ポインタ（`isPrimary`）、collapse spacer 上でない、drag handle 上でない、の4条件で候補対象かを判定。
+- `src/view/OutlineTreeView.ts`:
+  - 新規フィールド `private lastRowPointerDown: RowPointerDownRecord | null = null`（View インスタンス単位、`renderTree()` による全体再描画をまたいで保持）。
+  - `renderNode` の rename 用（`!readOnly`）・paragraph Partial Edit 用（`else if (isParagraph)`）の両ブランチの native `dblclick` リスナーを、共通の `private handleRowPointerDownForDoubleClick(...)` を呼ぶ `pointerdown` リスナーへ置き換え。起動先（`beginRenameForNode`／`openParagraphPartialEditFromTree`）は無変更。
+  - `evt.stopPropagation()` は二重クリックが実際に成立した場合のみ呼び出し、1回目のポインタ押下では呼ばない（既存の `click` リスナーによる `selectedId` 更新・`jumpToLine` は従来通りそのまま発火する）。
+
+### 対象外（無変更を確認済み）
+
+`draggable` 属性の設定箇所（`selfEl.setAttribute("draggable", "true")` / `dragHandleEl?.setAttribute("draggable", "true")`）、`handleDragStart`／`handleDragOver`／`computeDropMode`／`runRelocateCommand`／`handleParagraphDragStart` はいずれもテキストレベルで無変更。F2 経路（`case "F2"`）・context menu（`showParagraphMoveMenu`、`contextmenu` リスナー）も無変更。`parseDocument.ts`・`styles.css` は diff なし。
+
+### テスト
+
+- 新規 `tests/rowDoubleClickDetector.test.ts`（16件）: 純粋関数の直接テスト（時間・距離のしきい値境界、斜め移動のユークリッド距離判定、右クリック・補助ボタン・非主ポインタの除外、collapse/drag handle の除外）。
+- `tests/paragraphPartialEditLaunchUiWiring.test.ts` を全面改訂（旧10件→新17件）: pointerdown 配線・二重クリック状態の同一性・native dblclick 不在・D&D 無変更・F2/context menu 無回帰の各確認。
+- `tests/paragraphOutlineTreeUiWiring.test.ts` の該当1件を pointerdown ベースの記述へ更新。
+- 全体 `npx vitest run`: 74ファイル/1289件全通過。tsc/lint/build いずれも成功（lint は既存の無関係な警告3件のみ、エラー0件）。
+
+### 残した制約・既知の限界
+
+- 自動テストはいずれも静的ソーステキスト検証であり、実際に実機で二重クリックとして安定検出されるかどうかの核心部分は検証できていない。実機確認が必須。
+- モバイル（`Platform.isMobile`）に対する明示的な条件分岐は追加していない（旧 `dblclick` リスナーも同様にモバイルを特別扱いしていなかったため、最小変更の原則に従い踏襲）。モバイルの長押し検出用 `pointerdown` リスナーとは独立に共存するが、理論上は長押しの最初の押下も本検出の「1回目」として記録され得る（従来の dblclick 依存でも類似の曖昧さは存在しており、新規に持ち込んだ問題ではない）。
+- 時間閾値（400ms）・距離閾値（6px）は暫定値であり、実機確認の結果次第で調整が必要になる可能性がある。

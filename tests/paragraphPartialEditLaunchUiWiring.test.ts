@@ -4,26 +4,39 @@ import path from "node:path";
 
 /**
  * Phase 5T-7A ("Outline Tree の paragraph Partial Edit をダブルクリック／
- * F2で起動する"): static-source-text checks for the NEW dblclick/F2 launch
- * wiring in view/OutlineTreeView.ts. Same architectural constraint as
- * tests/paragraphOutlineTreeUiWiring.test.ts and
- * tests/selectionFollowUiWiring.test.ts: OutlineTreeView extends
- * Obsidian's ItemView, which cannot be constructed in vitest ("obsidian"
- * is a types-only package here), so this file inspects the raw source
- * text rather than instantiating the view and dispatching real DOM
- * events.
+ * F2で起動する") originally introduced this file to cover the NEW
+ * dblclick/F2 launch wiring in view/OutlineTreeView.ts via static
+ * source-text checks (OutlineTreeView extends Obsidian's ItemView, which
+ * cannot be constructed in vitest — "obsidian" is a types-only package
+ * here — so this file inspects the raw source text rather than
+ * instantiating the view and dispatching real DOM events, same convention
+ * as tests/paragraphOutlineTreeUiWiring.test.ts and
+ * tests/selectionFollowUiWiring.test.ts).
  *
- * This file is deliberately SEPARATE from
- * tests/paragraphOutlineTreeUiWiring.test.ts (which already covers the
- * pre-existing "段落を編集…" context menu item and was extended in this
- * same phase with its own 3 new tests for the shared
- * openParagraphPartialEditFromTree helper and the renderNode/F2 call
- * sites) — per the ticket's own "可能なら、既存 Partial Edit のロジックテ
- * ストと、OutlineTreeView のイベント wiring テストを分離すること" request,
- * this file is scoped to the wiring itself: which DOM branch attaches
- * which listener, and what does/doesn't happen for non-paragraph rows.
+ * Phase 5T-7C ("Outline Tree の native dblclick 依存をやめ、pointerdown ベー
+ * スの独立二重クリック検出へ置き換える") replaced the native `dblclick`
+ * listener this file originally tested with a shared pointerdown-based
+ * detector (see src/view/rowDoubleClickDetector.ts and
+ * docs/phase5t7b_dblclick_reliability_audit.md /
+ * docs/phase5t7c_pointerdown_doubleclick_design.md for the full
+ * background: real-device testing found native dblclick intermittently
+ * swallowed by this row's own always-on `draggable="true"`, on both left-
+ * and right-docked sidebars). The tests below were updated in place for
+ * this new wiring; the pure detection logic itself
+ * (isDoubleClickPointerDown / isEligibleRowBodyPointerDown) is unit-tested
+ * directly, with real inputs/outputs, in tests/rowDoubleClickDetector.test.ts
+ * — this file stays scoped to WIRING: which DOM branch attaches which
+ * listener, what it delegates to, and what does/doesn't happen for
+ * non-paragraph rows / excluded hit targets.
+ *
+ * This file remains deliberately SEPARATE from
+ * tests/paragraphOutlineTreeUiWiring.test.ts (which covers the pre-existing
+ * "段落を編集…" context menu item and openParagraphPartialEditFromTree's own
+ * resolve/activate contract) — the file split predates 5T-7C and still
+ * matches the same "resolve+activate logic tests vs. event wiring tests"
+ * separation the original 5T-7A ticket asked for.
  */
-describe("OutlineTreeView.ts paragraph dblclick/F2 launch wiring (Phase 5T-7A)", () => {
+describe("OutlineTreeView.ts paragraph dblclick/F2 launch wiring (Phase 5T-7A, pointerdown-based since Phase 5T-7C)", () => {
   const viewTs = readFileSync(path.resolve(__dirname, "../src/view/OutlineTreeView.ts"), "utf-8");
 
   function renderNodeSlice(): string {
@@ -37,34 +50,92 @@ describe("OutlineTreeView.ts paragraph dblclick/F2 launch wiring (Phase 5T-7A)",
     return viewTs.slice(start, end);
   }
 
-  it("the paragraph dblclick listener lives in its OWN `else if (isParagraph)` branch, sibling to (never nested inside, never a relaxation of) the pre-existing `if (!readOnly)` rename-dblclick branch", () => {
+  it("no native `dblclick` listener remains anywhere in renderNode — Phase 5T-7C removed both the rename branch's and the paragraph branch's native dblclick listeners in favor of the shared pointerdown-based detector", () => {
     const slice = renderNodeSlice();
-    const renameBranchIdx = slice.indexOf("if (!readOnly) {\n      selfEl.addEventListener(\"dblclick\"");
+    expect(slice).not.toContain('addEventListener("dblclick"');
+  });
+
+  it("the rename branch (`!readOnly`) and the paragraph branch (`else if (isParagraph)`) both attach a `pointerdown` listener that delegates to the SAME shared handleRowPointerDownForDoubleClick method — one detection implementation, not two independent ones", () => {
+    const slice = renderNodeSlice();
+    const occurrences = slice.split(
+      "this.handleRowPointerDownForDoubleClick(evt, node.id, collapseEl, dragHandleEl, () =>"
+    ).length - 1;
+    expect(occurrences).toBe(2);
+    const pointerdownOccurrences = slice.split('selfEl.addEventListener("pointerdown", (evt) => {').length - 1;
+    // >= 2 rather than exactly 2: the mobile long-press gesture layer
+    // (Platform.isMobile-gated, untouched by this ticket) also attaches its
+    // own "pointerdown" listeners further down in renderNode for its own,
+    // unrelated purpose.
+    expect(pointerdownOccurrences).toBeGreaterThanOrEqual(2);
+  });
+
+  it("the paragraph pointerdown branch lives in its OWN `else if (isParagraph)` branch, sibling to (never nested inside, never a relaxation of) the pre-existing `if (!readOnly)` rename branch, and its onDoubleClick callback delegates to openParagraphPartialEditFromTree(node.id) — the same resolve+activate path as showParagraphMoveMenu's own \"段落を編集…\" item, never a new editing model", () => {
+    const slice = renderNodeSlice();
+    const renameBranchIdx = slice.indexOf("if (!readOnly) {");
     expect(renameBranchIdx).toBeGreaterThan(-1);
     const paragraphBranchIdx = slice.indexOf("} else if (isParagraph) {", renameBranchIdx);
     expect(paragraphBranchIdx).toBeGreaterThan(renameBranchIdx);
     const nextTopLevelIdx = slice.indexOf("\n    if (isOutlineSectionNode(node)) {", paragraphBranchIdx);
     expect(nextTopLevelIdx).toBeGreaterThan(paragraphBranchIdx);
     const paragraphBranchBody = slice.slice(paragraphBranchIdx, nextTopLevelIdx);
-    expect(paragraphBranchBody).toContain('selfEl.addEventListener("dblclick"');
+    expect(paragraphBranchBody).toContain('selfEl.addEventListener("pointerdown"');
     expect(paragraphBranchBody).toContain("this.openParagraphPartialEditFromTree(node.id)");
-    // Excludes the fold-arrow/drag-handle from triggering it, same guard
-    // the pre-existing rename-dblclick branch uses.
-    expect(paragraphBranchBody).toContain("if (collapseEl.contains(evt.target as Node)) return;");
+    expect(paragraphBranchBody).not.toContain("paragraph-edit-input");
+    expect(paragraphBranchBody).not.toContain("contenteditable");
   });
 
-  it("a click landing on the collapse/fold spacer never opens Paragraph Partial Edit (dblclick handler bails out before calling openParagraphPartialEditFromTree)", () => {
+  it("hit-target exclusion (collapse spacer / drag handle / non-primary button) is delegated entirely to the shared handler — renderNode itself no longer contains an inline `if (collapseEl.contains(...)) return;` guard for either branch", () => {
     const slice = renderNodeSlice();
-    const paragraphBranchIdx = slice.indexOf("} else if (isParagraph) {");
+    const renameBranchIdx = slice.indexOf("if (!readOnly) {");
+    const paragraphBranchIdx = slice.indexOf("} else if (isParagraph) {", renameBranchIdx);
     const nextTopLevelIdx = slice.indexOf("\n    if (isOutlineSectionNode(node)) {", paragraphBranchIdx);
-    const body = slice.slice(paragraphBranchIdx, nextTopLevelIdx);
-    const guardIdx = body.indexOf("if (collapseEl.contains(evt.target as Node)) return;");
-    const callIdx = body.indexOf("this.openParagraphPartialEditFromTree(node.id)");
-    expect(guardIdx).toBeGreaterThan(-1);
-    expect(callIdx).toBeGreaterThan(guardIdx);
+    const renameAndParagraphBody = slice.slice(renameBranchIdx, nextTopLevelIdx);
+    expect(renameAndParagraphBody).not.toContain("if (collapseEl.contains(");
+    // Both branches pass collapseEl AND dragHandleEl through to the shared
+    // handler, which is where isEligibleRowBodyPointerDown actually applies
+    // the exclusion (see the next test).
+    expect(renameAndParagraphBody).toContain("collapseEl, dragHandleEl,");
   });
 
-  it("no drag-handle exclusion is needed (and none is written) for the paragraph dblclick branch, because dragHandleEl is only ever created for a NON-readOnly row, and paragraph rows are always readOnly — so a paragraph row never has a drag handle element at all", () => {
+  it("handleRowPointerDownForDoubleClick delegates hit-target eligibility to isEligibleRowBodyPointerDown and double-click pairing to isDoubleClickPointerDown — no ad-hoc timing/distance/target logic duplicated in the view (the threshold constants themselves live only in rowDoubleClickDetector.ts, never re-declared here)", () => {
+    const start = viewTs.indexOf("private handleRowPointerDownForDoubleClick(");
+    expect(start).toBeGreaterThan(-1);
+    const end = viewTs.indexOf("\n  }\n", start);
+    const body = viewTs.slice(start, end);
+    expect(body).toContain("isEligibleRowBodyPointerDown({");
+    expect(body).toContain("isDoubleClickPointerDown(current, this.lastRowPointerDown)");
+    expect(body).not.toMatch(/\b400\b/);
+    expect(body).not.toMatch(/\b6\b/);
+  });
+
+  it("evt.stopPropagation() inside handleRowPointerDownForDoubleClick is called ONLY once a double click is actually recognized, never unconditionally on every pointerdown — matching the old native dblclick listener's own behavior, which by construction only ever ran on a real double click", () => {
+    const start = viewTs.indexOf("private handleRowPointerDownForDoubleClick(");
+    const end = viewTs.indexOf("\n  }\n", start);
+    const body = viewTs.slice(start, end);
+    const recognizedIdx = body.indexOf("if (isDoubleClickPointerDown(current, this.lastRowPointerDown)) {");
+    expect(recognizedIdx).toBeGreaterThan(-1);
+    const preamble = body.slice(0, recognizedIdx);
+    expect(preamble).not.toContain("evt.stopPropagation()");
+    const recognizedBranchEnd = body.indexOf("return;", recognizedIdx) + "return;".length;
+    const recognizedBranch = body.slice(recognizedIdx, recognizedBranchEnd);
+    expect(recognizedBranch).toContain("this.lastRowPointerDown = null;");
+    expect(recognizedBranch).toContain("evt.stopPropagation();");
+  });
+
+  it("the lastRowPointerDown state field exists exactly once, typed RowPointerDownRecord | null, so double-click state survives renderTree()'s full DOM rebuild across the two presses of a double click", () => {
+    const occurrences = viewTs.split("private lastRowPointerDown: RowPointerDownRecord | null = null;").length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it("rowDoubleClickDetector.ts is imported with the expected named exports", () => {
+    expect(viewTs).toContain('from "./rowDoubleClickDetector"');
+    expect(viewTs).toContain("isDoubleClickPointerDown");
+    expect(viewTs).toContain("isEligibleRowBodyPointerDown");
+    expect(viewTs).toContain("RowPointerDownRecord");
+    expect(viewTs).toContain("ContainsCheckable");
+  });
+
+  it("no drag-handle exclusion is a no-op for the paragraph branch specifically, because dragHandleEl is only ever created for a NON-readOnly row, and paragraph rows are always readOnly — so a paragraph row never has a drag handle element for isEligibleRowBodyPointerDown's own dragHandleEl check to exclude in the first place (the paragraph call site still passes dragHandleEl through, unconditionally null, rather than omitting the argument)", () => {
     const dragHandleCreationIdx = viewTs.indexOf('dragHandleEl = selfEl.createDiv({ cls: "unified-outliner-drag-handle" });');
     expect(dragHandleCreationIdx).toBeGreaterThan(-1);
     const guardSlice = viewTs.slice(dragHandleCreationIdx - 200, dragHandleCreationIdx);
@@ -75,9 +146,23 @@ describe("OutlineTreeView.ts paragraph dblclick/F2 launch wiring (Phase 5T-7A)",
     expect(readOnlyDeclIdx).toBeGreaterThan(-1);
   });
 
-  it("section/list/standalone-complex-block rows never call openParagraphPartialEditFromTree — only the paragraph dblclick branch and the F2 case do (2 call sites total in the whole file)", () => {
+  it("section/list/standalone-complex-block rows never call openParagraphPartialEditFromTree — only the paragraph pointerdown branch's onDoubleClick callback and the F2 case do (2 call sites total in the whole file)", () => {
     const occurrences = viewTs.split("this.openParagraphPartialEditFromTree(").length - 1;
     expect(occurrences).toBe(2);
+  });
+
+  it("the paragraph row's existing right-click context menu (\"段落を編集…\", showParagraphMoveMenu) is untouched by this ticket — still wired via a plain `contextmenu` listener, entirely independent of the pointerdown double-click detector", () => {
+    const elseIfIdx = viewTs.indexOf(
+      "} else if (isComplexMember && node.isStandalone) {",
+      viewTs.indexOf("private renderNode(")
+    );
+    const paragraphContextMenuIdx = viewTs.indexOf("} else if (isParagraph) {", elseIfIdx);
+    expect(paragraphContextMenuIdx).toBeGreaterThan(-1);
+    const nextIdx = viewTs.indexOf("\n    }\n\n    // ---- Mobile gesture layer", paragraphContextMenuIdx);
+    expect(nextIdx).toBeGreaterThan(paragraphContextMenuIdx);
+    const body = viewTs.slice(paragraphContextMenuIdx, nextIdx);
+    expect(body).toContain('selfEl.addEventListener("contextmenu"');
+    expect(body).toContain("this.showParagraphMoveMenu(evt, node.id)");
   });
 
   function f2CaseBody(): string {
@@ -88,7 +173,7 @@ describe("OutlineTreeView.ts paragraph dblclick/F2 launch wiring (Phase 5T-7A)",
     return viewTs.slice(caseIdx, caseEndIdx);
   }
 
-  it("F2 opens Paragraph Partial Edit ONLY when this.selectedId resolves (via this.nodeById) to a paragraph node — the check re-reads live selection state, never a cached/stale flag", () => {
+  it("F2 opens Paragraph Partial Edit ONLY when this.selectedId resolves (via this.nodeById) to a paragraph node — the check re-reads live selection state, never a cached/stale flag. Untouched by Phase 5T-7C (this ticket is dblclick-only).", () => {
     const body = f2CaseBody();
     expect(body).toContain("if (this.selectedId) {");
     expect(body).toContain("const selectedNode = this.nodeById.get(this.selectedId);");
@@ -133,12 +218,12 @@ describe("OutlineTreeView.ts paragraph dblclick/F2 launch wiring (Phase 5T-7A)",
     expect(fallback).not.toContain("openParagraphPartialEditFromTree");
   });
 
-  it("handleTreeKeyDown (the sole home of the F2 case) is still the ONLY keydown listener attached to treeRootEl — Phase 5T-7A adds no new keydown listener/registerDomEvent call", () => {
+  it("handleTreeKeyDown (the sole home of the F2 case) is still the ONLY keydown listener attached to treeRootEl — Phase 5T-7C adds no new keydown listener/registerDomEvent call (this ticket is pointerdown-only)", () => {
     const occurrences = (viewTs.match(/registerDomEvent\(this\.treeRootEl, "keydown"/g) ?? []).length;
     expect(occurrences).toBe(1);
   });
 
-  it("openParagraphPartialEditFromTree never mutates this.selectedId, this.highlightedId, or this.collapsedIds — a failed resolution must leave Tree selection/current-position/fold state untouched, per the ticket's explicit contract", () => {
+  it("openParagraphPartialEditFromTree never mutates this.selectedId, this.highlightedId, or this.collapsedIds — a failed resolution must leave Tree selection/current-position/fold state untouched, per the ticket's explicit contract. Untouched by Phase 5T-7C.", () => {
     const start = viewTs.indexOf("private openParagraphPartialEditFromTree(nodeId: string): void {");
     const end = viewTs.indexOf("\n  }\n", start);
     const body = viewTs.slice(start, end);
@@ -149,10 +234,12 @@ describe("OutlineTreeView.ts paragraph dblclick/F2 launch wiring (Phase 5T-7A)",
     expect(body).not.toContain("this.renderTree()");
   });
 
-  it("D&D wiring (handleDragStart/handleDragOver/computeDropMode/setDropIndicator/runRelocateCommand) and the paragraph drag-session branch are textually untouched by this ticket — Phase 5T-7A is dblclick/F2 launch only, no D&D changes", () => {
+  it("D&D wiring (handleDragStart/handleDragOver/computeDropMode/setDropIndicator/runRelocateCommand), the paragraph drag-session branch, and the `draggable` attribute assignments are textually untouched by this ticket — Phase 5T-7C is a pointerdown-based double-click detector only, no D&D judgment/movement logic changes", () => {
     expect(viewTs).toContain("private handleDragStart(evt: DragEvent, sectionId: string, itemEl: HTMLElement): void {");
     expect(viewTs).toContain("private computeDropMode(evt: DragEvent, el: HTMLElement): DropMode {");
     expect(viewTs).toContain("private runRelocateCommand(sourceId: string, targetId: string, mode: DropMode): void {");
     expect(viewTs).toContain("private handleParagraphDragStart(");
+    expect(viewTs).toContain('selfEl.setAttribute("draggable", "true");');
+    expect(viewTs).toContain('dragHandleEl?.setAttribute("draggable", "true");');
   });
 });

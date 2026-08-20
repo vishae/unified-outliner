@@ -275,6 +275,12 @@ import {
 } from "../edit/renameBlock";
 import { HeadingLevelModal } from "./HeadingLevelModal";
 import { ConfirmCompositeDeleteModal } from "./ConfirmCompositeDeleteModal";
+import {
+  ContainsCheckable,
+  isDoubleClickPointerDown,
+  isEligibleRowBodyPointerDown,
+  RowPointerDownRecord,
+} from "./rowDoubleClickDetector";
 import { applyLineEditOutcome, LineEditOutcome } from "../commands/applyLineEditOutcome";
 import { TranslationKey } from "../i18n";
 
@@ -438,6 +444,19 @@ export class OutlineTreeView extends ItemView {
   // never suppresses any click beyond the one immediately following a
   // long press.
   private suppressNextTapClick = false;
+
+  // Phase 5T-7C ("Outline Tree の native dblclick 依存をやめ、pointerdown
+  // ベースの独立二重クリック検出へ置き換える"): the single piece of state
+  // this replacement detector needs — the most recent ELIGIBLE row-body
+  // pointerdown (see rowDoubleClickDetector.ts's isEligibleRowBodyPointerDown),
+  // regardless of which row/render pass produced it. Deliberately a single
+  // instance field (not per-row closure state) so it survives renderTree()'s
+  // unconditional full DOM rebuild on every click (see jumpToLine's own doc
+  // comment) — the SAME requirement suppressNextTapClick above already meets
+  // for the same reason. Consumed (reset to null) the moment a double click
+  // is recognized, so a third rapid press starts a fresh pair rather than
+  // re-pairing with an already-consumed press.
+  private lastRowPointerDown: RowPointerDownRecord | null = null;
 
   // Phase 3A drag & drop state. All UI-only — the pure decision of where
   // a drop is even legal lives in move/relocateSection.ts's canDropOn, not
@@ -1275,40 +1294,44 @@ export class OutlineTreeView extends ItemView {
     // catch it; skipping the listener entirely here is what actually
     // enforces "read-only while inside a composite" for that case.
     if (!readOnly) {
-      selfEl.addEventListener("dblclick", (evt) => {
-        if (collapseEl.contains(evt.target as Node)) return;
-        evt.stopPropagation();
-        // Re-resolves the row's CURRENT DOM elements fresh by nodeId (see
-        // beginRenameForNode's own doc comment) rather than closing over
-        // selfEl/innerEl from this render pass directly: a dblclick's two
-        // constituent clicks each already run this row's own "click" handler
-        // below (jumpToLine / mobile tap logic), which can itself trigger a
-        // re-render before "dblclick" is dispatched, leaving any closed-over
-        // reference pointing at an already-detached previous render pass.
-        this.beginRenameForNode(node.id);
+      // Phase 5T-7C ("Outline Tree の native dblclick 依存をやめ、pointerdown
+      // ベースの独立二重クリック検出へ置き換える"): replaces the old native
+      // `dblclick` listener with the shared pointerdown-based double-click
+      // detector below (see rowDoubleClickDetector.ts's own top doc comment
+      // for the full rationale — real-device testing found native dblclick
+      // intermittently swallowed by this row's own `draggable="true"`
+      // drag-gesture detection, on both left- and right-docked sidebars).
+      // Destination unchanged: beginRenameForNode(node.id), re-resolved
+      // fresh by id — a double click's two constituent presses each already
+      // run this row's own "click" handler below (jumpToLine / mobile tap
+      // logic), which can itself trigger a re-render before the second
+      // press is recognized, leaving any closed-over DOM/element reference
+      // pointing at an already-detached previous render pass; only the
+      // primitive node.id is safe to carry across that gap.
+      selfEl.addEventListener("pointerdown", (evt) => {
+        this.handleRowPointerDownForDoubleClick(evt, node.id, collapseEl, dragHandleEl, () =>
+          this.beginRenameForNode(node.id)
+        );
       });
     } else if (isParagraph) {
-      // Phase 5T-7A ("Outline Tree の paragraph Partial Edit をダブルクリッ
-      // ク／F2で起動する"): a paragraph-only dblclick trigger, layered on
-      // top of the read-only contract exactly like the paragraph context
-      // menu (5T-1) and drag wiring (5T-2) already are — deliberately NOT a
-      // relaxation of `!readOnly` above, a separate `else if` branch. Reuses
-      // the same collapseEl exclusion as the rename dblclick above for
-      // defensive parity (a paragraph row's own collapseEl is always the
-      // spacer variant — it has no children — but the guard costs nothing
-      // and keeps this branch structurally identical to its sibling). No
-      // drag-handle exclusion is needed here: dragHandleEl is null for
-      // every readOnly row (see its own creation above), and paragraph
-      // rows are always readOnly, so a paragraph row never has a drag
-      // handle element for a dblclick to land on in the first place.
-      // Delegates to openParagraphPartialEditFromTree — the exact same
-      // resolve+activate path the existing "段落を編集…" context menu item
+      // Phase 5T-7A originally wired this branch as a native `dblclick`
+      // listener; Phase 5T-7C replaces it with the same shared
+      // pointerdown-based detector as the rename branch above, for the same
+      // reason. Still layered on top of the read-only contract exactly like
+      // the paragraph context menu (5T-1) and drag wiring (5T-2) — this
+      // remains a separate `else if` branch, never a relaxation of
+      // `!readOnly` above. dragHandleEl is always null here (paragraph rows
+      // never have one — see its own creation above), so the shared
+      // handler's drag-handle exclusion is simply a no-op for this branch,
+      // exactly as it was a no-op before this ticket. Delegates to
+      // openParagraphPartialEditFromTree — the exact same resolve+activate
+      // path the existing "段落を編集…" context menu item
       // (showParagraphMoveMenu, Phase 5T-4A) already uses, so this adds no
       // new editing model, anchor type, or resolution logic.
-      selfEl.addEventListener("dblclick", (evt) => {
-        if (collapseEl.contains(evt.target as Node)) return;
-        evt.stopPropagation();
-        this.openParagraphPartialEditFromTree(node.id);
+      selfEl.addEventListener("pointerdown", (evt) => {
+        this.handleRowPointerDownForDoubleClick(evt, node.id, collapseEl, dragHandleEl, () =>
+          this.openParagraphPartialEditFromTree(node.id)
+        );
       });
     }
 
@@ -3208,6 +3231,66 @@ export class OutlineTreeView extends ItemView {
       return;
     }
     void this.plugin.activatePartialEditViewForParagraph(target.range.startLine);
+  }
+
+  /**
+   * Phase 5T-7C: the single shared pointerdown handler behind BOTH the
+   * rename-dblclick-replacement branch and the paragraph-dblclick-
+   * replacement branch in renderNode above — the only difference between
+   * the two call sites is which existing action `onDoubleClick` ultimately
+   * invokes (beginRenameForNode vs. openParagraphPartialEditFromTree); the
+   * detection mechanics themselves (hit-target eligibility, timing/distance
+   * pairing, cross-render state bookkeeping) are identical and written
+   * exactly once here.
+   *
+   * Pure decision logic lives in rowDoubleClickDetector.ts
+   * (isEligibleRowBodyPointerDown / isDoubleClickPointerDown) — this method
+   * is the thin DOM/view-state wiring around it: reads the event and
+   * this.lastRowPointerDown, calls the pure functions, and either records
+   * the current press as the new "previous" (first press of a pair, or an
+   * unrelated single press elsewhere) or consumes it and fires
+   * `onDoubleClick` (second press of a recognized pair).
+   *
+   * `evt.stopPropagation()` is called ONLY when a double click is actually
+   * recognized — matching the old native `dblclick` listener's own
+   * behavior, which by construction only ever ran once a real double click
+   * had already happened. This deliberately leaves EVERY individual
+   * pointerdown/click free to keep doing whatever it already does — this
+   * row's own "click" listener still fires normally for both presses of a
+   * double click, exactly as it did back when dblclick was native (see this
+   * method's call sites' own doc comments).
+   */
+  private handleRowPointerDownForDoubleClick(
+    evt: PointerEvent,
+    nodeId: string,
+    collapseEl: ContainsCheckable,
+    dragHandleEl: ContainsCheckable | null,
+    onDoubleClick: () => void
+  ): void {
+    if (
+      !isEligibleRowBodyPointerDown({
+        target: evt.target,
+        button: evt.button,
+        isPrimary: evt.isPrimary,
+        collapseEl,
+        dragHandleEl,
+      })
+    ) {
+      return;
+    }
+    const current: RowPointerDownRecord = {
+      nodeId,
+      time: evt.timeStamp,
+      x: evt.clientX,
+      y: evt.clientY,
+    };
+    if (isDoubleClickPointerDown(current, this.lastRowPointerDown)) {
+      this.lastRowPointerDown = null;
+      evt.stopPropagation();
+      onDoubleClick();
+      return;
+    }
+    this.lastRowPointerDown = current;
   }
 
   /**

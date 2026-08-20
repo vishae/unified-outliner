@@ -810,14 +810,18 @@ describe("Phase 5T-4A: Tree paragraph → existing Partial Edit bridge ('段落�
     expect(viewTs).not.toContain("paragraphEditTextarea");
   });
 
-  it("(Phase 5T-7A) a paragraph row's OWN dblclick listener now exists (a separate `else if (isParagraph)` branch, never a relaxation of the pre-existing `!readOnly` rename-dblclick gate) and delegates to openParagraphPartialEditFromTree — the same resolve+activate path as showParagraphMoveMenu's own \"段落を編集…\" item, never a new editing model.", () => {
+  it("(Phase 5T-7A, updated for Phase 5T-7C) a paragraph row's OWN pointerdown-based double-click trigger exists (a separate `else if (isParagraph)` branch, never a relaxation of the pre-existing `!readOnly` rename branch) and delegates — via the shared handleRowPointerDownForDoubleClick — to openParagraphPartialEditFromTree, the same resolve+activate path as showParagraphMoveMenu's own \"段落を編集…\" item, never a new editing model. (5T-7A originally wired this as a native `dblclick` listener; 5T-7C replaced it with the pointerdown-based detector — see tests/rowDoubleClickDetector.test.ts and tests/paragraphPartialEditLaunchUiWiring.test.ts for the detector-specific coverage.)", () => {
     const elseIfIdx = viewTs.indexOf("} else if (isParagraph) {", viewTs.indexOf("private renderNode("));
     expect(elseIfIdx).toBeGreaterThan(-1);
-    const dblclickIdx = viewTs.indexOf('selfEl.addEventListener("dblclick"', elseIfIdx);
+    const pointerdownIdx = viewTs.indexOf('selfEl.addEventListener("pointerdown"', elseIfIdx);
     const nextElseOrIfIdx = viewTs.indexOf("\n    if (isOutlineSectionNode(node)) {", elseIfIdx);
-    expect(dblclickIdx).toBeGreaterThan(elseIfIdx);
-    expect(nextElseOrIfIdx).toBeGreaterThan(dblclickIdx);
+    expect(pointerdownIdx).toBeGreaterThan(elseIfIdx);
+    expect(nextElseOrIfIdx).toBeGreaterThan(pointerdownIdx);
     const branchBody = viewTs.slice(elseIfIdx, nextElseOrIfIdx);
+    expect(branchBody).not.toContain('addEventListener("dblclick"');
+    expect(branchBody).toContain(
+      "this.handleRowPointerDownForDoubleClick(evt, node.id, collapseEl, dragHandleEl, () =>"
+    );
     expect(branchBody).toContain("this.openParagraphPartialEditFromTree(node.id)");
     expect(branchBody).not.toContain("paragraph-edit-input");
     expect(branchBody).not.toContain("contenteditable");
