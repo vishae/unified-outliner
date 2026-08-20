@@ -369,3 +369,14 @@ insert は本フェーズでは未実装のまま据え置く。
   チップと独立 paragraph Tree ノードの両方に二重表現される問題）は未解消のまま残っている。
   別チケットとして切り出すことを推奨する。
 - **`parseDocument.ts` / `styles.css`**: 無変更（`git diff --stat` で確認済み）。
+
+## 12. 実機受入結果（Phase 5T-9A、2026-08-20）
+
+Method Vault のチェックリスト（`phase5t9a-paragraph-delete-manual-check.md`、12項目）に基づく
+実機確認の結果、利用者より「実機で確認し正常に機能した」との報告を受けた。top-level /
+section 直下 paragraph の delete、確認モーダルの Cancel/Delete 挙動、削除後の Tree/本文
+同期、paragraph rename・Paragraph Partial Edit（context menu・F2）・heading/list rename・
+D&D・Undo/Redo のいずれにも回帰は報告されていない。
+
+これをもって Phase 5T-9A の delete 実装（コミット `188c932`／docs `634e0f5`）は実機受入
+完了とする。insert は引き続き未着手であり、次フェーズへ持ち越す。
