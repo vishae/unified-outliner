@@ -708,6 +708,24 @@ export class OutlineTreeView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    // Phase 5T-11A (docs/phase5t11_rename_session_teardown_design.md §8
+    // 案A, §10 第1段階): an in-progress rename session must not survive
+    // this view closing — cancelRename() is exactly the existing
+    // Escape/no-op-blur path (discard whatever's in the textarea, never
+    // write to the document; for a pendingParagraphInsert rename it
+    // delegates to rollbackPendingParagraphInsert, which is itself gated
+    // on canSafelyRollbackParagraphInsert's byte-for-byte re-check before
+    // ever calling Editor#undo()). Reusing it here — rather than adding a
+    // new teardown path — means this inherits that same safety gate
+    // unmodified. This must run FIRST, before contentEl.empty() below:
+    // both cancelRename() and rollbackPendingParagraphInsert() end by
+    // calling renderTree()/refresh() against this.treeRootEl, which is
+    // only safe to touch while the existing DOM is still alive. Every
+    // rename kind (heading/list/paragraph) is covered identically — this
+    // was previously a known, unaddressed gap (see 5T-10A's
+    // insertParagraph.ts top comment) affecting all of them, not just
+    // paragraph insert.
+    if (this.renameState) this.cancelRename();
     // UXP-02 (2026-08-12, docs/uxp-02-long-press-menu-duplicate.md): hide
     // any menu this view still has tracked as open before the view itself
     // tears down, so closing/switching away from this leaf while a
