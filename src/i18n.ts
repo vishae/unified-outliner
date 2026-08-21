@@ -402,6 +402,12 @@ const en = {
     "Unified Outliner: this list item's marker or indentation changed — rename cancelled without changing the note.",
   "reason.contains-newline": "Unified Outliner: rename text can't contain a line break.",
   "reason.no-active-editor": "Unified Outliner: no active note editor — rename cancelled.",
+  // Phase 5T-12A (docs/phase5t12_rename_note_leaf_switch_safety_design.md
+  // §10 案A): shown when the active note changed while a rename/insert was
+  // still uncommitted, so the edit was discarded rather than risking a
+  // write into the wrong note.
+  "reason.note-switched":
+    "Unified Outliner: the note changed while this edit was uncommitted — it was not applied.",
   "reason.boundary-unknown":
     "Unified Outliner: could not confidently determine this block's boundary — move skipped for safety.",
   "reason.not-in-section": "Unified Outliner: cursor is not inside any section.",
@@ -888,6 +894,10 @@ const ja: Record<TranslationKey, string> = {
     "Unified Outliner: このリスト項目のマーカーまたはインデントが変わったため、ノートを変更せずに名前変更をキャンセルした。",
   "reason.contains-newline": "Unified Outliner: 名前変更のテキストに改行を含めることはできない。",
   "reason.no-active-editor": "Unified Outliner: アクティブなノートエディタがないため、名前変更をキャンセルした。",
+  // Phase 5T-12A（docs/phase5t12_rename_note_leaf_switch_safety_design.md
+  // §10 案A）: rename/paragraph挿入が未確定のままノートが切り替わった場合に表示。
+  "reason.note-switched":
+    "Unified Outliner: ノートが切り替わったため、編集中の変更は適用しなかった。",
   "reason.boundary-unknown":
     "Unified Outliner: このブロックの境界を確信を持って判定できなかったため、安全のため移動をスキップした。",
   "reason.not-in-section": "Unified Outliner: カーソルがどのセクションの中にもない。",

@@ -295,6 +295,7 @@ import {
 } from "./rowDoubleClickDetector";
 import { applyLineEditOutcome, LineEditOutcome } from "../commands/applyLineEditOutcome";
 import { applyParagraphEdit, paragraphEditTextContainsBlankLine } from "../edit/paragraphPartialEdit";
+import { evaluateRenameNoteIdentity } from "../edit/renameNoteIdentityGuard";
 import { TranslationKey } from "../i18n";
 
 export const OUTLINE_TREE_VIEW_TYPE = "unified-outliner-outline-tree";
@@ -4710,6 +4711,18 @@ export class OutlineTreeView extends ItemView {
       this.notify(this.plugin.t("reason.no-active-editor"));
       return;
     }
+    // Phase 5T-12A note identity guard (docs/phase5t12_rename_note_leaf_switch_safety_design.md
+    // §10 案A): view is confirmed non-null above, so a rejection here means
+    // either view.file is null or this.currentFilePath no longer matches
+    // it — i.e. the note this rename began against is not the one
+    // ActiveMarkdownViewTracker currently reports as active. Reject BEFORE
+    // ever calling parseDocument or applying the outcome against this
+    // view's editor, so a mismatched note's body is never read, let alone
+    // written.
+    if (!evaluateRenameNoteIdentity(this.currentFilePath, view.file?.path).allowed) {
+      this.abortRenameForNoteSwitch();
+      return;
+    }
     const editor = view.editor;
     if (editor.listSelections().length > 1) {
       this.notify(this.plugin.t("notice.multipleCursors"));
@@ -4788,6 +4801,17 @@ export class OutlineTreeView extends ItemView {
     const view = this.activeMarkdownView.get();
     if (!view) {
       this.notify(this.plugin.t("reason.no-active-editor"));
+      return;
+    }
+    // Phase 5T-12A note identity guard — see commitRename()'s identical
+    // check just above for the full rationale. Rejecting here BEFORE the
+    // canSafelyRollbackParagraphInsert/editor.undo() call below is what
+    // guarantees a note switch during a paragraph-insert auto-rename can
+    // never Undo a DIFFERENT note's history: the placeholder stays exactly
+    // as it already was in the origin note (an intentional safe no-op —
+    // see docs/phase5t12_rename_note_leaf_switch_safety_design.md §10).
+    if (!evaluateRenameNoteIdentity(this.currentFilePath, view.file?.path).allowed) {
+      this.abortRenameForNoteSwitch();
       return;
     }
     const editor = view.editor;
@@ -4905,6 +4929,36 @@ export class OutlineTreeView extends ItemView {
   }
 
   /**
+   * Phase 5T-12A: shared rejection path for commitRename()/
+   * commitPendingParagraphInsert() when evaluateRenameNoteIdentity()
+   * disallows the write — i.e. the active Markdown view no longer points
+   * at the note this rename began against (this.currentFilePath, frozen by
+   * refresh()'s early-return guard for the duration of the rename). Never
+   * touches editor/document state: mirrors cancelRename()'s own plain
+   * "never write" teardown (draggable restore, renameState = null,
+   * renderTree()) so this stays exactly as safe as an ordinary Escape, just
+   * reachable from the two write paths too. Shows exactly one Notice
+   * (reason.note-switched) so the discard is never silent — per the 5T-12D
+   * §12 judgment question, the user chose "notify" over "silent no-op" for
+   * this specific case.
+   *
+   * NOT used by rollbackPendingParagraphInsert(): that method already has
+   * its own final teardown (refresh() vs renderTree() depending on whether
+   * an Undo actually happened) and its own, narrower Notice condition (see
+   * that method's own doc comment) — duplicating this helper there would
+   * either lose that refresh()/renderTree() distinction or require passing
+   * extra flags through it for no benefit.
+   */
+  private abortRenameForNoteSwitch(): void {
+    const state = this.renameState;
+    if (!state) return;
+    this.notify(this.plugin.t("reason.note-switched"));
+    state.rowSelfEl.setAttribute("draggable", "true");
+    this.renameState = null;
+    this.renderTree();
+  }
+
+  /**
    * Phase 5T-10A: rolls back a paragraph insert whose immediately-following
    * inline rename was cancelled (Escape, or blur-with-unchanged-placeholder
    * text — beginRename's own blur handler already routes both to
@@ -4935,9 +4989,24 @@ export class OutlineTreeView extends ItemView {
     const state = this.renameState;
     if (!state) return;
     const view = this.activeMarkdownView.get();
-    const canRollback = !!view && canSafelyRollbackParagraphInsert(view.editor.getValue(), anchor);
+    // Phase 5T-12A note identity guard: unlike commitRename()/
+    // commitPendingParagraphInsert() above, this path is reached from
+    // Escape/blur-unchanged (via cancelRename()), where "no active view at
+    // all" has always been a silent, benign no-op (5T-10A's own "resolve
+    // 不能な場合は安全側no-op" allowance) — that stays silent here too. Only
+    // the NEW "an active view exists, but it's a different note than the
+    // one this rename began against" case gets the Notice, since that is
+    // the actual cross-note-Undo risk this guard exists to close; a bare
+    // missing view isn't a note-switch, it's simply nothing to roll back
+    // against.
+    const identity = evaluateRenameNoteIdentity(this.currentFilePath, view?.file?.path);
+    const canRollback =
+      identity.allowed && !!view && canSafelyRollbackParagraphInsert(view.editor.getValue(), anchor);
     if (canRollback && view) {
       view.editor.undo();
+    }
+    if (!identity.allowed && identity.reason === "note-switched") {
+      this.notify(this.plugin.t("reason.note-switched"));
     }
     state.rowSelfEl.setAttribute("draggable", "true");
     this.renameState = null;
