@@ -4352,8 +4352,25 @@ export class OutlineTreeView extends ItemView {
         // newline is the only remaining way one could reach commitRename's
         // value — renameSection/renameListItem still reject that
         // defensively (see hasNewline in edit/renameBlock.ts).
+        //
+        // Phase 5T-11A follow-up (real-device feedback, 2026-08-21): an
+        // unchanged Enter press used to reach commitRename() regardless —
+        // which, via applyLineEditOutcome's own no-op guard, silently left
+        // the box open with a no-op notice instead of closing it. The blur
+        // handler below already special-cases exactly this ("opened it,
+        // didn't touch anything") by comparing against initialText and
+        // calling cancelRename() instead; Enter never had the same check.
+        // Applying it here too makes Enter behave consistently with blur:
+        // unchanged text closes the box cleanly via cancelRename() (still
+        // never touches the document, and still correctly routes a
+        // pendingParagraphInsert rename through its own rollback), while
+        // any actual change still goes through commitRename() as before.
         evt.preventDefault();
-        this.commitRename();
+        if (inputEl.value === initialText) {
+          this.cancelRename();
+        } else {
+          this.commitRename();
+        }
       } else if (evt.key === "Escape") {
         // IME safety net (Phase 5C-1A/1B follow-up "inline rename の安全復帰
         // 措置"): while an IME composition is in progress (typing a kana
@@ -4617,17 +4634,17 @@ export class OutlineTreeView extends ItemView {
    * "拒否時は原文を変更せず、input を保持したまま notice 等で理由を通知する" with no
    * special-casing beyond what applyLineEditOutcome already does for
    * every other no-op reason in this view. A true no-op (rawValue equal to
-   * the original text) also comes back as `changed === false` here — via
-   * applyLineEditOutcome's own no-op guard, since renameSection/
+   * the original text) would also come back as `changed === false` here —
+   * via applyLineEditOutcome's own no-op guard, since renameSection/
    * renameListItem always report `changed: true` regardless of whether the
-   * text actually differs — but the blur handler above intercepts that
-   * exact case before ever calling commitRename() (comparing inputEl.value
-   * against the initialText it captured at open time) and calls
-   * cancelRename() instead, so the input still gets torn down cleanly for
-   * the common "opened it, didn't touch anything, clicked away" case.
-   * Reaching this function with a true no-op is only possible via Enter
-   * (that path has no such pre-check), and simply leaves the box open with
-   * silently no-op'd text, matching every other rejection above.
+   * text actually differs — but as of the Phase 5T-11A Enter-key follow-up
+   * below, this function is no longer reachable with a true no-op at all:
+   * both the blur handler and the keydown Enter handler now compare
+   * inputEl.value against initialText BEFORE ever calling commitRename(),
+   * and route the unchanged case to cancelRename() instead. This doc
+   * comment's no-op-guard description is kept for callers other than those
+   * two (there are none today) and as a record of why applyLineEditOutcome
+   * still carries that guard at all.
    *
    * Undo/Redo ("inline rename の安全復帰措置" requirement): a successful
    * commit makes exactly ONE `editor.replaceRange()` call, inside
