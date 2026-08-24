@@ -685,7 +685,7 @@ const ja: Record<TranslationKey, string> = {
     "Move block または Move section の実行後、何が移動したか（段落／リスト項目／セクション）を短い通知で表示する。",
 
   // ---- Phase 5D-0 / 5D-0.3: CompositeBlock 規則 --------------------------
-  "settings.compositeBlocksHeading": "拡張ブロック（CompositeBlock）",
+  "settings.compositeBlocksHeading": "拡張ブロック",
   "settings.compositeBlocksIntro":
     "空行を挟まず隣接する list項目 + callout/blockquote（例: 画像 + その OCR 転記）を、アウトラインツリー上で1つの折りたたみ可能な単位としてまとめる組み込み規則。ここで無効化すると、まとめて表示するのをやめるだけで、Markdown 自体は一切変更されない — 対象だった list項目・callout・blockquote は、それぞれ通常の表示設定に従って個別に表示される。",
   "settings.compositeBlockImageOcr.name": "画像+OCR",
