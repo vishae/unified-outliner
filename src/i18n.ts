@@ -102,7 +102,13 @@ const en = {
   "settings.syncOutlineTreeFoldingToEditor.name": "Sync Outline Tree folding to editor",
   "settings.syncOutlineTreeFoldingToEditor.desc":
     "When enabled, folding or unfolding a node in the Outline Tree also folds or unfolds the matching content in the active Markdown editor.",
-  "settings.moveHighlightHeading": "Move & Outline Tree kind highlight",
+  // UXP-05 (2026-08-24): four category-divider headings replacing the old
+  // single "Move & Outline Tree kind highlight" heading — see settings.ts's
+  // renderGeneralTab doc comment for exactly which settings fall under each.
+  "settings.outlineTreeContentsHeading": "Outline Tree contents",
+  "settings.outlineTreeAppearanceHeading": "Outline Tree appearance",
+  "settings.moveOperationsHeading": "Move operations",
+  "settings.editingInteractionHeading": "Editing & interaction",
   "settings.sectionBackgroundStyle.name": "Section background style in Outline Tree",
   "settings.sectionBackgroundStyle.desc":
     "Always-on visual aid so section rows are easy to tell apart from list rows at a glance. Purely cosmetic — never changes what Move block / Move section actually operate on.",
@@ -648,7 +654,13 @@ const ja: Record<TranslationKey, string> = {
   "settings.syncOutlineTreeFoldingToEditor.name": "アウトラインツリーの折りたたみをエディタに同期",
   "settings.syncOutlineTreeFoldingToEditor.desc":
     "有効にすると、アウトラインツリーでノードを折りたたむ・展開する操作が、アクティブな Markdown エディタ内の対応する内容にも反映される。",
-  "settings.moveHighlightHeading": "移動・アウトラインツリーの種別強調",
+  // UXP-05（2026-08-24）: 旧「移動・アウトラインツリーの種別強調」見出しを
+  // 廃止し、4つのカテゴリ区切り見出しに分割。どの設定がどの見出しの下に
+  // 入るかは settings.ts の renderGeneralTab のdocコメントを参照。
+  "settings.outlineTreeContentsHeading": "アウトラインツリーの表示内容",
+  "settings.outlineTreeAppearanceHeading": "アウトラインツリーの見た目",
+  "settings.moveOperationsHeading": "移動操作",
+  "settings.editingInteractionHeading": "編集・操作",
   "settings.sectionBackgroundStyle.name": "アウトラインツリーのセクション背景スタイル",
   "settings.sectionBackgroundStyle.desc":
     "セクション行とリスト行を一目で見分けやすくする常時表示の視覚補助。純粋に見た目のみで、Move block / Move section の実際の動作対象は変わらない。",

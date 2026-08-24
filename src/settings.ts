@@ -105,10 +105,29 @@ export class UnifiedOutlinerSettingTab extends PluginSettingTab {
   }
 
   // ---- "General" tab ------------------------------------------------------
-  // Every Setting below is unchanged from the pre-tab display(): same
-  // name/desc keys, same onChange bodies, same order relative to each
-  // other. Only the destination container (the tab's content div instead
-  // of the top-level containerEl) is new.
+  // UXP-05 (2026-08-24, "設定 General タブの並び替え・カテゴリ分け"): every
+  // Setting below keeps its own exact name/desc i18n keys, onChange body,
+  // and persisted settings key from before this ticket — this remains a
+  // *pure UI reorganization* per the class doc comment above. What changed
+  // is (a) the ORDER of the `new Setting(...)` calls, and (b) the addition
+  // of `.setHeading()` category dividers between them. Fixed leading pair
+  // (no heading above them, per the ticket's explicit instruction): 表示言語
+  // (language) then アウトラインツリーの既定のサイドバー位置
+  // (outlineTreeSidebarPosition) — both are "which context every other
+  // setting on this page is read/applied in" style settings, so they stay
+  // first. Everything else is grouped into four named categories, each
+  // setting appearing in exactly one category:
+  //   - アウトラインツリーの表示内容: showListItemsInOutline,
+  //     showParagraphsInOutline (what node kinds the Tree shows at all).
+  //   - アウトラインツリーの見た目: sectionBackgroundStyle,
+  //     listHighlightStyle, headingPrefixStyle, listPrefixStyle (purely
+  //     cosmetic rendering of nodes the Tree already shows).
+  //   - 移動操作: allowCrossSectionListMove, previewMoveTarget,
+  //     showMoveResultToast (what Move block / Move section is allowed to
+  //     do, and how its result is surfaced back to the user).
+  //   - 編集・操作: normalizeOrderedLists, followKeyboardSelectionIntoBody,
+  //     syncOutlineTreeFoldingToEditor, showNoopNotices (remaining editor-
+  //     interaction behaviors that don't belong to any of the above three).
   private renderGeneralTab(containerEl: HTMLElement): void {
     // i18n実装 (2026-08-11): language switch, deliberately the FIRST control
     // in this tab (per the ticket's "分かりやすい位置（原則として先頭）"
@@ -146,41 +165,36 @@ export class UnifiedOutlinerSettingTab extends PluginSettingTab {
           })
       );
 
+    // UXP-03 (2026-08-15, "Configurable Outline Tree Sidebar Placement"):
+    // deliberately does NOT call refreshOutlineTreeViews() (unlike, e.g.,
+    // showListItemsInOutline's onChange below) — this setting only decides
+    // where a brand-new Outline Tree View leaf is created the NEXT time
+    // activateOutlineTreeView opens one from scratch. Any Outline Tree
+    // leaf already open (in either sidebar, or dragged elsewhere by the
+    // user) is left exactly where it is; see
+    // settingsDefaults.ts's outlineTreeSidebarPosition doc comment for the
+    // full rationale and main.ts's activateOutlineTreeView for the read
+    // site. UXP-05: kept as the second fixed leading item (right after
+    // language), per this ticket's explicit instruction — moved up from
+    // its previous position just before the old single "Move & Outline
+    // Tree kind highlight" heading.
     new Setting(containerEl)
-      .setName(this.plugin.t("settings.allowCrossSectionListMove.name"))
-      .setDesc(this.plugin.t("settings.allowCrossSectionListMove.desc"))
-      .addToggle((t) =>
-        t
-          .setValue(this.plugin.settings.allowCrossSectionListMove)
+      .setName(this.plugin.t("settings.outlineTreeSidebarPosition.name"))
+      .setDesc(this.plugin.t("settings.outlineTreeSidebarPosition.desc"))
+      .addDropdown((d) =>
+        d
+          .addOption("right", this.plugin.t("settings.outlineTreeSidebarPosition.optionRight"))
+          .addOption("left", this.plugin.t("settings.outlineTreeSidebarPosition.optionLeft"))
+          .setValue(this.plugin.settings.outlineTreeSidebarPosition)
           .onChange(async (v) => {
-            this.plugin.settings.allowCrossSectionListMove = v;
+            this.plugin.settings.outlineTreeSidebarPosition = v as OutlineTreeSidebarPosition;
             await this.plugin.saveSettings();
           })
       );
 
     new Setting(containerEl)
-      .setName(this.plugin.t("settings.normalizeOrderedLists.name"))
-      .setDesc(this.plugin.t("settings.normalizeOrderedLists.desc"))
-      .addToggle((t) =>
-        t
-          .setValue(this.plugin.settings.normalizeOrderedLists)
-          .onChange(async (v) => {
-            this.plugin.settings.normalizeOrderedLists = v;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName(this.plugin.t("settings.showNoopNotices.name"))
-      .setDesc(this.plugin.t("settings.showNoopNotices.desc"))
-      .addToggle((t) =>
-        t
-          .setValue(this.plugin.settings.showNoopNotices)
-          .onChange(async (v) => {
-            this.plugin.settings.showNoopNotices = v;
-            await this.plugin.saveSettings();
-          })
-      );
+      .setName(this.plugin.t("settings.outlineTreeContentsHeading"))
+      .setHeading();
 
     new Setting(containerEl)
       .setName(this.plugin.t("settings.showListItemsInOutline.name"))
@@ -219,54 +233,8 @@ export class UnifiedOutlinerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName(this.plugin.t("settings.followKeyboardSelectionIntoBody.name"))
-      .setDesc(this.plugin.t("settings.followKeyboardSelectionIntoBody.desc"))
-      .addToggle((t) =>
-        t
-          .setValue(this.plugin.settings.followKeyboardSelectionIntoBody)
-          .onChange(async (v) => {
-            this.plugin.settings.followKeyboardSelectionIntoBody = v;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName(this.plugin.t("settings.syncOutlineTreeFoldingToEditor.name"))
-      .setDesc(this.plugin.t("settings.syncOutlineTreeFoldingToEditor.desc"))
-      .addToggle((t) =>
-        t
-          .setValue(this.plugin.settings.syncOutlineTreeFoldingToEditor)
-          .onChange(async (v) => {
-            this.plugin.settings.syncOutlineTreeFoldingToEditor = v;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    // UXP-03 (2026-08-15, "Configurable Outline Tree Sidebar Placement"):
-    // deliberately does NOT call refreshOutlineTreeViews() (unlike, e.g.,
-    // showListItemsInOutline's onChange above) — this setting only decides
-    // where a brand-new Outline Tree View leaf is created the NEXT time
-    // activateOutlineTreeView opens one from scratch. Any Outline Tree
-    // leaf already open (in either sidebar, or dragged elsewhere by the
-    // user) is left exactly where it is; see
-    // settingsDefaults.ts's outlineTreeSidebarPosition doc comment for the
-    // full rationale and main.ts's activateOutlineTreeView for the read
-    // site.
-    new Setting(containerEl)
-      .setName(this.plugin.t("settings.outlineTreeSidebarPosition.name"))
-      .setDesc(this.plugin.t("settings.outlineTreeSidebarPosition.desc"))
-      .addDropdown((d) =>
-        d
-          .addOption("right", this.plugin.t("settings.outlineTreeSidebarPosition.optionRight"))
-          .addOption("left", this.plugin.t("settings.outlineTreeSidebarPosition.optionLeft"))
-          .setValue(this.plugin.settings.outlineTreeSidebarPosition)
-          .onChange(async (v) => {
-            this.plugin.settings.outlineTreeSidebarPosition = v as OutlineTreeSidebarPosition;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl).setName(this.plugin.t("settings.moveHighlightHeading")).setHeading();
+      .setName(this.plugin.t("settings.outlineTreeAppearanceHeading"))
+      .setHeading();
 
     new Setting(containerEl)
       .setName(this.plugin.t("settings.sectionBackgroundStyle.name"))
@@ -341,6 +309,22 @@ export class UnifiedOutlinerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName(this.plugin.t("settings.moveOperationsHeading"))
+      .setHeading();
+
+    new Setting(containerEl)
+      .setName(this.plugin.t("settings.allowCrossSectionListMove.name"))
+      .setDesc(this.plugin.t("settings.allowCrossSectionListMove.desc"))
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.allowCrossSectionListMove)
+          .onChange(async (v) => {
+            this.plugin.settings.allowCrossSectionListMove = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
       .setName(this.plugin.t("settings.previewMoveTarget.name"))
       .setDesc(this.plugin.t("settings.previewMoveTarget.desc"))
       .addToggle((t) =>
@@ -360,6 +344,58 @@ export class UnifiedOutlinerSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.treeKindHighlight.showMoveResultToast)
           .onChange(async (v) => {
             this.plugin.settings.treeKindHighlight.showMoveResultToast = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName(this.plugin.t("settings.editingInteractionHeading"))
+      .setHeading();
+
+    new Setting(containerEl)
+      .setName(this.plugin.t("settings.normalizeOrderedLists.name"))
+      .setDesc(this.plugin.t("settings.normalizeOrderedLists.desc"))
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.normalizeOrderedLists)
+          .onChange(async (v) => {
+            this.plugin.settings.normalizeOrderedLists = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName(this.plugin.t("settings.followKeyboardSelectionIntoBody.name"))
+      .setDesc(this.plugin.t("settings.followKeyboardSelectionIntoBody.desc"))
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.followKeyboardSelectionIntoBody)
+          .onChange(async (v) => {
+            this.plugin.settings.followKeyboardSelectionIntoBody = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName(this.plugin.t("settings.syncOutlineTreeFoldingToEditor.name"))
+      .setDesc(this.plugin.t("settings.syncOutlineTreeFoldingToEditor.desc"))
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.syncOutlineTreeFoldingToEditor)
+          .onChange(async (v) => {
+            this.plugin.settings.syncOutlineTreeFoldingToEditor = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName(this.plugin.t("settings.showNoopNotices.name"))
+      .setDesc(this.plugin.t("settings.showNoopNotices.desc"))
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.showNoopNotices)
+          .onChange(async (v) => {
+            this.plugin.settings.showNoopNotices = v;
             await this.plugin.saveSettings();
           })
       );
