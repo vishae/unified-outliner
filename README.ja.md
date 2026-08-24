@@ -68,9 +68,9 @@ Community Plugins と BRAT は、それぞれ更新を管理します。直接�
 
 ## アウトラインノートの例
 
-![Obsidianで開いた構造化Markdownノート](docs/images/structured-note-overview.png)
+![iPadで並べて表示した Outline Tree View・Example outline note・Partial Edit Pane](docs/images/structured-note-overview.png)
 
-このスクリーンショットは、Unified Outliner が再編成の対象とする、見出しと入れ子リストの構造を示しています。同様の構造は、このリポジトリの [`examples/Example outline note.md`](examples/Example%20outline%20note.md) で実際に試すことができます。お手元のVaultで開き、Outline Tree View の rename・move・delete・insert 操作を、段落・見出し・リスト・callout・blockquote にわたって試してみてください。
+このスクリーンショットは、iPad上で実際に使用している Unified Outliner を示しています。左に Outline Tree View、中央に開いた `Example outline note.md`、右に Basic Blocks セクションを編集している Partial Edit Pane が並んでいます。同様の構造は、このリポジトリの [`examples/Example outline note.md`](examples/Example%20outline%20note.md) で実際に試すことができます。お手元のVaultで開き、Outline Tree View の rename・move・delete・insert 操作を、段落・見出し・リスト・callout・blockquote にわたって試してみてください。
 
 1. 見出しまたはリストを含むMarkdownノートを開きます。
 2. コマンドパレットから **Open outline tree view** を実行するか、リボンのツリーアイコンを選びます。
