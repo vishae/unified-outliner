@@ -74,8 +74,10 @@ The screenshot shows Unified Outliner in use on iPad: the Outline Tree View (lef
 
 1. Open a Markdown note that contains headings or lists.
 2. Open the Command Palette and run **Open outline tree view**, or select the plugin's tree icon in the ribbon.
-3. The **Outline Tree View** opens in the right sidebar. Clicking a node moves the cursor to the matching location in the note. Moving the editor cursor highlights the corresponding tree node.
+3. The **Outline Tree View** opens in the sidebar chosen by the **Outline Tree default sidebar** setting (right by default; left is also available — see Settings below). Clicking a node moves the cursor to the matching location in the note. Moving the editor cursor highlights the corresponding tree node.
 4. Right-click a node to move, indent, outdent, or open it in the Partial Edit Pane.
+
+Opening a Partial Edit Pane while the Outline Tree View is in the right sidebar splits that sidebar so both stay visible together. Placing the tree in the left sidebar instead lets a Partial Edit Pane use the right sidebar on its own, for the three-pane layout — tree, note, and edit pane — shown in the screenshot above.
 
 Enable **Show list items in Outline Tree View** in the plugin settings when you want list items to appear alongside headings.
 
@@ -126,24 +128,35 @@ Place the cursor on a heading or list item, then use the Command Palette or assi
 | **Delete block** | Deletes the current heading section or list subtree. |
 | **Insert sibling after current block** | Inserts a new, empty heading section or list item after the current one. |
 | **Insert child list item** | Inserts a new, empty list item as a child of the current one. |
+| **Move extended block up / down** | Moves an image list item grouped with its OCR transcript or caption (see Settings → Extended blocks) as one unit, when the cursor is inside it. |
 
 The same actions are available from a node's context menu in Outline Tree View. Unavailable operations make no change. Enable **Show no-op notices** in the plugin settings to see the reason. A block that Move block / Move section just moved is briefly flash-highlighted in the tree, and, if enabled, a short notice names what moved.
 
 ### Use the Outline Tree View
 
-The right-sidebar tree is a working view, not only a navigator.
+The tree — in either sidebar — is a working view, not only a navigator.
 
 - **Drag and drop sections** to reorder section subtrees.
 - **Drag and drop list items** to reorder or reparent list subtrees when list display is enabled.
 - **Collapse or expand nodes** to control the tree's own view state. This state is saved per file and stays in sync across open Outline Tree Views.
 - **Use contextual commands** from the right-click menu. A collapsed section is treated as a subtree; an expanded section can use node-only actions.
-- **Rename a heading or list item in place**: double-click a row (or select it and press F2, or choose **Rename** from its context menu) to edit its text directly in the tree. Press Enter to commit or Escape to cancel without changing the note.
+- **Rename a heading, list item, or paragraph in place**: double-click a row (or select it and press F2, or choose **Rename** from its context menu) to edit its text directly in the tree. Press Enter to commit or Escape to cancel without changing the note.
 - **On mobile**: tap a row to select it, tap an already-selected row again to start renaming it, and long-press a row to open its context menu.
 - Section rows and list rows are visually distinguishable by an optional background or edge-stripe highlight, configurable in the plugin settings and further customizable through Style Settings (see below).
 
+### Work with paragraphs
+
+Enable **Show body paragraphs in Outline Tree View** in the plugin settings to display ordinary body paragraphs as read-only navigation nodes (marked with ¶) alongside headings and list items — for top-level and section-direct paragraphs only, not ones nested inside a list item. Once shown, a paragraph row can be renamed in place like any other row, and its context menu adds **Move up/down**, **Move to top/bottom**, **Move before/after sibling…**, **Insert paragraph before/after**, **Delete paragraph** (with confirmation), and **Edit paragraph…**, which opens it in the Partial Edit Pane. From the body editor, **Move block up/down** also treats the paragraph at the cursor as a movable unit, and the **Edit paragraph at cursor** command opens the Partial Edit Pane for it directly.
+
+### Work with callouts, blockquotes, and extended blocks
+
+A standalone callout or blockquote — one not grouped into an extended block below — appears in the tree as its own node, with a context menu offering **Move up/down** and **Open in Partial Edit** (including a popout option), the same focused-editing experience available for sections and list subtrees. Fenced code blocks (including Mermaid) and tables remain read-only in the tree for now; **Move block** can still move one of these as a whole when the cursor is inside it in the body editor.
+
+When an image list item is immediately followed by its OCR transcript or a quoted caption (a callout or blockquote), Unified Outliner's built-in **Extended blocks** rules (see Settings) group the two into one collapsible unit in the tree. **Move extended block up/down** (Command Palette or the tree's context menu) moves the whole group together, and **Delete extended block** removes it as a unit — the grouped list item and callout/blockquote are not yet editable together as a group; edit either one individually in the body editor.
+
 ### Edit a focused subtree
 
-Use **Open partial edit pane for current section** from the Command Palette, or choose the corresponding action from an Outline Tree View context menu.
+Use **Open partial edit pane for current section** from the Command Palette, or choose the corresponding action from an Outline Tree View context menu. For a paragraph specifically, use **Edit paragraph at cursor** (or the Outline Tree's **Edit paragraph…** context-menu item) to open it here directly.
 
 The **Partial Edit Pane** opens the selected section or list subtree in a dedicated editor. Make your changes, then select **Apply** to write them back to the source note. If the source area changed after the pane opened, the pane protects the note by refusing to apply conflicting content. Reload the target and review the change instead of overwriting it.
 
@@ -155,21 +168,25 @@ The commands **Move heading label up/down** and **Indent/Outdent heading level**
 
 ## Settings
 
-Open **Settings → Community plugins → Unified Outliner** to configure:
+Open **Settings → Community plugins → Unified Outliner** to configure, grouped in the **General** tab as follows:
 
-- **Allow list moves across sections**: permits root-level list items to move across section boundaries.
-- **Normalize ordered list markers to `1.`**: normalizes ordered-list markers after structural edits.
-- **Show no-op notices**: explains why an unavailable operation made no change.
+- **Display language**: Auto (follows Obsidian's own language setting), Japanese, or English, for this plugin's own UI text.
+- **Outline Tree default sidebar**: right (default) or left. Only affects where a brand-new Outline Tree View opens — an already-open one (including one you've dragged elsewhere) is never relocated by changing this. Placing the tree in the left sidebar frees the right sidebar for the Partial Edit Pane, for the three-pane layout shown in the screenshot above.
+- **Show body paragraphs in Outline Tree View**: shows ordinary body paragraphs as read-only ¶-marked navigation nodes. Off by default.
 - **Show list items in Outline Tree View**: includes list items in the tree.
-- **Follow keyboard selection into body editor**: keeps the body editor synchronized while navigating the tree with the keyboard.
-- **Sync Outline Tree folding to editor**: folding or unfolding a node in the tree also folds or unfolds the matching content in the active Markdown editor.
 - **Section background style in Outline Tree**: subtle background, left-edge stripe, or off, for telling section rows apart from list rows.
 - **List row highlight style in Outline Tree**: hover-only (default), always-on subtle background, or off.
+- **Heading prefix in Outline Tree**: off by default, or the heading level as "H1"–"H6" or the literal ATX marker count ("#"–"######"). Purely cosmetic.
+- **List marker in Outline Tree**: shows the Markdown list marker (`-`, `*`, `+`, `1.`, and so on) before each list item, or hides it (default).
+- **Allow list moves across sections**: permits root-level list items to move across section boundaries.
 - **Preview move target in Outline Tree**: briefly flash-highlights the block a move command just operated on.
 - **Show move result toast**: shows a short notice naming what was moved after a move command.
-- **Heading prefix in Outline Tree** (General tab): shows an optional badge before a section's heading text in the Outline Tree — off by default, or the heading level as "H1"–"H6" or the literal ATX marker count ("#"–"######"). Purely cosmetic.
+- **Normalize ordered list markers to `1.`**: normalizes ordered-list markers after structural edits.
+- **Follow keyboard selection into body editor**: keeps the body editor synchronized while navigating the tree with the keyboard.
+- **Sync Outline Tree folding to editor**: folding or unfolding a node in the tree also folds or unfolds the matching content in the active Markdown editor.
+- **Show no-op notices**: explains why an unavailable operation made no change.
 
-Settings are organized into two tabs, **General** and **Extended blocks** (the latter covers callout/blockquote/fenced-code/table display in the Outline Tree).
+Settings are organized into two tabs, **General** (grouped above by category, with dividers between each group) and **Extended blocks** — the latter enables or disables the plugin's built-in rules for grouping an adjacent list item with its callout/blockquote (**Image + OCR**, **Image + Quote**) into one collapsible unit in the tree. Turning a rule off only stops that grouping display; the underlying Markdown, and the list item and callout/blockquote it contains, are never changed.
 
 ### Customizing appearance with Style Settings
 
@@ -188,12 +205,13 @@ Structural changes alter Markdown text. Keep normal vault backups and review an 
 
 - Unified Outliner works within the active note only. It does not move content between notes.
 - Frontmatter is excluded from all structural operations.
-- Callouts, blockquotes, fenced code blocks (including Mermaid), and tables are shown in the Outline Tree View as read-only nodes: you can see them alongside headings and list items, but the tree does not yet let you move, add, or delete them directly. Move block can still move one of these blocks as a whole when the cursor is inside it in the body editor.
+- A standalone callout or blockquote can be moved and opened in the Partial Edit Pane directly from the Outline Tree View (see Visual guide above). Fenced code blocks (including Mermaid) and tables are still shown there as read-only nodes. Move block can still move any of these four kinds as a whole when the cursor is inside it in the body editor.
+- An image list item grouped with its OCR transcript or caption into an extended block (see Settings → Extended blocks) moves and deletes as one unit from the Outline Tree View, but is not yet editable as a group — edit the list item or the callout/blockquote individually in the body editor.
 - A focused edit is applied only when the original target has not changed since it was loaded.
 
 ## Roadmap
 
-Pop-out windows, breadcrumb navigation, Outline Tree inline rename, and read-only Outline Tree display of callouts, blockquotes, fenced code blocks, and tables are now available (see above). The next development focus is extending that read-only display into full move/insert/delete support for those same block kinds, alongside continued safety validation of hoist-like editing.
+Pop-out windows, breadcrumb navigation, Outline Tree inline rename, paragraph display and editing, a configurable left/right Outline Tree sidebar, and move/edit support for standalone callouts and blockquotes and for grouped extended blocks are now available (see above). Fenced code blocks and tables remain read-only in the tree; extending them to the same move/insert/delete support is a later step.
 
 See the concise [roadmap](ROADMAP.md) for later directions and deliberate non-goals.
 
