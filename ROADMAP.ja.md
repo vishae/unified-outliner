@@ -4,15 +4,16 @@ Unified Outliner は、単一のMarkdownノート内で意味のまとまりを�
 
 ## 現在のリリース
 
-バージョン0.4.0では、構造単位の移動・レベル変更コマンド（セクション全体の移動、段落・callout・blockquote・fenced code block・tableにも及ぶ最小安全ブロック移動を含む）、削除・挿入コマンド、Outline Tree Viewからの閲覧・編集、インラインリネーム、モバイルのタップ／長押し操作、パンくずナビゲーションとSubtree Navigator、ポップアウトウィンドウ対応を備えたsectionおよびlist subtree用のPartial Edit Pane、mixed structure境界規則、競合解決を伴うファイル単位のfold state永続化を提供する。
+Unified Outliner は、構造単位の移動・レベル変更コマンド（セクション全体の移動、段落・callout・blockquote・fenced code block・tableにも及ぶ最小安全ブロック移動を含む）、削除・挿入コマンド、左右選択可能なサイドバー配置に対応したOutline Tree Viewからの閲覧・編集、インラインリネーム、モバイルのタップ／長押し操作、パンくずナビゲーションとSubtree Navigator、ポップアウトウィンドウ対応を備えたsectionおよびlist subtree用のPartial Edit Pane、mixed structure境界規則、競合解決を伴うファイル単位のfold state永続化を提供する。
 
-これに加え、blockquote・callout・fenced code block（Mermaidを含む）・tableを含む7種のブロック境界モデルを確立し、Outline Tree上でこれらのCompositeBlockを読み取り専用ノードとして投影する機能（Phase 5D-0.3）、設定タブの「General」「Extended blocks」への再編、見出しレベルを示す任意のバッジ表示設定、iPad上でのドラッグ操作を専用ハンドルと標準HTML5 Drag & Dropに分離した改善（UXP-01）、モバイルの長押しメニューが複数同時に開いてしまう不具合の修正（UXP-02）を実装した。
+本文段落は、設定で有効にするとOutline Tree上に表示され、その場でリネーム・移動（隣接交換、先頭/末尾への移動、指定した兄弟の前後への移動）・挿入・削除・Partial Edit Paneでの編集が、トップレベルまたはセクション直下の段落について直接行えるようになった。単体のcallout・blockquoteも同様に、ツリーからのmoveとPartial Edit Paneでの編集に対応した。画像のリスト項目の直後にそのOCR転記または引用キャプションが続く場合は、これを1つの折りたたみ可能な「拡張ブロック」として認識・グループ化し、単位としてmove・deleteできる。fenced code block（Mermaidを含む）とtableは、引き続きツリー上で読み取り専用である。設定はカテゴリごとに区切られた「General」タブと「Extended blocks」タブに整理され、見出しprefixとリストmarkerの表示設定も備える。iPad上でのドラッグ操作を専用ハンドルと標準HTML5 Drag & Dropに分離した改善（UXP-01）、モバイルの長押しメニューが複数同時に開いてしまう不具合の修正（UXP-02）も実装済みである。
 
-## 次の重点領域: Phase 5C-1 / Phase 5D
+## 次の重点領域
 
-- **CompositeBlockの編集対応**: 現在は読み取り専用で投影されているblockquote・callout・fenced code block・tableについて、Outline Tree上での移動・追加・削除を、種別ごとの安全な書き戻し規則（空行・`>`プレフィックス・code fence・list markerの補完）に基づいて解禁する（Phase 5C-1）。
+- **fenced code blockとtableの編集対応**: 現在は読み取り専用で投影されているfenced code blockとtableについて、段落・callout・blockquoteで既に確立した種別ごとの安全な書き戻し方針に基づき、Outline Tree上での移動・追加・削除を解禁する。
+- **拡張ブロックのグループ単位編集**: 拡張ブロックのリスト項目とcallout/blockquoteを、個別にではなく1つの単位としてまとめて編集できるようにする方向性を検討する。
 - **境界判定できない構造の安全な保護**: 追加・削除の境界が確定できないブロックや未対応の入れ子構造では、編集を拒否して原文を保護する方針を維持する。
-- **ホイスト相当の編集の継続検証**: 選択したsectionまたはlist subtreeを、そこだけに集中できる編集文脈として開く機能の安全性・回帰試験を継続する。
+- **ホイスト相当の編集の継続検証**: 選択したsection・list subtree・段落・単体callout/blockquoteを、そこだけに集中できる編集文脈として開く機能の安全性・回帰試験を継続する。
 
 ## その後の方向性
 
@@ -20,7 +21,6 @@ Unified Outliner は、単一のMarkdownノート内で意味のまとまりを�
 - ノード内のリンクと添付ファイルの一覧。
 - sectionまたはlist subtree単位でのCanvas連携。
 - ステータスやタグなどの局所メタデータ。
-- 見出しのない本文段落を基本ブロックとして扱う基盤（Phase 5P。5C/5Dとは別系統）。方針改訂と範囲・親・深さの認識契約（5P-0/5P-1）は完了済み、カーソル解決・ホイスト・任意Tree表示・隣接交換（5P-2〜5P-4）は今後。詳細は `docs/phase5p_paragraph-block-foundation-plan.md`。
 - ノート横断のブロック分類・検索（Phase 6: BlockIndexによるYAML継承・inline property統合）。
 - 構造図とダイアログによる編集（Phase 7）。
 

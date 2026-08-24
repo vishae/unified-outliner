@@ -4,15 +4,16 @@ Unified Outliner focuses on safe structural editing inside a single Markdown not
 
 ## Current Release
 
-Version 0.4.0 provides structural move and level commands (including whole-section moves and minimal-safe-block moves that reach into paragraphs, callouts, blockquotes, fenced code blocks, and tables), delete/insert commands, Outline Tree View navigation, inline rename, and mobile tap/long-press support, a Partial Edit Pane for section and list subtrees with breadcrumb navigation, a Subtree Navigator, and pop-out window support, mixed-structure boundaries, and file-scoped fold-state persistence with conflict resolution.
+Unified Outliner provides structural move and level commands (including whole-section moves and minimal-safe-block moves that reach into paragraphs, callouts, blockquotes, fenced code blocks, and tables), delete/insert commands, Outline Tree View navigation with a configurable left/right sidebar, inline rename, and mobile tap/long-press support, a Partial Edit Pane for section and list subtrees with breadcrumb navigation, a Subtree Navigator, and pop-out window support, mixed-structure boundaries, and file-scoped fold-state persistence with conflict resolution.
 
-It also establishes a seven-kind block-boundary model covering blockquotes, callouts, fenced code blocks (including Mermaid), and tables, and projects these as read-only CompositeBlock nodes in the Outline Tree (Phase 5D-0.3). Settings are now organized into "General" and "Extended blocks" tabs, with an optional heading-level badge setting. Mobile/tablet interaction was refined with a dedicated native HTML5 drag handle on iPad, separate from the long-press context menu gesture (UXP-01), and a fix for the long-press context menu stacking when a second row was long-pressed before dismissing the first (UXP-02).
+Body paragraphs can now be optionally shown in the Outline Tree and edited there directly — renamed in place, moved (adjacent swap, to top/bottom, or before/after a chosen sibling), inserted, deleted, and opened in the Partial Edit Pane — for top-level and section-direct paragraphs. A standalone callout or blockquote can likewise be moved from the tree and opened in the Partial Edit Pane. An image list item immediately followed by its OCR transcript or a quoted caption is recognized and grouped into a collapsible "extended block", which can be moved or deleted as one unit; fenced code blocks (including Mermaid) and tables remain read-only in the tree. Settings are organized into a category-grouped "General" tab and an "Extended blocks" tab, with heading-prefix and list-marker display options. Mobile/tablet interaction was refined with a dedicated native HTML5 drag handle on iPad, separate from the long-press context menu gesture (UXP-01), and a fix for the long-press context menu stacking when a second row was long-pressed before dismissing the first (UXP-02).
 
-## Next Focus: Phase 5C-1 / Phase 5D
+## Next Focus
 
-- **Editable CompositeBlocks**: Extend the currently read-only projection of blockquotes, callouts, fenced code blocks, and tables to support move, insert, and delete from the Outline Tree, following per-kind safe write-back rules (blank lines, `>` prefixes, code fences, list markers) defined in Phase 5C-1.
+- **Editable fenced code blocks and tables**: Extend the currently read-only projection of fenced code blocks and tables to support move, insert, and delete from the Outline Tree, following the same per-kind safe write-back approach already established for paragraphs, callouts, and blockquotes.
+- **Grouped extended-block editing**: Explore editing an extended block's list item and its callout/blockquote together as one unit, instead of requiring each to be edited individually in the body editor.
 - **Safe rejection of unresolved boundaries**: Keep protecting the source note by refusing edits whenever a block's boundary or nested structure cannot be confidently resolved.
-- **Continued validation of hoist-like editing**: Keep strengthening safety and regression coverage for opening a selected section or list subtree as a focused editing context.
+- **Continued validation of hoist-like editing**: Keep strengthening safety and regression coverage for opening a selected section, list subtree, paragraph, or standalone callout/blockquote as a focused editing context.
 
 ## Later Directions
 
