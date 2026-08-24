@@ -51,7 +51,11 @@ describe("main.ts activatePartialEditView (static source check, UXP-03b)", () =>
   it("the popout path (options?.openInNewWindow) appears before the placement decision and never calls hasOutlineTreeLeafInLeftSidebar itself", () => {
     const body = getActivatePartialEditViewBody();
     const popoutStart = body.indexOf("if (options?.openInNewWindow)");
-    const popoutEnd = body.indexOf("} else if (existing.length > 0)", popoutStart);
+    // UXP-03c widened the reuse condition from the single-line
+    // `existing.length > 0` to a multi-line `existing.length > 0 && ...`
+    // check — search on the still-stable `} else if (` prefix instead of
+    // the now-gone single-line literal.
+    const popoutEnd = body.indexOf("} else if (", popoutStart);
     const placementIndex = body.indexOf("hasOutlineTreeLeafInLeftSidebar(");
     expect(popoutStart).toBeGreaterThan(-1);
     expect(popoutEnd).toBeGreaterThan(popoutStart);
@@ -78,13 +82,39 @@ describe("main.ts activatePartialEditView (static source check, UXP-03b)", () =>
     expect(body).not.toContain("getLeftLeaf");
   });
 
-  it("does not detach, move, or duplicate any leaf", () => {
+  it("does not bulk-detach or duplicate any leaf, and moveLeafToPopout is still only used by the pre-existing popout path", () => {
     const body = getActivatePartialEditViewBody();
     expect(body).not.toContain("detachLeavesOfType");
     expect(body).not.toContain("moveLeafToPopout(leaf)".repeat(2)); // sanity: no accidental double-move
     // moveLeafToPopout is expected exactly once, as part of the pre-existing
-    // popout reuse path (unrelated to UXP-03b) — not a new call this ticket added.
+    // popout reuse path (unrelated to UXP-03b/UXP-03c) — not a new call
+    // either ticket added.
     const moveLeafToPopoutCount = body.split("moveLeafToPopout").length - 1;
     expect(moveLeafToPopoutCount).toBe(1);
+  });
+
+  it("UXP-03c: reuses existing[0] only when it does NOT share a tab group with an open Outline Tree leaf, and detaches it (once, via the instance method — not the bulk detachLeavesOfType) otherwise, before falling through to the same placement decision", () => {
+    const body = getActivatePartialEditViewBody();
+    const reuseConditionIndex = body.indexOf("} else if (");
+    const sharesTabGroupIndex = body.indexOf("!partialEditLeafSharesTabGroupWithOutlineTree(");
+    const placementIndex = body.indexOf("hasOutlineTreeLeafInLeftSidebar(");
+    const detachIndex = body.indexOf("existing[0].detach()");
+    expect(sharesTabGroupIndex).toBeGreaterThan(-1);
+    expect(reuseConditionIndex).toBeGreaterThan(-1);
+    expect(reuseConditionIndex).toBeLessThan(sharesTabGroupIndex);
+    // The reuse condition (with its staleness check) must be decided
+    // before the detach-and-fall-through branch, which itself must
+    // precede the placement decision it falls through to.
+    expect(sharesTabGroupIndex).toBeLessThan(detachIndex);
+    expect(detachIndex).toBeLessThan(placementIndex);
+    // Exactly one instance-level detach() call in this method — never the
+    // Workspace-level bulk detachLeavesOfType.
+    const detachCallCount = body.split(".detach()").length - 1;
+    expect(detachCallCount).toBe(1);
+  });
+
+  it("imports partialEditLeafSharesTabGroupWithOutlineTree alongside hasOutlineTreeLeafInLeftSidebar from outlineTreeLeafPlacement", () => {
+    expect(mainTs).toContain("partialEditLeafSharesTabGroupWithOutlineTree");
+    expect(mainTs).toContain('from "./view/outlineTreeLeafPlacement"');
   });
 });

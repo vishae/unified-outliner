@@ -35,7 +35,10 @@ import {
   OutlineTreeView,
 } from "./view/OutlineTreeView";
 import { PARTIAL_EDIT_VIEW_TYPE, PartialEditView } from "./view/PartialEditView";
-import { hasOutlineTreeLeafInLeftSidebar } from "./view/outlineTreeLeafPlacement";
+import {
+  hasOutlineTreeLeafInLeftSidebar,
+  partialEditLeafSharesTabGroupWithOutlineTree,
+} from "./view/outlineTreeLeafPlacement";
 import { HeadingLevelModal } from "./view/HeadingLevelModal";
 import { ActiveMarkdownViewTracker } from "./view/activeMarkdownViewTracker";
 import { FoldStateManager } from "./persistence/foldStateManager";
@@ -751,9 +754,30 @@ export default class UnifiedOutlinerPlugin extends Plugin {
         new Notice(this.t("notice.couldNotOpenPartialEditPaneNewWindow"));
         return;
       }
-    } else if (existing.length > 0) {
+    } else if (
+      existing.length > 0 &&
+      !partialEditLeafSharesTabGroupWithOutlineTree(
+        existing[0],
+        workspace.getLeavesOfType(OUTLINE_TREE_VIEW_TYPE)
+      )
+    ) {
       leaf = existing[0];
     } else {
+      // UXP-03c: reusing existing[0] as-is here would keep hiding the
+      // Outline Tree behind the pane — it currently shares a tab group
+      // with an open Outline Tree View leaf (see
+      // partialEditLeafSharesTabGroupWithOutlineTree's own doc comment,
+      // view/outlineTreeLeafPlacement.ts). This happens when the leaf was
+      // created as a plain tab at some earlier point (e.g. UXP-03b's
+      // getRightLeaf(false), while the Tree briefly sat in the left
+      // sidebar) and the Tree has since moved back, since the
+      // pre-existing reuse branch above never re-evaluated placement.
+      // Detach it and fall through to the same fresh-leaf logic below, so
+      // the split decision is always re-made against the Tree's CURRENT
+      // position rather than trusting a leaf from an earlier moment.
+      if (existing.length > 0) {
+        existing[0].detach();
+      }
       // UXP-03b: split ONLY when no Outline Tree View leaf is currently
       // in the left sidebar — checked against the leaf's ACTUAL current
       // root (workspace.leftSplit), never against the Outline Tree
@@ -851,9 +875,22 @@ export default class UnifiedOutlinerPlugin extends Plugin {
         new Notice(this.t("notice.couldNotOpenPartialEditPaneNewWindow"));
         return;
       }
-    } else if (existing.length > 0) {
+    } else if (
+      existing.length > 0 &&
+      !partialEditLeafSharesTabGroupWithOutlineTree(
+        existing[0],
+        workspace.getLeavesOfType(OUTLINE_TREE_VIEW_TYPE)
+      )
+    ) {
       leaf = existing[0];
     } else {
+      // UXP-03c: see activatePartialEditView's identical comment above —
+      // duplicated here rather than shared, per this method's own doc
+      // comment on why it owns a fully independent copy of the
+      // leaf-open/reveal logic.
+      if (existing.length > 0) {
+        existing[0].detach();
+      }
       const openWithoutSplit = hasOutlineTreeLeafInLeftSidebar(
         workspace.getLeavesOfType(OUTLINE_TREE_VIEW_TYPE),
         workspace.leftSplit
