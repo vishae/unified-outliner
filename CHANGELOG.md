@@ -4,6 +4,28 @@ This project follows [Semantic Versioning](https://semver.org/). The entries bel
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-25
+
+### Added
+
+- Body paragraphs can be shown in the Outline Tree as their own nodes ("Show body paragraphs in Outline Tree View", off by default) and, once shown, edited directly: renamed in place, moved (adjacent swap via "Move block up/down", or via the tree's own "Move up/down" / "Move to top/bottom" / "Move before/after sibling…"), inserted ("Insert paragraph before/after"), deleted ("Delete paragraph", with confirmation), and opened in the Partial Edit Pane ("Edit paragraph…", or the new "Edit paragraph at cursor" command) — scoped to top-level and section-direct paragraphs.
+- A standalone callout or blockquote (one not grouped into an extended block, see below) can now be moved from the Outline Tree ("Move up/down") and opened in the Partial Edit Pane, including as a popout.
+- New built-in "Extended blocks" rules — "Image + OCR" and "Image + Quote" — recognize an image list item immediately followed by its OCR transcript or a quoted caption and group the two into one collapsible unit in the Outline Tree. The group can be moved ("Move extended block up/down", from the Command Palette or the tree) and deleted ("Delete extended block") as a single unit; each rule can be turned off independently in Settings → Extended blocks without changing the underlying Markdown.
+- New setting "Outline Tree default sidebar" (right by default, or left) controls which sidebar a brand-new Outline Tree View opens into. Opening a Partial Edit Pane now places itself sensibly relative to wherever the tree actually is: it splits the same sidebar when the tree is on the right, or opens in the other sidebar cleanly when the tree is on the left — enabling a three-pane layout (tree, note, edit pane).
+- New setting "List marker in Outline Tree" shows the Markdown list marker (`-`, `*`, `+`, `1.`, and so on) before each list item; off by default.
+- New bilingual example note, `examples/Example outline note.md`, demonstrating every currently supported Outline Tree block type; linked from both READMEs.
+
+### Changed
+
+- The General settings tab is now organized into labeled groups (display language and sidebar position first, then Outline Tree contents, appearance, move operations, and editing/interaction, each separated by a heading divider) instead of one flat list.
+- The user-facing "Composite Block" wording is now "Extended Block" everywhere in the UI, including a Japanese settings heading that had been left showing the English word "CompositeBlock".
+
+### Fixed
+
+- A standalone callout or blockquote nested under a list item now appears as that list item's own child in the Outline Tree, instead of always being placed directly under the enclosing section.
+- Committing or rolling back a rename or a pending paragraph insert is now blocked if the active note changes to a different file while the rename is still pending, preventing an accidental write to the wrong note.
+- Opening a Partial Edit Pane while the Outline Tree View is open in the right sidebar now reliably splits that sidebar so both remain visible, instead of the Partial Edit Pane sometimes covering the tree.
+
 ## [0.4.1] - 2026-08-14
 
 ### Fixed
