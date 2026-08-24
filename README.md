@@ -70,7 +70,7 @@ Community Plugins and BRAT manage their own updates. For a direct-download insta
 
 ![A structured Markdown note open in Obsidian](docs/images/structured-note-overview.png)
 
-The screenshot uses `Test/Unified Outliner Test.md` in the Method test vault. It shows the kind of heading and nested-list structure that Unified Outliner is designed to reorganize.
+The screenshot shows the kind of heading and nested-list structure that Unified Outliner is designed to reorganize. Try it yourself with [`examples/Example outline note.md`](examples/Example%20outline%20note.md) in this repository — open it in your own vault and explore the Outline Tree View's rename, move, delete, and insert operations across paragraphs, headings, lists, callouts, and blockquotes.
 
 1. Open a Markdown note that contains headings or lists.
 2. Open the Command Palette and run **Open outline tree view**, or select the plugin's tree icon in the ribbon.

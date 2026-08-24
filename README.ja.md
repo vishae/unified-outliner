@@ -70,7 +70,7 @@ Community Plugins と BRAT は、それぞれ更新を管理します。直接�
 
 ![Obsidianで開いた構造化Markdownノート](docs/images/structured-note-overview.png)
 
-この画像では、MethodテストVaultの `Test/Unified Outliner Test.md` を使用しています。Unified Outliner が再編成の対象とする、見出しと入れ子リストの構造を確認できます。
+このスクリーンショットは、Unified Outliner が再編成の対象とする、見出しと入れ子リストの構造を示しています。同様の構造は、このリポジトリの [`examples/Example outline note.md`](examples/Example%20outline%20note.md) で実際に試すことができます。お手元のVaultで開き、Outline Tree View の rename・move・delete・insert 操作を、段落・見出し・リスト・callout・blockquote にわたって試してみてください。
 
 1. 見出しまたはリストを含むMarkdownノートを開きます。
 2. コマンドパレットから **Open outline tree view** を実行するか、リボンのツリーアイコンを選びます。
