@@ -530,6 +530,14 @@ const en = {
     "Unified Outliner: this paragraph's position in the note changed, so the edit was not applied safely. Reopen it and try again.",
   "reason.content-changed":
     "Unified Outliner: the note changed, so the safe update to this paragraph was cancelled. Check the content and reopen it.",
+  // Phase 5P-4 supplement (edit/paragraphPartialEdit.ts's persistent-anchor
+  // fix): this paragraph could not be safely and uniquely re-identified —
+  // it may have been deleted, or a nearby structural change (split/merge/
+  // reparent) or an ambiguous duplicate made re-identification unsafe. A
+  // paragraph merely repositioned by "Move block up/down" is NOT this case
+  // — see that reason's own doc comment for the full boundary.
+  "reason.anchor-unresolved":
+    "Unified Outliner: this paragraph could not be safely re-identified, so the update was cancelled. Reopen it and try again.",
   // Phase 5T-4A ("Tree paragraph → 既存 Partial Edit の最小実装"):
   // edit/paragraphPartialEdit.ts's NoParagraphApplyReason "blank-line-not-allowed"
   // — a dedicated, new key (not reused from any reason above) since this
@@ -1013,6 +1021,8 @@ const ja: Record<TranslationKey, string> = {
     "Unified Outliner: この段落の文書内での位置が変化したため、安全に適用できなかった。開き直してもう一度試すこと。",
   "reason.content-changed":
     "Unified Outliner: 本文が変更されたため、段落への安全な反映を中止した。内容を確認してもう一度開くこと。",
+  "reason.anchor-unresolved":
+    "Unified Outliner: この段落を安全に再同定できなかったため、更新を中止した。開き直してもう一度試すこと。",
   "reason.blank-line-not-allowed":
     "Unified Outliner: 段落の本文に空行を含めることはできない（複数の段落に分割されてしまう）。空行を削除してからもう一度試すこと。",
 

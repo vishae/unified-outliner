@@ -186,6 +186,7 @@ describe("insertParagraph: no-op / rejection cases", () => {
       originalText: "not really closed",
       rangeStart: 1,
       rangeEnd: 1,
+      siblingCount: 0,
     };
     const outcome = insertParagraph(text, staleAnchor, "before", DEFAULT_COMPOSITE_BLOCK_RULES);
     expect(outcome.changed).toBe(false);

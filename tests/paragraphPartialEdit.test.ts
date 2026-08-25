@@ -1,23 +1,27 @@
 import { describe, expect, it } from "vitest";
 import { parseDocument } from "../src/parser/parseDocument";
 import { resolveParagraphAtCursor } from "../src/resolver/resolveParagraphAtCursor";
+import { resolveMoveUnit, moveComplexBlock } from "../src/move/resolveMoveTarget";
+import { scanComplexBlocks } from "../src/parser/complexBlocks";
+import { buildParagraphMoveAnchor, moveParagraphFromAnchor } from "../src/edit/paragraphTreeMove";
 import {
   applyParagraphEdit,
+  buildParagraphEditAnchor,
   paragraphEditTextContainsBlankLine,
   ParagraphEditAnchor,
 } from "../src/edit/paragraphPartialEdit";
 
-/** Loads an anchor exactly the way PartialEditView.loadParagraphInternal would, from a fresh parse + resolve. */
+/**
+ * Loads an anchor exactly the way PartialEditView.loadParagraphInternal
+ * would, from a fresh parse + resolve — via the one true builder
+ * (`buildParagraphEditAnchor`), never a hand-built object literal, so
+ * every test here exercises the real `siblingCount` computation too.
+ */
 function anchorAt(text: string, cursorLine: number): ParagraphEditAnchor {
   const doc = parseDocument(text);
   const resolved = resolveParagraphAtCursor(doc, cursorLine);
   if (!resolved.paragraph) throw new Error("expected a paragraph to resolve for this test fixture");
-  return {
-    complexBlockId: resolved.paragraph.complexBlockId,
-    parentId: resolved.paragraph.parentId,
-    depth: resolved.paragraph.depth,
-    originalText: resolved.paragraph.text,
-  };
+  return buildParagraphEditAnchor(doc, resolved.paragraph);
 }
 
 describe("applyParagraphEdit: successful apply", () => {
@@ -51,65 +55,75 @@ describe("applyParagraphEdit: successful apply", () => {
 });
 
 describe("applyParagraphEdit: safe no-op rejections", () => {
-  it("rejects when the paragraph was deleted entirely", () => {
+  it("rejects (anchor-unresolved) when the paragraph was deleted entirely", () => {
     const original = ["# H", "Before.", "", "Target paragraph.", "", "After."].join("\n");
     const anchor = anchorAt(original, 3);
+    expect(anchor.siblingCount).toBe(3); // "Before.", "Target paragraph.", "After."
     // Simulate the user deleting the target paragraph in the body editor
     // before Apply. Deleting it shifts the scan-local id every LATER
-    // paragraph gets assigned (see parser/complexBlocks.ts's scanParagraphBlocks
-    // — ids are a per-call sequence number, not persistent) — "After." now
-    // coincidentally lands on the SAME id "Target paragraph." originally
-    // had, which is exactly the scenario this module's own doc comment
-    // describes as the reason a content-equality check (not the id lookup
-    // alone) is required: the id-based lookup succeeds and finds a real,
-    // "supported", same-parent/depth paragraph, but its CONTENT
-    // ("After.") does not match the anchor's original snapshot ("Target
-    // paragraph."), so it is still safely rejected — just via
-    // "content-changed" rather than "resolve-failed".
+    // paragraph gets assigned (parser/complexBlocks.ts's scanParagraphBlocks
+    // — ids are a per-call sequence number, not persistent), so a stale
+    // id-only lookup could coincidentally land on "After." instead —
+    // exactly the scenario this module's Pass 2 structural re-search
+    // exists for. Here, no paragraph anywhere under this section still has
+    // the anchor's exact text ("Target paragraph."), AND the sibling count
+    // dropped from 3 to 2 — a population change, not a mere content edit —
+    // so this safely rejects as "anchor-unresolved" rather than guessing
+    // which remaining paragraph to overwrite.
     const changedText = ["# H", "Before.", "", "", "After."].join("\n");
     const doc = parseDocument(changedText);
     const outcome = applyParagraphEdit(doc, anchor, "should never be written");
     expect(outcome.changed).toBe(false);
-    expect(["resolve-failed", "content-changed"]).toContain(outcome.reason);
+    expect(outcome.reason).toBe("anchor-unresolved");
     expect(outcome.lines).toEqual(doc.lines);
   });
 
-  it("rejects (resolve-failed or content-changed) when the paragraph was split by a blank line", () => {
+  it("rejects (anchor-unresolved) when the paragraph was split by a blank line", () => {
     const original = ["# H", "Target paragraph line one.", "line two."].join("\n");
     const anchor = anchorAt(original, 1);
+    expect(anchor.siblingCount).toBe(1);
     const changedText = ["# H", "Target paragraph line one.", "", "line two."].join("\n");
     const doc = parseDocument(changedText);
     const outcome = applyParagraphEdit(doc, anchor, "should never be written");
     expect(outcome.changed).toBe(false);
-    expect(["resolve-failed", "content-changed"]).toContain(outcome.reason);
+    // The split doubled the same-parent paragraph population (1 -> 2) —
+    // a structural change, safely rejected rather than attributed to a
+    // content edit.
+    expect(outcome.reason).toBe("anchor-unresolved");
     expect(outcome.lines).toEqual(doc.lines);
   });
 
-  it("rejects (content-changed) when the paragraph was merged with an adjacent paragraph", () => {
+  it("rejects (anchor-unresolved) when the paragraph was merged with an adjacent paragraph", () => {
     const original = ["# H", "First.", "", "Second."].join("\n");
     const anchor = anchorAt(original, 1); // "First."
+    expect(anchor.siblingCount).toBe(2);
     const changedText = ["# H", "First.", "Second."].join("\n"); // blank line removed, now merged
     const doc = parseDocument(changedText);
     const outcome = applyParagraphEdit(doc, anchor, "should never be written");
     expect(outcome.changed).toBe(false);
-    expect(["resolve-failed", "content-changed"]).toContain(outcome.reason);
+    // The merge halved the same-parent paragraph population (2 -> 1) —
+    // a structural change, safely rejected rather than attributed to a
+    // content edit.
+    expect(outcome.reason).toBe("anchor-unresolved");
     expect(outcome.lines).toEqual(doc.lines);
   });
 
-  it("rejects (identity-changed) when the paragraph moved from a list item's child to section-direct, with its own text unchanged", () => {
+  it("rejects (anchor-unresolved) when the paragraph moved from a list item's child to section-direct, with its own text unchanged", () => {
     const original = ["- item1", "  Stable text.", "- item2"].join("\n");
     const anchor = anchorAt(original, 1);
     expect(anchor.depth).toBeGreaterThan(0);
     // The list marker above it is removed, so the SAME text is now a
     // section-direct (top-level) paragraph instead of item1's child —
     // structural position changed without the paragraph's own text
-    // changing at all.
+    // changing at all. No candidate anywhere shares item1's old parentId
+    // any more, so this safely rejects rather than reparenting silently.
     const changedText = ["item1 (no longer a list marker)", "  Stable text.", "item2 either"].join(
       "\n"
     );
     const doc = parseDocument(changedText);
     const outcome = applyParagraphEdit(doc, anchor, "should never be written");
     expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("anchor-unresolved");
     expect(outcome.lines).toEqual(doc.lines);
   });
 
@@ -124,18 +138,21 @@ describe("applyParagraphEdit: safe no-op rejections", () => {
     expect(outcome.lines).toEqual(doc.lines);
   });
 
-  it("rejects (resolve-failed) when the target became a callout instead of a paragraph", () => {
+  it("rejects (anchor-unresolved) when the target became a callout instead of a paragraph", () => {
     const original = ["# H", "Plain text here."].join("\n");
     const anchor = anchorAt(original, 1);
     const changedText = ["# H", "> [!note] Plain text here."].join("\n");
     const doc = parseDocument(changedText);
     const outcome = applyParagraphEdit(doc, anchor, "should never be written");
     expect(outcome.changed).toBe(false);
-    expect(outcome.reason).toBe("resolve-failed");
+    // No "supported" paragraph remains under this section at all (the
+    // callout wins the merge-priority conflict over the same lines —
+    // parser/complexBlocks.ts's mergeBlockRangesSafely) — population 1 -> 0.
+    expect(outcome.reason).toBe("anchor-unresolved");
     expect(outcome.lines).toEqual(doc.lines);
   });
 
-  it("rejects (resolve-failed) when the paragraph's boundary became ambiguous", () => {
+  it("rejects (anchor-unresolved) when the paragraph's boundary became ambiguous", () => {
     const original = ["- item1", "  Child paragraph of item1.", "- item2"].join("\n");
     const anchor = anchorAt(original, 1);
     // Now craft a doc where, at the SAME complexBlockId slot ("paragraph-0"),
@@ -147,7 +164,7 @@ describe("applyParagraphEdit: safe no-op rejections", () => {
     const outcome = applyParagraphEdit(doc, anchor, "should never be written");
     expect(outcome.changed).toBe(false);
     expect(outcome.lines).toEqual(doc.lines);
-    expect(outcome.reason).not.toBeUndefined();
+    expect(outcome.reason).toBe("anchor-unresolved");
   });
 
   it("never writes outside the target paragraph's range even when neighboring content is complex", () => {
@@ -276,5 +293,140 @@ describe("applyParagraphEdit: blank-line input rejection (Phase 5T-4A)", () => {
     const outcome = applyParagraphEdit(doc, anchor, "Now it is\ntwo lines.");
     expect(outcome.changed).toBe(true);
     expect(outcome.lines).toEqual(["# H", "Now it is", "two lines."]);
+  });
+});
+
+/**
+ * Phase 5P-4 supplement ("Paragraph Partial Edit Pane の持続アンカー
+ * 再解決"): the Partial Edit Pane holds a `ParagraphEditAnchor` for as
+ * long as it stays open — unlike a Tree-triggered move, whose anchor is
+ * built and consumed in one atomic step. These tests simulate exactly
+ * that: an anchor built once, then some OTHER mechanism (the body-cursor
+ * "Move block" command, or the Tree's own `moveParagraphFromAnchor`)
+ * moves the underlying paragraph before Apply is ever clicked.
+ */
+describe("applyParagraphEdit: persistent-anchor re-resolution across an external paragraph<->paragraph swap (Phase 5P-4 supplement)", () => {
+  it("body-cursor path: A swaps with sibling B elsewhere; A's own text is unchanged, so Apply still succeeds and edits exactly A's (new) position", () => {
+    const text = ["# H", "paragraph A", "", "paragraph B"].join("\n");
+    const anchor = anchorAt(text, 1); // "paragraph A", captured BEFORE the swap
+
+    const doc = parseDocument(text);
+    const unit = resolveMoveUnit(doc, 1).unit!;
+    const moveOutcome = moveComplexBlock(doc, unit, "down");
+    expect(moveOutcome.changed).toBe(true);
+    const movedText = moveOutcome.lines.join("\n");
+    expect(movedText).toBe(["# H", "paragraph B", "", "paragraph A"].join("\n"));
+
+    // The pane, still holding the ORIGINAL anchor, is now told to Apply
+    // (unedited — the textarea still shows "paragraph A" verbatim).
+    const freshDoc = parseDocument(movedText);
+    const outcome = applyParagraphEdit(freshDoc, anchor, "paragraph A");
+    expect(outcome.changed).toBe(true);
+    expect(outcome.lines).toEqual(["# H", "paragraph B", "", "paragraph A"]);
+    expect(outcome.newStartLine).toBe(3);
+  });
+
+  it("Tree path: A swaps with sibling B via moveParagraphFromAnchor elsewhere; Apply still succeeds", () => {
+    const text = ["# H", "paragraph A", "", "paragraph B"].join("\n");
+    const anchor = anchorAt(text, 1);
+
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const infoA = scan.blocks.find(
+      (b) => b.kind === "paragraph" && doc.lines[b.range.startLine] === "paragraph A"
+    )!;
+    const treeAnchor = buildParagraphMoveAnchor(doc, infoA)!;
+    const moveOutcome = moveParagraphFromAnchor(text, treeAnchor, "down");
+    expect(moveOutcome.changed).toBe(true);
+    const movedText = moveOutcome.lines.join("\n");
+
+    const freshDoc = parseDocument(movedText);
+    const outcome = applyParagraphEdit(freshDoc, anchor, "paragraph A");
+    expect(outcome.changed).toBe(true);
+    expect(outcome.lines).toEqual(["# H", "paragraph B", "", "paragraph A"]);
+  });
+
+  it("swap + an external edit to A's own (now relocated) text -> rejects (content-changed), not a false anchor-unresolved", () => {
+    const text = ["# H", "paragraph A", "", "paragraph B"].join("\n");
+    const anchor = anchorAt(text, 1);
+
+    const doc = parseDocument(text);
+    const unit = resolveMoveUnit(doc, 1).unit!;
+    const moveOutcome = moveComplexBlock(doc, unit, "down");
+    const movedLines = moveOutcome.lines.slice();
+    // A's slot after the swap is line 3 ("paragraph A") — edit it directly,
+    // simulating an edit made through some channel other than this pane.
+    movedLines[3] = "paragraph A EDITED";
+    const freshDoc = parseDocument(movedLines.join("\n"));
+
+    const outcome = applyParagraphEdit(freshDoc, anchor, "paragraph A");
+    expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("content-changed");
+    expect(outcome.lines).toEqual(freshDoc.lines);
+  });
+
+  it("an ambiguous duplicate (two byte-identical sibling paragraphs) after a disrupting change -> rejects (anchor-unresolved), never overwrites either candidate", () => {
+    const text = ["# H", "Same text.", "", "Same text.", "", "Other."].join("\n");
+    const anchor = anchorAt(text, 1); // the FIRST "Same text." paragraph
+    expect(anchor.siblingCount).toBe(3);
+
+    // Simulate an unrelated structural change elsewhere that disrupts the
+    // scan-local id sequence without changing the total population: "Other."
+    // and the anchored "Same text." trade places. Two byte-identical
+    // "Same text." candidates now exist under the same parent, and neither
+    // is distinguishable from the anchor by content alone.
+    const changedText = ["# H", "Other.", "", "Same text.", "", "Same text."].join("\n");
+    const doc = parseDocument(changedText);
+    const outcome = applyParagraphEdit(doc, anchor, "should never be written");
+    expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("anchor-unresolved");
+    expect(outcome.lines).toEqual(doc.lines);
+  });
+
+  it("3+ successive Move-down invocations relocate A elsewhere in the document; Apply against the anchor built BEFORE any of them still succeeds", () => {
+    let text = [
+      "# H",
+      "paragraph A",
+      "",
+      "paragraph B",
+      "",
+      "paragraph C",
+      "",
+      "paragraph D",
+      "",
+      "paragraph E",
+    ].join("\n");
+    const anchor = anchorAt(text, 1); // captured once, before any moves
+
+    let cursorLine = 1;
+    for (let step = 0; step < 3; step++) {
+      const doc = parseDocument(text);
+      const unit = resolveMoveUnit(doc, cursorLine).unit!;
+      const moveOutcome = moveComplexBlock(doc, unit, "down");
+      expect(moveOutcome.changed, `step ${step + 1}`).toBe(true);
+      text = moveOutcome.lines.join("\n");
+      cursorLine = moveOutcome.newStartLine;
+    }
+    expect(text).toBe(
+      ["# H", "paragraph B", "", "paragraph C", "", "paragraph D", "", "paragraph A", "", "paragraph E"].join(
+        "\n"
+      )
+    );
+
+    const freshDoc = parseDocument(text);
+    const outcome = applyParagraphEdit(freshDoc, anchor, "paragraph A, edited");
+    expect(outcome.changed).toBe(true);
+    expect(outcome.lines).toEqual([
+      "# H",
+      "paragraph B",
+      "",
+      "paragraph C",
+      "",
+      "paragraph D",
+      "",
+      "paragraph A, edited",
+      "",
+      "paragraph E",
+    ]);
   });
 });

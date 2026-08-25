@@ -7,6 +7,7 @@ import {
   moveParagraphFromAnchor,
   ParagraphDropTargetHint,
   ParagraphMoveAnchor,
+  ParagraphTreeMoveOutcome,
   ParagraphTreeNodeHint,
   resolveParagraphDropDirection,
   resolveParagraphFromTreeHint,
@@ -867,5 +868,171 @@ describe("resolveParagraphDropDirection: source anchor re-resolution failures pr
 
     const resolution = resolveParagraphDropDirection(ambiguousText, anchor, target, "before");
     expect(resolution).toEqual({ allowed: false, reason: "ambiguous-match" });
+  });
+});
+
+/**
+ * Phase 5P-4 supplement, required-test item II ("Tree経由の連続移動"): the
+ * REAL Tree call site never holds a stale anchor across multiple moves —
+ * every "Move up"/"Move down" click resolves fresh via
+ * resolveParagraphFromTreeHint(hint, scan) against the row's CURRENT
+ * rangeStart/rangeEnd/parentId (as OutlineTreeView.refresh() rebuilds
+ * after every move), then builds a brand-new anchor via
+ * buildParagraphMoveAnchor immediately before calling
+ * moveParagraphFromAnchor. simulateTreeMoveSteps below reproduces exactly
+ * that hint -> resolve -> build -> move -> next-hint loop, never reusing
+ * one anchor object across iterations — this is why 3+ successive Tree
+ * moves need no production fix here (unlike the Partial Edit Pane, which
+ * DOES hold one anchor across an arbitrarily long open window — see
+ * edit/paragraphPartialEdit.ts's own Phase 5P-4 supplement doc comment).
+ */
+function simulateTreeMoveSteps(
+  text: string,
+  hint: ParagraphTreeNodeHint,
+  direction: "up" | "down",
+  steps: number
+): { text: string; hint: ParagraphTreeNodeHint; outcome: ParagraphTreeMoveOutcome } {
+  let currentText = text;
+  let currentHint = hint;
+  let lastOutcome: ParagraphTreeMoveOutcome | null = null;
+  for (let i = 0; i < steps; i++) {
+    const doc = parseDocument(currentText);
+    const scan = scanComplexBlocks(doc);
+    const info = resolveParagraphFromTreeHint(currentHint, scan);
+    if (!info) throw new Error(`step ${i + 1}: hint failed to resolve`);
+    const anchor = buildParagraphMoveAnchor(doc, info)!;
+    const outcome = moveParagraphFromAnchor(currentText, anchor, direction);
+    lastOutcome = outcome;
+    if (!outcome.changed) break;
+    currentText = outcome.lines.join("\n");
+    const rangeLen = anchor.rangeEnd - anchor.rangeStart;
+    currentHint = {
+      rangeStart: outcome.newStartLine,
+      rangeEnd: outcome.newStartLine + rangeLen,
+      parentId: currentHint.parentId,
+    };
+  }
+  return { text: currentText, hint: currentHint, outcome: lastOutcome! };
+}
+
+describe("moveParagraphFromAnchor: 3+ successive Tree-triggered moves keep tracking the same logical paragraph (Phase 5P-4 supplement, required-test item II)", () => {
+  it("section-level: 3 successive Tree Move-down steps relocate A correctly; a 4th continues, a 5th (at the tail) safely no-ops", () => {
+    const text = [
+      "# H",
+      "paragraph A",
+      "",
+      "paragraph B",
+      "",
+      "paragraph C",
+      "",
+      "paragraph D",
+      "",
+      "paragraph E",
+    ].join("\n");
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const infoA = scan.blocks.find(
+      (b) => b.kind === "paragraph" && doc.lines[b.range.startLine] === "paragraph A"
+    )!;
+    const hint: ParagraphTreeNodeHint = {
+      rangeStart: infoA.range.startLine,
+      rangeEnd: infoA.range.endLine,
+      parentId: infoA.parentId,
+    };
+
+    const threeSteps = simulateTreeMoveSteps(text, hint, "down", 3);
+    expect(threeSteps.outcome.changed).toBe(true);
+    expect(threeSteps.text).toBe(
+      ["# H", "paragraph B", "", "paragraph C", "", "paragraph D", "", "paragraph A", "", "paragraph E"].join(
+        "\n"
+      )
+    );
+
+    const fourSteps = simulateTreeMoveSteps(text, hint, "down", 4);
+    expect(fourSteps.outcome.changed).toBe(true);
+    expect(fourSteps.text).toBe(
+      ["# H", "paragraph B", "", "paragraph C", "", "paragraph D", "", "paragraph E", "", "paragraph A"].join(
+        "\n"
+      )
+    );
+
+    const fiveSteps = simulateTreeMoveSteps(text, hint, "down", 5);
+    expect(fiveSteps.outcome.changed, "5th step: tail no-op").toBe(false);
+    expect(fiveSteps.outcome.reason).toBe("no-sibling");
+    // The document after the no-op step must equal the 4-step result —
+    // untouched by the rejected 5th attempt.
+    expect(fiveSteps.text).toBe(fourSteps.text);
+  });
+
+  it("section-level: 3 successive Tree Move-up steps (tracking E from the tail) relocate E correctly; a 4th continues, a 5th (at the head) safely no-ops", () => {
+    const text = [
+      "# H",
+      "paragraph A",
+      "",
+      "paragraph B",
+      "",
+      "paragraph C",
+      "",
+      "paragraph D",
+      "",
+      "paragraph E",
+    ].join("\n");
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const infoE = scan.blocks.find(
+      (b) => b.kind === "paragraph" && doc.lines[b.range.startLine] === "paragraph E"
+    )!;
+    const hint: ParagraphTreeNodeHint = {
+      rangeStart: infoE.range.startLine,
+      rangeEnd: infoE.range.endLine,
+      parentId: infoE.parentId,
+    };
+
+    const fourSteps = simulateTreeMoveSteps(text, hint, "up", 4);
+    expect(fourSteps.outcome.changed).toBe(true);
+    expect(fourSteps.text).toBe(
+      ["# H", "paragraph E", "", "paragraph A", "", "paragraph B", "", "paragraph C", "", "paragraph D"].join(
+        "\n"
+      )
+    );
+
+    const fiveSteps = simulateTreeMoveSteps(text, hint, "up", 5);
+    expect(fiveSteps.outcome.changed, "5th step: head no-op").toBe(false);
+    expect(fiveSteps.outcome.reason).toBe("no-sibling");
+    expect(fiveSteps.text).toBe(fourSteps.text);
+  });
+
+  it("list-item-child: 3+ successive Tree Move-down steps relocate A correctly under the same list item", () => {
+    const text = [
+      "- item1",
+      "  paragraph A",
+      "",
+      "  paragraph B",
+      "",
+      "  paragraph C",
+      "",
+      "  paragraph D",
+    ].join("\n");
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const infoA = scan.blocks.find(
+      (b) => b.kind === "paragraph" && doc.lines[b.range.startLine].trim() === "paragraph A"
+    )!;
+    const hint: ParagraphTreeNodeHint = {
+      rangeStart: infoA.range.startLine,
+      rangeEnd: infoA.range.endLine,
+      parentId: infoA.parentId,
+    };
+
+    const threeSteps = simulateTreeMoveSteps(text, hint, "down", 3);
+    expect(threeSteps.outcome.changed).toBe(true);
+    expect(threeSteps.text).toBe(
+      ["- item1", "  paragraph B", "", "  paragraph C", "", "  paragraph D", "", "  paragraph A"].join("\n")
+    );
+
+    const fourSteps = simulateTreeMoveSteps(text, hint, "down", 4);
+    expect(fourSteps.outcome.changed, "4th step: tail-of-list-item no-op").toBe(false);
+    expect(fourSteps.outcome.reason).toBe("no-sibling");
+    expect(fourSteps.text).toBe(threeSteps.text);
   });
 });

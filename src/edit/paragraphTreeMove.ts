@@ -79,6 +79,20 @@ export interface ParagraphMoveAnchor {
   originalText: string;
   rangeStart: number;
   rangeEnd: number;
+  /**
+   * Phase 5P-4 supplement (edit/paragraphPartialEdit.ts's own
+   * `ParagraphEditAnchor.siblingCount` field): the number of "supported"
+   * paragraph-kind siblings under `parentId`/`depth` at build time (this
+   * paragraph included). This module's own `resolveAnchorUnit` does not
+   * read it — Tree-triggered moves/D&D always build a FRESH anchor
+   * immediately before use, so the id-instability `paragraphPartialEdit.ts`
+   * guards against never has a window to occur here. This field exists
+   * purely so a `ParagraphMoveAnchor` stays structurally assignable to
+   * `ParagraphEditAnchor` — view/OutlineTreeView.ts reuses this exact
+   * anchor shape for Tree-triggered paragraph rename/insert-commit, which
+   * calls `applyParagraphEdit` directly.
+   */
+  siblingCount: number;
 }
 
 /**
@@ -101,14 +115,23 @@ export function buildParagraphMoveAnchor(
 ): ParagraphMoveAnchor | null {
   if (info.kind !== "paragraph") return null;
   if (info.editability !== "supported") return null;
+  const depth = complexBlockDepth(doc, info.parentId);
+  const siblingCount = scanComplexBlocks(doc).blocks.filter(
+    (b) =>
+      b.kind === "paragraph" &&
+      b.editability === "supported" &&
+      b.parentId === info.parentId &&
+      complexBlockDepth(doc, b.parentId) === depth
+  ).length;
   return {
     kind: "paragraph",
     complexBlockId: info.id,
     parentId: info.parentId,
-    depth: complexBlockDepth(doc, info.parentId),
+    depth,
     originalText: doc.lines.slice(info.range.startLine, info.range.endLine + 1).join("\n"),
     rangeStart: info.range.startLine,
     rangeEnd: info.range.endLine,
+    siblingCount,
   };
 }
 

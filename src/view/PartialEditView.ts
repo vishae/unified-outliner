@@ -141,7 +141,11 @@ import { applyLineEditOutcome } from "../commands/applyLineEditOutcome";
 import { checkPartialEditSourceNote } from "./partialEditSourceNoteCheck";
 import { TranslationKey } from "../i18n";
 import { resolveParagraphAtCursor } from "../resolver/resolveParagraphAtCursor";
-import { applyParagraphEdit, ParagraphEditAnchor } from "../edit/paragraphPartialEdit";
+import {
+  applyParagraphEdit,
+  buildParagraphEditAnchor,
+  ParagraphEditAnchor,
+} from "../edit/paragraphPartialEdit";
 
 export const PARTIAL_EDIT_VIEW_TYPE = "unified-outliner-partial-edit";
 
@@ -603,12 +607,7 @@ export class PartialEditView extends ItemView {
     const paragraph = resolved.paragraph;
 
     this.nodeId = null;
-    this.paragraphAnchor = {
-      complexBlockId: paragraph.complexBlockId,
-      parentId: paragraph.parentId,
-      depth: paragraph.depth,
-      originalText: paragraph.text,
-    };
+    this.paragraphAnchor = buildParagraphEditAnchor(doc, paragraph);
     this.nodeKind = "paragraph";
     this.originalText = paragraph.text;
     this.label = paragraph.preview;
@@ -1021,7 +1020,7 @@ export class PartialEditView extends ItemView {
     if (this.paragraphAnchor) {
       const outcome = applyParagraphEdit(doc, this.paragraphAnchor, this.textareaEl.value);
       if (!outcome.changed) {
-        const reasonKey = ("reason." + (outcome.reason ?? "resolve-failed")) as TranslationKey;
+        const reasonKey = ("reason." + (outcome.reason ?? "anchor-unresolved")) as TranslationKey;
         new Notice(this.plugin.t(reasonKey));
         return false;
       }
@@ -1036,12 +1035,23 @@ export class PartialEditView extends ItemView {
       );
 
       this.originalText = this.textareaEl.value;
-      // The paragraph's own identity (complexBlockId/parentId/depth) does
-      // not change just because its TEXT did — re-anchor with the same
-      // identity fields and only the refreshed "before editing" snapshot,
-      // so a SECOND Apply within the same pane session re-resolves against
-      // the just-applied text rather than the stale pre-edit snapshot.
-      this.paragraphAnchor = { ...this.paragraphAnchor, originalText: this.textareaEl.value };
+      // Phase 5P-4 supplement: re-anchor from a FRESH re-resolution at the
+      // outcome's own new position, rather than blindly spreading the old
+      // anchor. applyParagraphEdit may have resolved via its Pass 2
+      // structural re-search (a same-parent paragraph<->paragraph swap
+      // happened elsewhere while this pane was open) — in that case the
+      // OLD anchor's complexBlockId no longer points at this paragraph at
+      // all, and spreading it forward would silently reintroduce the exact
+      // staleness this fix exists to close. Re-resolving via
+      // resolveParagraphAtCursor at outcome.newStartLine, against the
+      // just-applied document, always yields the correct current id/
+      // siblingCount — a SECOND Apply within the same pane session then
+      // starts from a fully current anchor, not a stale one.
+      const freshDoc = parseDocument(editor.getValue());
+      const freshResolved = resolveParagraphAtCursor(freshDoc, outcome.newStartLine);
+      this.paragraphAnchor = freshResolved.paragraph
+        ? buildParagraphEditAnchor(freshDoc, freshResolved.paragraph)
+        : { ...this.paragraphAnchor, originalText: this.textareaEl.value };
       this.updateDirtyState();
 
       const lineLen = editor.getLine(outcome.newStartLine)?.length ?? 0;

@@ -21,40 +21,57 @@
  * see this module's applyParagraphEdit doc comment for the full contract
  * this guards against.
  *
- * Safety contract (5P-2 ticket §4): Apply never trusts the cursor position
- * or the anchor's own line numbers — the caller always re-parses the
- * CURRENT note fresh and hands the resulting ParsedDocument here, where
- * this module re-scans it and re-resolves the SAME logical paragraph via
- * three independent checks, all of which must agree before `newText` is
- * ever spliced in:
- *   1. the SAME scan-local id the pane's original projection captured
- *      (ParagraphEditAnchor.complexBlockId) — a cheap first filter, same
- *      convention edit/partialEdit.ts's extractComplexBlockText already
- *      uses for callout/blockquote (never assumed persistent across an
- *      unrelated edit elsewhere in the note — see model/complexBlock.ts's
- *      own id-stability caveat);
- *   2. an explicit parentId/depth match against the anchor's own snapshot
- *      — catches "same text, different structural position", which a
- *      content-only compare cannot detect;
- *   3. a byte-for-byte compare of the freshly re-extracted text against
- *      the anchor's own "before editing" snapshot — mirrors
- *      edit/partialEdit.ts's applySubtreeEdit conflict check exactly.
- * Any disagreement no-ops (byte-identical `lines`) with a distinct, typed
- * reason rather than guessing which paragraph the user meant. On success,
- * the replacement always covers EXACTLY the re-resolved paragraph's own
- * range — nothing before or after it is ever touched, so an adjacent
- * heading/list/callout/blockquote/fence/table can never be affected by an
- * Apply.
+ * ---- Phase 5P-4 supplement: id-instability across a paragraph<->paragraph
+ * swap (this module's own persistent-anchor fix) ----
+ *
+ * The Partial Edit Pane holds a `ParagraphEditAnchor` for as long as it
+ * stays open — unlike edit/paragraphTreeMove.ts's `ParagraphMoveAnchor`,
+ * which is built and consumed within a single, effectively atomic
+ * command. In that window, `complexBlockId`
+ * (parser/complexBlocks.ts's `paragraph-${seq++}`, a per-scan sequence
+ * number, never a persistent id) can silently start pointing at a
+ * DIFFERENT paragraph: Phase 5P-4's own "Move block up/down" swaps two
+ * adjacent same-parent paragraphs by exchanging their POSITIONS, which
+ * re-numbers every paragraph-kind candidate from that point on in scan
+ * order. A stale id-only lookup can therefore resolve to the wrong
+ * paragraph (or to none at all) even though the pane's own target is
+ * still sitting safely in the note, merely repositioned.
+ *
+ * `applyParagraphEdit` below fixes this by never trusting
+ * `complexBlockId` alone. It is kept only as a fast first-choice lookup
+ * (requirement: still cheap for the overwhelmingly common "nothing moved"
+ * case) — see the "Two-pass identity resolution" section of this
+ * function's own doc comment for the full algorithm and the reasoning
+ * behind each of its outcomes. `ParagraphEditAnchor.siblingCount` (new
+ * field, populated by the new `buildParagraphEditAnchor` builder below)
+ * exists solely to support this: it lets a failed content-match tell "the
+ * paragraph population under this parent is exactly what it was — the
+ * text itself must have changed" apart from "something was inserted,
+ * removed, split, or merged nearby — identity can no longer be safely
+ * attributed", without needing a persistent id at all (deliberately out
+ * of scope this round — see docs/phase5p_paragraph-block-foundation-
+ * plan.md and this ticket's own explicit exclusion list).
+ *
+ * Safety contract (5P-2 ticket §4, extended by the above): Apply never
+ * trusts the cursor position or the anchor's own line numbers — the
+ * caller always re-parses the CURRENT note fresh and hands the resulting
+ * ParsedDocument here, where this module re-scans it and re-resolves the
+ * SAME logical paragraph. Any disagreement no-ops (byte-identical `lines`)
+ * with a distinct, typed reason rather than guessing which paragraph the
+ * user meant. On success, the replacement always covers EXACTLY the
+ * re-resolved paragraph's own range — nothing before or after it is ever
+ * touched, so an adjacent heading/list/callout/blockquote/fence/table can
+ * never be affected by an Apply.
  */
 import { ParsedDocument } from "../model/block";
+import { ComplexBlockInfo } from "../model/complexBlock";
 import { complexBlockDepth, scanComplexBlocks } from "../parser/complexBlocks";
 
 /**
- * Captured once, at load time, from a successful
- * resolver/resolveParagraphAtCursor.ts result (complexBlockId, parentId,
- * depth, text -> originalText) — see that module's own doc comment for
- * field meanings. Never persisted beyond the Partial Edit Pane's own
- * in-memory session; never written to the note or to plugin settings.
+ * Captured once, at load time, via `buildParagraphEditAnchor` below — see
+ * that function's own doc comment for how each field is derived. Never
+ * persisted beyond the Partial Edit Pane's own in-memory session; never
+ * written to the note or to plugin settings.
  */
 export interface ParagraphEditAnchor {
   complexBlockId: string;
@@ -66,11 +83,58 @@ export interface ParagraphEditAnchor {
    * edit/partialEdit.ts's applySubtreeEdit.
    */
   originalText: string;
+  /**
+   * Phase 5P-4 supplement: the number of "supported" paragraph-kind
+   * siblings under `parentId`/`depth` at the moment this anchor was built
+   * (this paragraph included). Used only to distinguish, at Apply time, a
+   * pure content edit (population unchanged) from a structural change
+   * nearby (population changed) once a byte-for-byte content match can no
+   * longer be found — see `applyParagraphEdit`'s own doc comment.
+   */
+  siblingCount: number;
+}
+
+/**
+ * Projects a live, already-resolved paragraph (kind "paragraph",
+ * editability "supported") into a `ParagraphEditAnchor` — the one
+ * intended way to build one; a caller should never hand-construct the
+ * object literal field-by-field (that would silently skip the
+ * `siblingCount` computation this fix depends on). Accepts the flattened
+ * shape `resolver/resolveParagraphAtCursor.ts`'s `ResolvedParagraphAtCursor`
+ * already exposes (complexBlockId/parentId/depth/text), so callers never
+ * need the raw `ComplexBlockInfo` — mirrors
+ * edit/paragraphTreeMove.ts#buildParagraphMoveAnchor's "one true builder"
+ * convention for that module's own, separate anchor type.
+ *
+ * `complexBlocks` defaults to a fresh scan, but a caller that already has
+ * one (e.g. PartialEditView re-anchoring right after a successful Apply,
+ * from the same scan it just re-parsed for) may pass it to avoid a
+ * redundant re-scan — same convention as
+ * resolver/resolveParagraphAtCursor.ts's own default-parameter shape.
+ */
+export function buildParagraphEditAnchor(
+  doc: ParsedDocument,
+  resolved: { complexBlockId: string; parentId: string | null; depth: number; text: string },
+  complexBlocks: ComplexBlockInfo[] = scanComplexBlocks(doc).blocks
+): ParagraphEditAnchor {
+  const siblingCount = complexBlocks.filter(
+    (b) =>
+      b.kind === "paragraph" &&
+      b.editability === "supported" &&
+      b.parentId === resolved.parentId &&
+      complexBlockDepth(doc, b.parentId) === resolved.depth
+  ).length;
+  return {
+    complexBlockId: resolved.complexBlockId,
+    parentId: resolved.parentId,
+    depth: resolved.depth,
+    originalText: resolved.text,
+    siblingCount,
+  };
 }
 
 export type NoParagraphApplyReason =
-  | "resolve-failed"
-  | "identity-changed"
+  | "anchor-unresolved"
   | "content-changed"
   | "blank-line-not-allowed";
 
@@ -126,32 +190,53 @@ export function paragraphEditTextContainsBlankLine(text: string): boolean {
 /**
  * Re-resolve `anchor` against a fresh scan of `doc` (the CURRENT note,
  * already re-parsed by the caller) and splice `newText` in over exactly
- * that paragraph's own range — but only once every check in this module's
- * top doc comment passes.
+ * that paragraph's own range — but only once every check below passes.
  *
- * Failure reasons:
- *   - "resolve-failed": no paragraph with `anchor.complexBlockId` exists in
- *     the fresh scan at all, or one does but its editability is no longer
- *     "supported" — covers "the paragraph was deleted", "it was split by a
- *     blank line" (the id-slot's content now differs enough that a
- *     DIFFERENT, shorter candidate ends up there, or no candidate at all
- *     once numbering shifts), "it was merged into a neighbor", and "it
- *     became a different, unsupported/ambiguous kind".
- *   - "identity-changed": a same-id paragraph was found and is
- *     "supported", but its parentId or depth no longer matches the
- *     anchor — it moved to a different section/list-item parent, or its
- *     nesting depth changed, even though its own text may be unchanged.
- *   - "content-changed": id, parentId, and depth all still match, but the
- *     freshly re-extracted text differs from `anchor.originalText` — the
- *     note changed (this paragraph's own content, specifically) since the
- *     pane loaded it.
+ * ---- Two-pass identity resolution (Phase 5P-4 supplement) ----
+ *
+ * Pass 1 (fast path): if a "supported" paragraph with
+ * `id === anchor.complexBlockId` exists AND its parentId/depth/content all
+ * still match the anchor exactly, apply immediately. This is the
+ * overwhelmingly common case (nothing moved since the pane loaded) and
+ * needs no further search.
+ *
+ * Pass 2 (structural + content re-search): reached whenever Pass 1 does
+ * not fully match — the id may be stale (a paragraph<->paragraph swap
+ * elsewhere renumbered it), missing, or pointing at a structurally
+ * different slot. Every "supported" paragraph sharing `anchor.parentId`/
+ * `anchor.depth` is a candidate; among those, look for an EXACT
+ * byte-for-byte match of `anchor.originalText`:
+ *   - exactly one match -> that is the same logical paragraph, merely
+ *     repositioned (a pure Phase 5P-4 swap never touches a paragraph's
+ *     own text) -> apply to it, regardless of how many times it has moved
+ *     since the anchor was built.
+ *   - two or more matches -> genuinely ambiguous (e.g. two byte-identical
+ *     sibling paragraphs) -> "anchor-unresolved"; never guesses.
+ *   - zero matches -> nothing under this parent currently has the
+ *     anchor's exact text. Compare the CURRENT same-parent/depth
+ *     "supported" paragraph count against `anchor.siblingCount`:
+ *       - equal -> the population is unchanged, so the anchor's own
+ *         paragraph must still be there with DIFFERENT text -> "content-
+ *         changed" (a genuine edit, independent of this fix).
+ *       - different -> something was inserted, removed, split, or merged
+ *         nearby (or the paragraph reparented) -> too uncertain to safely
+ *         attribute to any one candidate -> "anchor-unresolved".
+ *
+ * Reasons:
  *   - "blank-line-not-allowed" (Phase 5T-4A): `newText` itself contains a
  *     blank (or whitespace-only) line — see
- *     `paragraphEditTextContainsBlankLine`'s own doc comment just above.
+ *     `paragraphEditTextContainsBlankLine`'s own doc comment above.
  *     Checked FIRST, before any re-resolution against `doc`, since this is
  *     purely an input-validity question independent of the target
- *     paragraph's current state — an invalid input is rejected the same
- *     way whether or not the paragraph itself is still safely resolvable.
+ *     paragraph's current state.
+ *   - "anchor-unresolved": the target paragraph could not be safely and
+ *     uniquely re-identified — covers deletion, an ambiguous duplicate,
+ *     and any nearby structural change (split/merge/reparent) that makes
+ *     content-based re-identification unsafe. Never touches the note.
+ *   - "content-changed": the target WAS safely and uniquely re-identified
+ *     (by id, or by structural position + an unchanged sibling
+ *     population), but its own text differs from the anchor's snapshot —
+ *     the note changed since the pane loaded it. Never touches the note.
  */
 export function applyParagraphEdit(
   doc: ParsedDocument,
@@ -163,28 +248,51 @@ export function applyParagraphEdit(
   }
 
   const scan = scanComplexBlocks(doc);
-  const block = scan.blocks.find(
-    (b) => b.id === anchor.complexBlockId && b.kind === "paragraph"
+  const paragraphCandidates = scan.blocks.filter(
+    (b) => b.kind === "paragraph" && b.editability === "supported"
   );
-  if (!block || block.editability !== "supported") {
-    return { changed: false, lines: doc.lines, newStartLine: -1, reason: "resolve-failed" };
-  }
+
+  const extract = (b: ComplexBlockInfo): string =>
+    doc.lines.slice(b.range.startLine, b.range.endLine + 1).join("\n");
+
+  const applyAt = (b: ComplexBlockInfo): ApplyParagraphEditOutcome => {
+    const newLines = newText.split("\n");
+    const lines = [
+      ...doc.lines.slice(0, b.range.startLine),
+      ...newLines,
+      ...doc.lines.slice(b.range.endLine + 1),
+    ];
+    return { changed: true, lines, newStartLine: b.range.startLine };
+  };
+
+  // Pass 1: fast path via the (possibly stale) scan-local id.
+  const idCandidate = paragraphCandidates.find((b) => b.id === anchor.complexBlockId);
   if (
-    block.parentId !== anchor.parentId ||
-    complexBlockDepth(doc, block.parentId) !== anchor.depth
+    idCandidate &&
+    idCandidate.parentId === anchor.parentId &&
+    complexBlockDepth(doc, idCandidate.parentId) === anchor.depth &&
+    extract(idCandidate) === anchor.originalText
   ) {
-    return { changed: false, lines: doc.lines, newStartLine: -1, reason: "identity-changed" };
-  }
-  const currentText = doc.lines.slice(block.range.startLine, block.range.endLine + 1).join("\n");
-  if (currentText !== anchor.originalText) {
-    return { changed: false, lines: doc.lines, newStartLine: -1, reason: "content-changed" };
+    return applyAt(idCandidate);
   }
 
-  const newLines = newText.split("\n");
-  const lines = [
-    ...doc.lines.slice(0, block.range.startLine),
-    ...newLines,
-    ...doc.lines.slice(block.range.endLine + 1),
-  ];
-  return { changed: true, lines, newStartLine: block.range.startLine };
+  // Pass 2: structural re-search, never trusting the id alone (see this
+  // function's own doc comment for the full rationale).
+  const sameSlotCandidates = paragraphCandidates.filter(
+    (b) => b.parentId === anchor.parentId && complexBlockDepth(doc, b.parentId) === anchor.depth
+  );
+  const exactMatches = sameSlotCandidates.filter((b) => extract(b) === anchor.originalText);
+
+  if (exactMatches.length === 1) {
+    return applyAt(exactMatches[0]);
+  }
+  if (exactMatches.length >= 2) {
+    return { changed: false, lines: doc.lines, newStartLine: -1, reason: "anchor-unresolved" };
+  }
+  // exactMatches.length === 0: nothing under this parent currently holds
+  // the anchor's exact text.
+  if (sameSlotCandidates.length === anchor.siblingCount) {
+    return { changed: false, lines: doc.lines, newStartLine: -1, reason: "content-changed" };
+  }
+  return { changed: false, lines: doc.lines, newStartLine: -1, reason: "anchor-unresolved" };
 }

@@ -234,6 +234,7 @@ describe("deleteParagraph: no-op / rejection cases", () => {
       originalText: "not really closed",
       rangeStart: 1,
       rangeEnd: 1,
+      siblingCount: 0,
     };
     const outcome = deleteParagraph(text, staleAnchor, DEFAULT_COMPOSITE_BLOCK_RULES);
     expect(outcome.changed).toBe(false);

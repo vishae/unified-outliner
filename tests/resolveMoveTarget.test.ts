@@ -672,3 +672,377 @@ describe("describeMoveUnit: move-result toast labels (English — see resolveMov
     );
   });
 });
+
+describe("Phase 5P-4 supplementary: successive Move block invocations keep tracking the same logical paragraph", () => {
+  // This block exists because this session's own investigation into the
+  // 5P-4 formalization ticket found that scanComplexBlocks assigns each
+  // paragraph candidate a scan-local id (`paragraph-${seq++}`, in document
+  // scan order — parser/complexBlocks.ts) that is NOT stable across a
+  // paragraph<->paragraph swap: swapping two paragraphs re-orders them in
+  // the document, so their scan-local ids swap too. A test asserting
+  // successive-move identity by comparing `unit.complexBlockId` (or any
+  // ComplexBlockInfo.id) across moves would therefore be silently wrong —
+  // it could pass even while tracking the wrong paragraph, or fail even
+  // when the right one is still being tracked. Every test below instead
+  // verifies identity the way a human eye would: by the paragraph's own
+  // TEXT CONTENT, re-extracted fresh from `doc.lines` after each move —
+  // exactly the signal a real "keep pressing Move block down" session has
+  // available, since scan-local ids are never surfaced to the user.
+  //
+  // Each walk below also mirrors the real command loop
+  // (main.ts#moveCurrentBlock -> commands/applyLineEditOutcome.ts) exactly:
+  // resolve fresh from the CURRENT cursor line, move, then advance the
+  // cursor to `outcome.newStartLine` for the next iteration — never by
+  // holding on to a node/complexBlockId across iterations.
+
+  it("section-level: 3 successive Move-down invocations keep resolving 'paragraph A' as the target, and the body matches the expected order after each step", () => {
+    let text = [
+      "# H",
+      "paragraph A",
+      "",
+      "paragraph B",
+      "",
+      "paragraph C",
+      "",
+      "paragraph D",
+      "",
+      "paragraph E",
+    ].join("\n");
+    let cursorLine = 1;
+    const expectedAfter = [
+      ["paragraph B", "paragraph A", "paragraph C", "paragraph D", "paragraph E"],
+      ["paragraph B", "paragraph C", "paragraph A", "paragraph D", "paragraph E"],
+      ["paragraph B", "paragraph C", "paragraph D", "paragraph A", "paragraph E"],
+    ];
+
+    for (let step = 0; step < 3; step++) {
+      const doc = parseDocument(text);
+      const resolved = resolveMoveUnit(doc, cursorLine);
+      expect(resolved.unit, `step ${step + 1}: resolution`).not.toBeNull();
+      const content = doc.lines
+        .slice(resolved.unit!.range.startLine, resolved.unit!.range.endLine + 1)
+        .join("\n");
+      expect(content, `step ${step + 1}: target identity by content`).toBe("paragraph A");
+
+      const outcome = moveComplexBlock(doc, resolved.unit!, "down");
+      expect(outcome.changed, `step ${step + 1}: move applied`).toBe(true);
+      text = outcome.lines.join("\n");
+      cursorLine = outcome.newStartLine;
+
+      const paragraphsInOrder = text.split("\n").filter((l) => l.startsWith("paragraph "));
+      expect(paragraphsInOrder, `step ${step + 1}: order`).toEqual(expectedAfter[step]);
+    }
+
+    // A 4th successive Move-down: A is not yet at the tail (paragraph E
+    // still follows it), so this must be a real, successful move, not a
+    // premature no-op.
+    let doc = parseDocument(text);
+    let resolved = resolveMoveUnit(doc, cursorLine);
+    let content = doc.lines
+      .slice(resolved.unit!.range.startLine, resolved.unit!.range.endLine + 1)
+      .join("\n");
+    expect(content, "step 4: still resolves to paragraph A").toBe("paragraph A");
+    let outcome = moveComplexBlock(doc, resolved.unit!, "down");
+    expect(outcome.changed, "step 4: A swaps past E").toBe(true);
+    text = outcome.lines.join("\n");
+    cursorLine = outcome.newStartLine;
+    expect(
+      text.split("\n").filter((l) => l.startsWith("paragraph ")),
+      "step 4: order"
+    ).toEqual(["paragraph B", "paragraph C", "paragraph D", "paragraph E", "paragraph A"]);
+
+    // A 5th successive Move-down: A is now the LAST paragraph, so this
+    // must be a safe no-op — body untouched, and the target still
+    // resolves to paragraph A (never silently re-targeting a neighbor).
+    doc = parseDocument(text);
+    resolved = resolveMoveUnit(doc, cursorLine);
+    content = doc.lines
+      .slice(resolved.unit!.range.startLine, resolved.unit!.range.endLine + 1)
+      .join("\n");
+    expect(content, "step 5: target is still paragraph A after the no-op boundary").toBe(
+      "paragraph A"
+    );
+    outcome = moveComplexBlock(doc, resolved.unit!, "down");
+    expect(outcome.changed, "step 5: tail no-op").toBe(false);
+    expect(outcome.reason).toBe("no-sibling");
+    expect(outcome.lines).toEqual(doc.lines);
+  });
+
+  it("section-level: 3 successive Move-up invocations (tracking paragraph E from the tail) keep resolving the same target, reaching the head, then a further Move-up is a safe no-op", () => {
+    let text = [
+      "# H",
+      "paragraph A",
+      "",
+      "paragraph B",
+      "",
+      "paragraph C",
+      "",
+      "paragraph D",
+      "",
+      "paragraph E",
+    ].join("\n");
+    let cursorLine = 9;
+    const expectedAfter = [
+      ["paragraph A", "paragraph B", "paragraph C", "paragraph E", "paragraph D"],
+      ["paragraph A", "paragraph B", "paragraph E", "paragraph C", "paragraph D"],
+      ["paragraph A", "paragraph E", "paragraph B", "paragraph C", "paragraph D"],
+    ];
+
+    for (let step = 0; step < 3; step++) {
+      const doc = parseDocument(text);
+      const resolved = resolveMoveUnit(doc, cursorLine);
+      const content = doc.lines
+        .slice(resolved.unit!.range.startLine, resolved.unit!.range.endLine + 1)
+        .join("\n");
+      expect(content, `step ${step + 1}: target identity by content`).toBe("paragraph E");
+
+      const outcome = moveComplexBlock(doc, resolved.unit!, "up");
+      expect(outcome.changed, `step ${step + 1}: move applied`).toBe(true);
+      text = outcome.lines.join("\n");
+      cursorLine = outcome.newStartLine;
+
+      expect(
+        text.split("\n").filter((l) => l.startsWith("paragraph ")),
+        `step ${step + 1}: order`
+      ).toEqual(expectedAfter[step]);
+    }
+
+    // 4th Move-up: E is not yet at the head (paragraph A still precedes
+    // it), so this is a real move.
+    let doc = parseDocument(text);
+    let resolved = resolveMoveUnit(doc, cursorLine);
+    let outcome = moveComplexBlock(doc, resolved.unit!, "up");
+    expect(outcome.changed, "step 4: E swaps past A").toBe(true);
+    text = outcome.lines.join("\n");
+    cursorLine = outcome.newStartLine;
+    expect(
+      text.split("\n").filter((l) => l.startsWith("paragraph ")),
+      "step 4: order"
+    ).toEqual(["paragraph E", "paragraph A", "paragraph B", "paragraph C", "paragraph D"]);
+
+    // 5th Move-up: E is now first — safe no-op, target still resolves to E.
+    doc = parseDocument(text);
+    resolved = resolveMoveUnit(doc, cursorLine);
+    const content = doc.lines
+      .slice(resolved.unit!.range.startLine, resolved.unit!.range.endLine + 1)
+      .join("\n");
+    expect(content, "step 5: target is still paragraph E after the no-op boundary").toBe(
+      "paragraph E"
+    );
+    outcome = moveComplexBlock(doc, resolved.unit!, "up");
+    expect(outcome.changed, "step 5: head no-op").toBe(false);
+    expect(outcome.reason).toBe("no-sibling");
+    expect(outcome.lines).toEqual(doc.lines);
+  });
+
+  it("list-item-child: 3 successive Move-down invocations keep resolving 'paragraph A' as the target under the same list item, reaching the tail after a 4th, then a further Move-down is a safe no-op", () => {
+    let text = [
+      "- item1",
+      "  paragraph A",
+      "",
+      "  paragraph B",
+      "",
+      "  paragraph C",
+      "",
+      "  paragraph D",
+      "",
+      "  paragraph E",
+    ].join("\n");
+    let cursorLine = 1;
+
+    for (let step = 0; step < 4; step++) {
+      const doc = parseDocument(text);
+      const resolved = resolveMoveUnit(doc, cursorLine);
+      expect(resolved.unit, `step ${step + 1}: resolution`).not.toBeNull();
+      const content = doc.lines
+        .slice(resolved.unit!.range.startLine, resolved.unit!.range.endLine + 1)
+        .join("\n");
+      expect(content, `step ${step + 1}: target identity by content`).toBe("  paragraph A");
+
+      const outcome = moveComplexBlock(doc, resolved.unit!, "down");
+      expect(outcome.changed, `step ${step + 1}: move applied`).toBe(true);
+      text = outcome.lines.join("\n");
+      cursorLine = outcome.newStartLine;
+    }
+
+    expect(
+      text.split("\n").filter((l) => l.trim().startsWith("paragraph ")),
+      "final order after 4 successive Move-downs"
+    ).toEqual([
+      "  paragraph B",
+      "  paragraph C",
+      "  paragraph D",
+      "  paragraph E",
+      "  paragraph A",
+    ]);
+
+    // 5th: A is now last within item1 — safe no-op, target still A.
+    const doc = parseDocument(text);
+    const resolved = resolveMoveUnit(doc, cursorLine);
+    const content = doc.lines
+      .slice(resolved.unit!.range.startLine, resolved.unit!.range.endLine + 1)
+      .join("\n");
+    expect(content, "step 5: target is still paragraph A after the no-op boundary").toBe(
+      "  paragraph A"
+    );
+    const outcome = moveComplexBlock(doc, resolved.unit!, "down");
+    expect(outcome.changed, "step 5: tail-of-list-item no-op").toBe(false);
+    expect(outcome.reason).toBe("no-sibling");
+    expect(outcome.lines).toEqual(doc.lines);
+  });
+
+  it("list-item-child: 3 successive Move-up invocations (tracking paragraph E from the tail) keep resolving the same target under the same list item, reaching the head after a 4th, then a further Move-up is a safe no-op", () => {
+    let text = [
+      "- item1",
+      "  paragraph A",
+      "",
+      "  paragraph B",
+      "",
+      "  paragraph C",
+      "",
+      "  paragraph D",
+      "",
+      "  paragraph E",
+    ].join("\n");
+    let cursorLine = 9;
+
+    for (let step = 0; step < 4; step++) {
+      const doc = parseDocument(text);
+      const resolved = resolveMoveUnit(doc, cursorLine);
+      expect(resolved.unit, `step ${step + 1}: resolution`).not.toBeNull();
+      const content = doc.lines
+        .slice(resolved.unit!.range.startLine, resolved.unit!.range.endLine + 1)
+        .join("\n");
+      expect(content, `step ${step + 1}: target identity by content`).toBe("  paragraph E");
+
+      const outcome = moveComplexBlock(doc, resolved.unit!, "up");
+      expect(outcome.changed, `step ${step + 1}: move applied`).toBe(true);
+      text = outcome.lines.join("\n");
+      cursorLine = outcome.newStartLine;
+    }
+
+    expect(
+      text.split("\n").filter((l) => l.trim().startsWith("paragraph ")),
+      "final order after 4 successive Move-ups"
+    ).toEqual([
+      "  paragraph E",
+      "  paragraph A",
+      "  paragraph B",
+      "  paragraph C",
+      "  paragraph D",
+    ]);
+
+    // 5th: E is now first within item1 — safe no-op, target still E.
+    const doc = parseDocument(text);
+    const resolved = resolveMoveUnit(doc, cursorLine);
+    const content = doc.lines
+      .slice(resolved.unit!.range.startLine, resolved.unit!.range.endLine + 1)
+      .join("\n");
+    expect(content, "step 5: target is still paragraph E after the no-op boundary").toBe(
+      "  paragraph E"
+    );
+    const outcome = moveComplexBlock(doc, resolved.unit!, "up");
+    expect(outcome.changed, "step 5: head-of-list-item no-op").toBe(false);
+    expect(outcome.reason).toBe("no-sibling");
+    expect(outcome.lines).toEqual(doc.lines);
+  });
+
+  it("a structural boundary (an unrelated list item) encountered mid-sequence rejects the second successive Move-down, leaving the body untouched and the target still resolving to paragraph A", () => {
+    const afterFirstMove = [
+      "# H",
+      "paragraph B",
+      "",
+      "paragraph A",
+      "",
+      "- some list item",
+      "",
+      "paragraph C",
+    ].join("\n");
+    let text = [
+      "# H",
+      "paragraph A",
+      "",
+      "paragraph B",
+      "",
+      "- some list item",
+      "",
+      "paragraph C",
+    ].join("\n");
+    let cursorLine = 1;
+
+    // Step 1: A <-> B succeeds normally.
+    let doc = parseDocument(text);
+    let resolved = resolveMoveUnit(doc, cursorLine);
+    let outcome = moveComplexBlock(doc, resolved.unit!, "down");
+    expect(outcome.changed, "step 1").toBe(true);
+    text = outcome.lines.join("\n");
+    cursorLine = outcome.newStartLine;
+    expect(text).toBe(afterFirstMove);
+
+    // Step 2: the next candidate below A is an unrelated list item, not a
+    // ComplexBlockInfo — findComplexSiblingTarget never treats a list
+    // item as a partner (see "paragraph <-> list ... is NOT a supported
+    // pairing" above), so this rejects rather than hopping across it.
+    doc = parseDocument(text);
+    resolved = resolveMoveUnit(doc, cursorLine);
+    const content = doc.lines
+      .slice(resolved.unit!.range.startLine, resolved.unit!.range.endLine + 1)
+      .join("\n");
+    expect(content, "step 2: target is still paragraph A before the rejected move").toBe(
+      "paragraph A"
+    );
+    outcome = moveComplexBlock(doc, resolved.unit!, "down");
+    expect(outcome.changed, "step 2: rejected").toBe(false);
+    // A blank-line-separated list item sitting between two same-parent
+    // paragraphs is the exact shape the pre-existing "rejects with
+    // boundary-unknown when a list item sits between two same-parent
+    // paragraphs" test (near the top of this file) pins to
+    // "boundary-unknown", not "no-sibling" — that reason is reserved for
+    // "nothing exists in that direction at all" or "the only candidate is
+    // a non-ComplexBlockInfo kind directly adjacent" (e.g. the "paragraph
+    // <-> list ... is NOT a supported pairing" test above, which has no
+    // blank-line gap in between). This test's fixture has that gap, so it
+    // takes the boundary-unknown path instead.
+    expect(outcome.reason).toBe("boundary-unknown");
+    expect(outcome.lines).toEqual(doc.lines);
+    expect(text).toBe(afterFirstMove);
+  });
+
+  it("an ambiguous/unsupported block (an unterminated fence) encountered mid-sequence rejects the second successive Move-down, leaving the body untouched and the target still resolving to paragraph A", () => {
+    let text = [
+      "- item1",
+      "  paragraph A",
+      "",
+      "  paragraph B",
+      "",
+      "  ```",
+      "  unterminated fence, no closing marker",
+    ].join("\n");
+    let cursorLine = 1;
+
+    // Step 1: A <-> B succeeds normally.
+    let doc = parseDocument(text);
+    let resolved = resolveMoveUnit(doc, cursorLine);
+    let outcome = moveComplexBlock(doc, resolved.unit!, "down");
+    expect(outcome.changed, "step 1").toBe(true);
+    text = outcome.lines.join("\n");
+    cursorLine = outcome.newStartLine;
+    const afterFirstMove = text;
+
+    // Step 2: the next candidate below A is the unterminated fence, whose
+    // editability is "ambiguous" — never offered as a sibling partner.
+    doc = parseDocument(text);
+    resolved = resolveMoveUnit(doc, cursorLine);
+    const content = doc.lines
+      .slice(resolved.unit!.range.startLine, resolved.unit!.range.endLine + 1)
+      .join("\n");
+    expect(content, "step 2: target is still paragraph A before the rejected move").toBe(
+      "  paragraph A"
+    );
+    outcome = moveComplexBlock(doc, resolved.unit!, "down");
+    expect(outcome.changed, "step 2: rejected").toBe(false);
+    expect(outcome.reason).toBe("no-sibling");
+    expect(outcome.lines).toEqual(doc.lines);
+    expect(text).toBe(afterFirstMove);
+  });
+});
