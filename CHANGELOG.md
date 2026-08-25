@@ -4,6 +4,12 @@ This project follows [Semantic Versioning](https://semver.org/). The entries bel
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-25
+
+### Fixed
+
+- Corrected the "Show body paragraphs in Outline Tree View" setting description (English and Japanese), which had never been updated after 0.5.0 added paragraph editing: it still claimed the Tree only lets you view and jump to paragraphs, and that editing, inserting, deleting, or moving a paragraph from the Tree was not possible. Top-level and section-direct paragraphs have in fact supported all of these (rename in place, insert before/after, delete, move, and Partial Edit) since 0.5.0; the description now says so. No functional change.
+
 ## [0.5.0] - 2026-08-25
 
 ### Added

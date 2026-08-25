@@ -172,7 +172,7 @@ Open **Settings → Community plugins → Unified Outliner** to configure, group
 
 - **Display language**: Auto (follows Obsidian's own language setting), Japanese, or English, for this plugin's own UI text.
 - **Outline Tree default sidebar**: right (default) or left. Only affects where a brand-new Outline Tree View opens — an already-open one (including one you've dragged elsewhere) is never relocated by changing this. Placing the tree in the left sidebar frees the right sidebar for the Partial Edit Pane, for the three-pane layout shown in the screenshot above.
-- **Show body paragraphs in Outline Tree View**: shows ordinary body paragraphs as read-only ¶-marked navigation nodes. Off by default.
+- **Show body paragraphs in Outline Tree View**: shows ordinary body paragraphs as ¶-marked navigation nodes; top-level and section-direct paragraphs can also be edited, inserted, deleted, and moved from the Tree (see above). Off by default.
 - **Show list items in Outline Tree View**: includes list items in the tree.
 - **Section background style in Outline Tree**: subtle background, left-edge stripe, or off, for telling section rows apart from list rows.
 - **List row highlight style in Outline Tree**: hover-only (default), always-on subtle background, or off.

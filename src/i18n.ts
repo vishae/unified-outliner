@@ -94,7 +94,7 @@ const en = {
     "Show list items as nodes in the right-sidebar Outline Tree View, alongside headings. Off by default (headings only, as in earlier versions of this plugin).",
   "settings.showParagraphsInOutline.name": "Show body paragraphs in Outline Tree View",
   "settings.showParagraphsInOutline.desc":
-    "Show ordinary body paragraphs as read-only navigation nodes (marked with ¶) in the Outline Tree View. This is display and navigation only — it does not let you edit, add, delete, or move a paragraph from the Tree. Off by default.",
+    "Show ordinary body paragraphs as navigation nodes (marked with ¶) in the Outline Tree View. Top-level and section-direct paragraphs can also be edited, inserted, deleted, and moved from the Tree (via its context menu or double-click) — paragraphs nested inside a list item are shown for navigation only. Off by default.",
   "settings.followKeyboardSelectionIntoBody.name":
     "Follow keyboard selection into body editor",
   "settings.followKeyboardSelectionIntoBody.desc":
@@ -647,7 +647,7 @@ const ja: Record<TranslationKey, string> = {
     "右サイドバーのアウトラインツリーに、見出しに加えてリスト項目もノードとして表示する。既定ではオフ（本プラグインの以前のバージョンと同様、見出しのみ）。",
   "settings.showParagraphsInOutline.name": "本文段落も Outline Tree に表示する",
   "settings.showParagraphsInOutline.desc":
-    "本文の通常の段落を、¶ マーク付きの read-only なナビゲーションノードとしてアウトラインツリーに表示する。あくまで表示・移動先ジャンプのみの機能であり、ツリーから段落を編集・追加・削除・移動できるようにするものではない。既定ではオフ。",
+    "本文の通常の段落を、¶ マーク付きのナビゲーションノードとしてアウトラインツリーに表示する。トップレベルおよびセクション直下の段落は、ツリー上のコンテキストメニューやダブルクリックから編集・追加（挿入）・削除・移動も行える（リスト項目内の段落は表示のみで、これらの操作の対象外）。既定ではオフ。",
   "settings.followKeyboardSelectionIntoBody.name": "キーボード選択を本文エディタに追従させる",
   "settings.followKeyboardSelectionIntoBody.desc":
     "アウトラインツリーを矢印キーで移動する際、行をクリックした場合と同様に本文エディタのカーソルとスクロール位置も移動する。オフにすると矢印キーによる移動はツリーパネル内に留まる（Enter キーは引き続き本文へジャンプする）。",
