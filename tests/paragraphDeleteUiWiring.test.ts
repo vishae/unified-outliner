@@ -43,13 +43,13 @@ describe("showParagraphMoveMenu's delete-item gate (isInScopeParagraphParent)", 
     expect(isInScopeParagraphParent(doc, info.parentId)).toBe(true);
   });
 
-  it("list-item-child paragraph: NOT in scope (this phase's explicit exclusion)", () => {
+  it("list-item-child paragraph: in scope (Phase 5P-5, 'list item 子 paragraph の Tree insert/delete 解禁' — widened from this phase's original exclusion)", () => {
     const text = ["- item", "  continuation paragraph"].join("\n");
     const doc = parseDocument(text);
     const scan = scanComplexBlocks(doc);
     const info = scan.blocks.find((b) => b.kind === "paragraph")!;
     expect(info).toBeDefined();
-    expect(isInScopeParagraphParent(doc, info.parentId)).toBe(false);
+    expect(isInScopeParagraphParent(doc, info.parentId)).toBe(true);
   });
 
   it("unresolvable parentId (note changed since the Tree last rendered): gate is false, not a throw", () => {

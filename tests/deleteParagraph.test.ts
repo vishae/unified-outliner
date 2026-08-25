@@ -166,22 +166,99 @@ describe("deleteParagraph: success cases", () => {
   });
 });
 
-describe("deleteParagraph: no-op / rejection cases", () => {
-  it("list-item-parent: a list-item-child paragraph is rejected, out of scope this phase", () => {
+describe("deleteParagraph: list-item-child paragraph (Phase 5P-5, 'list item 子 paragraph の Tree insert/delete 解禁')", () => {
+  it("a list item with exactly one child paragraph: deleting it leaves the list marker intact", () => {
     const text = ["- item", "  continuation paragraph"].join("\n");
     const doc = parseDocument(text);
     const scan = scanComplexBlocks(doc);
     const info = scan.blocks.find((b) => b.kind === "paragraph");
-    // Confirm the fixture really does produce a list-item-child paragraph
-    // before asserting the rejection.
     expect(info).toBeDefined();
     const anchor = buildParagraphMoveAnchor(doc, info!)!;
     const outcome = deleteParagraph(text, anchor, DEFAULT_COMPOSITE_BLOCK_RULES);
-    expect(outcome.changed).toBe(false);
-    expect(outcome.reason).toBe("list-item-parent");
-    expect(outcome.lines.join("\n")).toBe(text);
+    expect(outcome.changed).toBe(true);
+    expect(outcome.reason).toBeUndefined();
+    expect(outcome.lines.join("\n")).toBe("- item");
+    const reparsed = parseDocument(outcome.lines.join("\n"));
+    const reScan = scanComplexBlocks(reparsed);
+    expect(reScan.blocks.some((b) => b.kind === "paragraph")).toBe(false);
+    expect([...reparsed.nodes.values()].some((n) => n.type === "list")).toBe(true);
   });
 
+  it("a list item with two child paragraphs: deleting one leaves the other, still recognized as the same item's child", () => {
+    const text = ["- item", "  paraA", "", "  paraB"].join("\n");
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const paraA = scan.blocks.find(
+      (b) => b.kind === "paragraph" && doc.lines[b.range.startLine] === "  paraA"
+    )!;
+    const listItemId = paraA.parentId;
+    expect(listItemId).not.toBeNull();
+    const anchor = buildParagraphMoveAnchor(doc, paraA)!;
+    const outcome = deleteParagraph(text, anchor, DEFAULT_COMPOSITE_BLOCK_RULES);
+    expect(outcome.changed).toBe(true);
+    expect(outcome.lines.join("\n")).toBe(["- item", "", "  paraB"].join("\n"));
+    const reparsed = parseDocument(outcome.lines.join("\n"));
+    const reScan = scanComplexBlocks(reparsed);
+    const paraB = reScan.blocks.find((b) => b.kind === "paragraph");
+    expect(paraB).toBeDefined();
+    expect(paraB!.parentId).toBe(listItemId);
+  });
+
+  it("nested list: deleting the inner item's own child paragraph leaves the outer item, the inner item's own marker, and its sibling untouched", () => {
+    const text = [
+      "- outer",
+      "  - inner",
+      "    inner child paragraph",
+      "  - inner sibling",
+    ].join("\n");
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const info = scan.blocks.find((b) => b.kind === "paragraph")!;
+    expect(info).toBeDefined();
+    const anchor = buildParagraphMoveAnchor(doc, info)!;
+    const outcome = deleteParagraph(text, anchor, DEFAULT_COMPOSITE_BLOCK_RULES);
+    expect(outcome.changed).toBe(true);
+    expect(outcome.lines.join("\n")).toBe(
+      ["- outer", "  - inner", "  - inner sibling"].join("\n")
+    );
+    const reparsed = parseDocument(outcome.lines.join("\n"));
+    const listItems = [...reparsed.nodes.values()].filter((n) => n.type === "list");
+    expect(listItems).toHaveLength(3);
+  });
+
+  it("ambiguous-match still rejects a list-item-child paragraph that cannot be uniquely re-identified, leaving the note untouched — the scope widening does not bypass this pre-existing safety check", () => {
+    const text = ["- item", "  SAME"].join("\n");
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const info = scan.blocks.find((b) => b.kind === "paragraph")!;
+    const anchor = buildParagraphMoveAnchor(doc, info)!;
+    const ambiguousText = ["- item", "  SAME", "", "  SAME"].join("\n");
+    const outcome = deleteParagraph(ambiguousText, anchor, DEFAULT_COMPOSITE_BLOCK_RULES);
+    expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("ambiguous-match");
+    expect(outcome.lines.join("\n")).toBe(ambiguousText);
+  });
+
+  it("resolve-failed still rejects a stale list-item-child anchor whose scan-local id no longer exists, leaving the note untouched", () => {
+    const text = ["- item", "  A", "", "  B"].join("\n");
+    const anchor = anchorAtLine(text, 3); // "B" — the second child paragraph
+    const changedText = ["- item", "  A"].join("\n"); // "B" already removed
+    const outcome = deleteParagraph(changedText, anchor, DEFAULT_COMPOSITE_BLOCK_RULES);
+    expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("resolve-failed");
+    expect(outcome.lines.join("\n")).toBe(changedText);
+  });
+
+  it("isInScopeParagraphParent now returns true for a list-item parentId (menu-time gate, matching the pure function's own new scope)", () => {
+    const text = ["- item", "  continuation paragraph"].join("\n");
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const info = scan.blocks.find((b) => b.kind === "paragraph")!;
+    expect(isInScopeParagraphParent(doc, info.parentId)).toBe(true);
+  });
+});
+
+describe("deleteParagraph: no-op / rejection cases", () => {
   it("composite-member check: structurally unreachable via the real matchCompositeBlocks pipeline today, and does not falsely reject an ordinary paragraph", () => {
     // parser/compositeBlocks.ts#collectCandidates explicitly excludes every
     // kind==="paragraph" ComplexBlockInfo from composite-candidate

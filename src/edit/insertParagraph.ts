@@ -94,23 +94,65 @@
  * defense-in-depth precedent edit/deleteCompositeBlock.ts/
  * edit/deleteParagraph.ts already establish.
  *
- * ---- Deliberately out of scope (ticket §3) ----
+ * ---- Phase 5P-5 update ("list item 子 paragraph の Tree insert/delete 解禁") ----
  *
- * list-item-child paragraph insert, parent head/tail insert, insert
- * crossing section/list boundaries, any change to the paragraph delete
- * contract (5T-9A) or the existing paragraph/heading/list rename contracts
- * (5T-8A and earlier), Paragraph Partial Edit, F2, D&D, `draggable`,
+ * list-item-child paragraph insert is now IN SCOPE (previously excluded —
+ * see the removed entry below). `isInScopeParagraphParent` (imported from
+ * ./deleteParagraph, unchanged import) now also accepts a `"list"`-type
+ * parent; this file's own new responsibility is making the WRITE ITSELF
+ * safe for that case, which the pre-5P-5 version never needed to consider:
+ *
+ *   - Indentation: a new placeholder/body line inserted with no leading
+ *     whitespace would, on re-parse, not just fail to be recognized as the
+ *     target list item's child — it would trip
+ *     parser/parseDocument.ts's own list-closing rule (`closeItemsWithIndentAtLeast`
+ *     with the new line's own column, which for an unindented line is 0,
+ *     i.e. "close every currently-open list item, including outer nesting
+ *     levels"), corrupting the list structure. Every non-blank line of the
+ *     body is now prefixed to the target list item's own content-start
+ *     column via `listItemContentColumn` (parser/listContentColumn.ts —
+ *     the single shared authority, already used by
+ *     parser/complexBlocks.ts's own child-paragraph recognition and by
+ *     edit/insertBlock.ts's insertChildListItem) and the LOCAL
+ *     `buildColumnPrefix` below, a byte-identical duplicate of
+ *     edit/insertBlock.ts's own non-exported helper of the same name (this
+ *     codebase's established "duplicated, not imported" convention for a
+ *     small, file-local formatting helper — see edit/deleteParagraph.ts's
+ *     own `isParagraphCandidateLine` for the same precedent). Blank lines
+ *     (the before/after separators this file already inserts) are left
+ *     unprefixed — a blank line never closes a list item (see
+ *     parser/parseDocument.ts's own `isBlankLine` early-continue in its
+ *     scan loop) and needs no indentation to stay harmless.
+ *   - `unsafeIndent`: a list item whose own leading whitespace mixes tabs
+ *     and spaces (`ListBlockNode.unsafeIndent`) is rejected outright
+ *     (`"unsafe-indent"`) before any line is built, mirroring
+ *     edit/insertBlock.ts#insertChildListItem's own `if (parent.unsafeIndent)
+ *     return rejected(...)` precedent exactly — an unsafe-indent item's own
+ *     content column cannot be trusted to compute a correct prefix from.
+ *
+ * ---- Deliberately out of scope (ticket §3, as narrowed by Phase 5P-5) ----
+ *
+ * parent head/tail insert, insert crossing section/list boundaries, insert
+ * into an `unsafeIndent` list item (rejected, not attempted — see above),
+ * any change to the paragraph delete contract's OWN logic (5T-9A/5P-5) or
+ * the existing paragraph/heading/list rename contracts (5T-8A and
+ * earlier), Paragraph Partial Edit, F2, D&D, `draggable`,
  * `computeDropMode`, `runRelocateCommand`, drop indicator, mobile
- * long-press, edit/listBodyRange.ts, parser/parseDocument.ts, styles.css.
- * This file imports nothing from any of those and does not touch
- * parser/parseDocument.ts. The post-insert auto-rename / Cancel-rollback
- * UI wiring itself lives entirely in view/OutlineTreeView.ts, not here —
- * this module only ever produces or verifies a `lines[]` outcome.
+ * long-press, edit/listBodyRange.ts (its own double-representation debt is
+ * untouched — see docs/phase5t9_paragraph_delete_insert_design.md and the
+ * Phase 5P-5 audit that preceded this change), parser/parseDocument.ts,
+ * styles.css. This file still imports nothing from any of those and still
+ * does not touch parser/parseDocument.ts (only reads facts it already
+ * exposes: `leadingWhitespace`, `TAB_WIDTH`). The post-insert auto-rename /
+ * Cancel-rollback UI wiring itself lives entirely in view/OutlineTreeView.ts,
+ * not here — this module only ever produces or verifies a `lines[]`
+ * outcome.
  */
-import { ParsedDocument } from "../model/block";
+import { isListNode, ParsedDocument } from "../model/block";
 import { CompositeBlockRule } from "../model/compositeBlock";
 import { matchCompositeBlocks } from "../parser/compositeBlocks";
-import { isBlankLine, parseDocument } from "../parser/parseDocument";
+import { isBlankLine, leadingWhitespace, parseDocument, TAB_WIDTH } from "../parser/parseDocument";
+import { listItemContentColumn } from "../parser/listContentColumn";
 import { LineEditOutcome } from "../commands/applyLineEditOutcome";
 import { TranslationKey } from "../i18n";
 import {
@@ -133,22 +175,37 @@ export type ParagraphInsertPosition = "before" | "after";
  * reuse `NoParagraphTreeMoveReason`'s own SOURCE-side (here: the existing
  * TARGET paragraph the insert is anchored to) re-resolution values verbatim
  * (via `resolveAnchorUnit`) — see that type's own doc comment for the full
- * per-stage rationale. The last two mirror
+ * per-stage rationale. The next two mirror
  * edit/deleteParagraph.ts#NoParagraphDeleteReason's own identically-named
  * values:
  *
- *   - "list-item-parent": the re-resolved anchor paragraph's parent is a
- *     list item — out of scope this phase (see this module's top doc
- *     comment).
+ *   - "list-item-parent": as of Phase 5P-5, `isInScopeParagraphParent`
+ *     accepts BOTH a `"section"`-type and a `"list"`-type parent, so this
+ *     value is now reachable only when the re-resolved parentId fails to
+ *     resolve to any BlockNode at all (a dangling/stale reference —
+ *     structurally should not happen for a `parentId` produced by the same
+ *     fresh `doc` passed to `resolveAnchorUnit`, since `BlockNodeType` is a
+ *     closed `"list" | "section"` union). Kept as defense-in-depth, exactly
+ *     like "composite-member" below — see this module's top doc comment's
+ *     "Phase 5P-5 update" section.
  *   - "composite-member": the re-resolved anchor paragraph is currently a
  *     member of a matched CompositeBlock — see this module's top doc
  *     comment for why this is currently unreachable but kept as
  *     defense-in-depth.
+ *
+ * New in Phase 5P-5:
+ *
+ *   - "unsafe-indent": the re-resolved anchor paragraph's parent is a list
+ *     item whose own leading whitespace mixes tabs and spaces
+ *     (`ListBlockNode.unsafeIndent`) — its content-start column cannot be
+ *     trusted, so no line is ever built or inserted. Mirrors
+ *     edit/insertBlock.ts#insertChildListItem's own identical rejection.
  */
 export type NoParagraphInsertReason =
   | NoParagraphTreeMoveReason
   | "list-item-parent"
-  | "composite-member";
+  | "composite-member"
+  | "unsafe-indent";
 
 /**
  * insertParagraph's result — a deliberate structural subtype of
@@ -184,6 +241,22 @@ function isParagraphCandidateLine(line: string | undefined): boolean {
   if (HEADING_RE.test(line)) return false;
   if (LIST_RE.test(line)) return false;
   return true;
+}
+
+/**
+ * Build a leading-whitespace string reaching `targetColumns`, choosing tabs
+ * vs. spaces from `referenceLine`'s own existing indentation style. A
+ * byte-identical duplicate of edit/insertBlock.ts's own (non-exported)
+ * `buildColumnPrefix` — see this module's top doc comment's "Phase 5P-5
+ * update" section for why this is duplicated rather than imported (this
+ * codebase's established convention for a small, file-local formatting
+ * helper, matching `isParagraphCandidateLine`/`HEADING_RE`/`LIST_RE` above).
+ */
+function buildColumnPrefix(referenceLine: string, targetColumns: number): string {
+  const useTabs = leadingWhitespace(referenceLine).includes("\t");
+  return useTabs
+    ? "\t".repeat(Math.max(Math.round(targetColumns / TAB_WIDTH), 1))
+    : " ".repeat(targetColumns);
 }
 
 /**
@@ -240,6 +313,20 @@ export function insertParagraph(
     return rejected(doc.lines, "list-item-parent");
   }
 
+  // Phase 5P-5: when the target's parent is a list item, resolve it now
+  // (once) — used both for the unsafeIndent rejection below and for the
+  // indentation-prefix computation further down. `isInScopeParagraphParent`
+  // above already confirmed `unit.parentId` resolves to a `"section"` or
+  // `"list"` node, so a `null` here (parent不存在) cannot occur for a
+  // `"list"` parentId in practice; the `isListNode` guard keeps this
+  // strictly typed regardless.
+  const parentNode = unit.parentId !== null ? doc.nodes.get(unit.parentId) : undefined;
+  const listParent = parentNode && isListNode(parentNode) ? parentNode : null;
+
+  if (listParent && listParent.unsafeIndent) {
+    return rejected(doc.lines, "unsafe-indent");
+  }
+
   const composites = matchCompositeBlocks(doc, scan, rules);
   const isCompositeMember = composites.some((c) =>
     c.members.some((m) => m.kind === "paragraph" && m.id === unit.complexBlockId)
@@ -259,7 +346,22 @@ export function insertParagraph(
   const needsBefore = isParagraphCandidateLine(lineBefore);
   const needsAfter = isParagraphCandidateLine(lineAfter);
 
-  const bodyLines = bodyText.split("\n");
+  // Phase 5P-5: every non-blank line of the body is prefixed to the list
+  // item's own content-start column so it re-parses as THAT item's child
+  // rather than closing it — see this module's top doc comment's "Phase
+  // 5P-5 update" section. Blank lines (never emitted by bodyText itself —
+  // callers are expected to have already rejected an interior blank line,
+  // see paragraphEditTextContainsBlankLine — but handled defensively here
+  // too) are left unprefixed, matching the before/after separators below.
+  const rawBodyLines = bodyText.split("\n");
+  const bodyLines = listParent
+    ? rawBodyLines.map((line) => {
+        if (line.length === 0) return line;
+        const targetColumns = listItemContentColumn(doc, listParent);
+        const prefix = buildColumnPrefix(doc.lines[listParent.range.startLine], targetColumns);
+        return prefix + line;
+      })
+    : rawBodyLines;
 
   const segment: string[] = [];
   if (needsBefore) segment.push("");
@@ -319,6 +421,8 @@ export function paragraphInsertReasonText(
       return t("reason.paragraphInsertListItemParent");
     case "composite-member":
       return t("reason.paragraphInsertCompositeMember");
+    case "unsafe-indent":
+      return t("reason.paragraphInsertUnsafeIndent");
     default:
       return t(("reason." + reason) as TranslationKey);
   }

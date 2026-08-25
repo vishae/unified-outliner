@@ -15,8 +15,10 @@
  */
 import { describe, expect, it } from "vitest";
 import { parseDocument } from "../src/parser/parseDocument";
-import { scanComplexBlocks } from "../src/parser/complexBlocks";
+import { complexBlockDepth, scanComplexBlocks } from "../src/parser/complexBlocks";
 import { matchCompositeBlocks } from "../src/parser/compositeBlocks";
+import { listItemContentColumn } from "../src/parser/listContentColumn";
+import { ListBlockNode } from "../src/model/block";
 import {
   buildParagraphMoveAnchor,
   ParagraphMoveAnchor,
@@ -140,20 +142,119 @@ describe("insertParagraph: success cases", () => {
   });
 });
 
-describe("insertParagraph: no-op / rejection cases", () => {
-  it("list-item-parent: a list-item-child paragraph is rejected, out of scope this phase", () => {
+describe("insertParagraph: list-item-child paragraph (Phase 5P-5, 'list item 子 paragraph の Tree insert/delete 解禁')", () => {
+  it("insertBefore a list item's own single child paragraph: the new paragraph is indented to the item's own content column, not column 0", () => {
     const text = ["- item", "  continuation paragraph"].join("\n");
     const doc = parseDocument(text);
     const scan = scanComplexBlocks(doc);
-    const info = scan.blocks.find((b) => b.kind === "paragraph");
+    const info = scan.blocks.find((b) => b.kind === "paragraph")!;
+    const listItemId = info.parentId!;
+    const targetColumns = listItemContentColumn(doc, doc.nodes.get(listItemId) as ListBlockNode);
+    const anchor = buildParagraphMoveAnchor(doc, info)!;
+    const outcome = insertParagraph(text, anchor, "before", DEFAULT_COMPOSITE_BLOCK_RULES);
+    expect(outcome.changed).toBe(true);
+    const placeholderLineText = outcome.lines[outcome.newStartLine];
+    // Explicit "never at column 0" check (ticket's own required assertion).
+    expect(placeholderLineText.match(/^[ \t]*/)![0].length).toBeGreaterThan(0);
+    expect(placeholderLineText).toBe(" ".repeat(targetColumns) + PARAGRAPH_INSERT_PLACEHOLDER_TEXT);
+
+    const reparsed = parseDocument(outcome.lines.join("\n"));
+    const reScan = scanComplexBlocks(reparsed);
+    const placeholder = reScan.blocks.find(
+      (b) => b.kind === "paragraph" && reparsed.lines[b.range.startLine] === placeholderLineText
+    );
+    expect(placeholder).toBeDefined();
+    expect(placeholder!.parentId).toBe(listItemId);
+    expect(placeholder!.editability).toBe("supported");
+  });
+
+  it("insertAfter a list item's own child paragraph: the new paragraph is re-parsed as the SAME list item's child, at the SAME depth", () => {
+    const text = ["- item", "  continuation paragraph"].join("\n");
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const info = scan.blocks.find((b) => b.kind === "paragraph")!;
+    const listItemId = info.parentId!;
+    const originalDepth = complexBlockDepth(doc, listItemId);
+    const anchor = buildParagraphMoveAnchor(doc, info)!;
+    const outcome = insertParagraph(text, anchor, "after", DEFAULT_COMPOSITE_BLOCK_RULES);
+    expect(outcome.changed).toBe(true);
+
+    const reparsed = parseDocument(outcome.lines.join("\n"));
+    const reScan = scanComplexBlocks(reparsed);
+    const placeholder = reScan.blocks.find(
+      (b) =>
+        b.kind === "paragraph" &&
+        reparsed.lines
+          .slice(b.range.startLine, b.range.endLine + 1)
+          .join("\n")
+          .includes(PARAGRAPH_INSERT_PLACEHOLDER_TEXT)
+    );
+    expect(placeholder).toBeDefined();
+    expect(placeholder!.parentId).toBe(listItemId);
+    expect(complexBlockDepth(reparsed, placeholder!.parentId)).toBe(originalDepth);
+  });
+
+  it("nested list: insertBefore/insertAfter into the inner item's own child paragraph preserves both the inner and outer list markers and hierarchy", () => {
+    const text = ["- outer", "  - inner", "    inner child paragraph"].join("\n");
+    for (const position of ["before", "after"] as const) {
+      const doc = parseDocument(text);
+      const scan = scanComplexBlocks(doc);
+      const info = scan.blocks.find((b) => b.kind === "paragraph")!;
+      const innerItemId = info.parentId!;
+      const anchor = buildParagraphMoveAnchor(doc, info)!;
+      const outcome = insertParagraph(text, anchor, position, DEFAULT_COMPOSITE_BLOCK_RULES);
+      expect(outcome.changed).toBe(true);
+
+      const reparsed = parseDocument(outcome.lines.join("\n"));
+      const listItems = [...reparsed.nodes.values()].filter((n) => n.type === "list");
+      // Both original markers ("- outer", "  - inner") survive byte-for-byte,
+      // and no third list item was accidentally introduced by the insert.
+      expect(outcome.lines).toContain("- outer");
+      expect(outcome.lines).toContain("  - inner");
+      expect(listItems).toHaveLength(2);
+
+      const reScan = scanComplexBlocks(reparsed);
+      const placeholder = reScan.blocks.find(
+        (b) =>
+          b.kind === "paragraph" &&
+          reparsed.lines
+            .slice(b.range.startLine, b.range.endLine + 1)
+            .join("\n")
+            .includes(PARAGRAPH_INSERT_PLACEHOLDER_TEXT)
+      );
+      expect(placeholder).toBeDefined();
+      expect(placeholder!.parentId).toBe(innerItemId);
+    }
+  });
+
+  it("unsafeIndent: a list item whose leading whitespace mixes tabs and spaces rejects insert with a dedicated reason, leaving the note byte-for-byte unchanged", () => {
+    // The nested item's own MARKER indentation ("\t " — a tab then a space,
+    // before the "-") mixes tabs and spaces — parser/parseDocument.ts's own
+    // isMixedIndent(markerIndentWs) flags exactly this as unsafeIndent (not
+    // the separator between the marker and its text, which is unrelated).
+    const text = ["- outer", "\t - item", "\t   continuation paragraph"].join("\n");
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const info = scan.blocks.find((b) => b.kind === "paragraph")!;
     expect(info).toBeDefined();
-    const anchor = buildParagraphMoveAnchor(doc, info!)!;
+    const listItem = doc.nodes.get(info.parentId!) as ListBlockNode;
+    expect(listItem.unsafeIndent).toBe(true);
+    const anchor = buildParagraphMoveAnchor(doc, info)!;
     const outcome = insertParagraph(text, anchor, "before", DEFAULT_COMPOSITE_BLOCK_RULES);
     expect(outcome.changed).toBe(false);
-    expect(outcome.reason).toBe("list-item-parent");
+    expect(outcome.reason).toBe("unsafe-indent");
     expect(outcome.lines.join("\n")).toBe(text);
   });
 
+  it("existing top-level/section-direct paragraph insert does not regress: no indentation prefix is applied when the parent is not a list item", () => {
+    const text = ["# H", "A"].join("\n");
+    const outcome = ins(text, 1, "before");
+    expect(outcome.changed).toBe(true);
+    expect(outcome.lines).toEqual(["# H", PARAGRAPH_INSERT_PLACEHOLDER_TEXT, "", "A"]);
+  });
+});
+
+describe("insertParagraph: no-op / rejection cases", () => {
   it("composite-member check: structurally unreachable via the real matchCompositeBlocks pipeline today (same root cause as edit/deleteParagraph.ts's own identically-named check — parser/compositeBlocks.ts#collectCandidates excludes every kind===\"paragraph\" block from composite-candidate collection), and does not falsely reject an ordinary paragraph", () => {
     const rule: CompositeBlockRule[] = [
       { id: "caption-paragraph", kindSequence: ["single-line-list", "paragraph"], prefix: "" },
@@ -288,6 +389,7 @@ describe("paragraphInsertReasonText / i18n", () => {
     "ambiguous-match",
     "list-item-parent",
     "composite-member",
+    "unsafe-indent",
   ];
 
   it("every reason resolves to a non-empty, distinct-per-locale string in both en and ja", () => {

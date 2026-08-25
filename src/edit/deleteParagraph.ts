@@ -20,14 +20,23 @@
  *
  * ---- What this module adds beyond resolveAnchorUnit ----
  *
- *   - Scope gating (5T-9A ticket §2/§3, per the user's final decision):
- *     only a `parentId === null` (top-level) or `parentId` resolving to a
- *     `BlockNode` of `type === "section"` (section-direct) paragraph may be
- *     deleted this phase. A `parentId` resolving to a list item (`type ===
- *     "list"`) is rejected as `"list-item-parent"` — list-item-child
- *     paragraph delete is explicitly out of scope this round (the
- *     edit/listBodyRange.ts double-representation debt recorded in
- *     docs/phase5t9_paragraph_delete_insert_design.md and NOT fixed here).
+ *   - Scope gating (5T-9A ticket §2/§3, per the user's final decision;
+ *     WIDENED by Phase 5P-5, "list item 子 paragraph の Tree insert/delete
+ *     解禁"): a `parentId === null` (top-level) or `parentId` resolving to a
+ *     `BlockNode` of `type === "section"` OR `type === "list"` paragraph
+ *     may be deleted. Before Phase 5P-5, a list-item parent was rejected as
+ *     `"list-item-parent"` — the Phase 5P-5 audit (see
+ *     docs/phase5t9_paragraph_delete_insert_design.md for the original
+ *     5T-9A/5T-9D/5T-10A exclusion, and the audit report that preceded this
+ *     change) traced every remaining piece of this function's own logic
+ *     (blank-line-merge safety, post-delete fallback line, composite-member
+ *     check) and found it already generic across "section" and "list"
+ *     parents — a paragraph's own line RANGE is deleted either way; no
+ *     list marker, sibling, or nested list line is ever touched. The
+ *     edit/listBodyRange.ts double-representation debt itself remains
+ *     UNFIXED and out of scope (it is a read-only tooltip concern this
+ *     function never touches — see this file's own "Deliberately out of
+ *     scope" section below).
  *   - Composite-member exclusion: this module re-runs `matchCompositeBlocks`
  *     against the SAME fresh scan `resolveAnchorUnit` already produced, and
  *     rejects as `"composite-member"` if the re-resolved paragraph's id
@@ -109,16 +118,20 @@
  *     concept (ticket's explicit "新しい focus management の仕組みを発明し
  *     ないこと").
  *
- * ---- Deliberately out of scope (ticket §3) ----
+ * ---- Deliberately out of scope (ticket §3, as narrowed by Phase 5P-5) ----
  *
- * paragraph insert, list-item-child paragraph delete, CompositeBlock-member
- * paragraph delete (rejected, not supported), callout/blockquote/
+ * paragraph insert (a separate module, edit/insertParagraph.ts — its own
+ * top doc comment covers its Phase 5P-5 scope, including the new
+ * indentation-prefix/unsafeIndent logic insert alone needs), CompositeBlock-
+ * member paragraph delete (rejected, not supported), callout/blockquote/
  * code-fence/table-internal paragraph delete (never reachable — not kind
  * "paragraph"), any change to rename/Partial Edit/dblclick/F2 contracts,
  * D&D, `draggable`, `computeDropMode`, `runRelocateCommand`, drop indicator,
- * mobile long-press, edit/listBodyRange.ts, parser/parseDocument.ts,
- * styles.css. This file imports nothing from any of those and does not
- * touch parser/parseDocument.ts.
+ * mobile long-press, edit/listBodyRange.ts (its own double-representation
+ * debt is untouched — see docs/phase5t9_paragraph_delete_insert_design.md
+ * and the Phase 5P-5 audit that preceded this change), parser/
+ * parseDocument.ts, styles.css. This file imports nothing from any of those
+ * and does not touch parser/parseDocument.ts.
  */
 import { ParsedDocument } from "../model/block";
 import { ComplexBlockInfo } from "../model/complexBlock";
@@ -141,8 +154,11 @@ import { listNonAdjacentMoveTargets } from "./paragraphNonAdjacentMove";
  * verbatim (via `resolveAnchorUnit`) — see that type's own doc comment for
  * the full per-stage rationale. The last two are this module's own:
  *
- *   - "list-item-parent": the re-resolved paragraph's parent is a list item
- *     — out of scope this phase (see this module's top doc comment).
+ *   - "list-item-parent": as of Phase 5P-5, a list-item parent is IN SCOPE
+ *     (see isInScopeParagraphParent's own doc comment below) — this value
+ *     is now reachable only when the re-resolved parentId fails to resolve
+ *     to any BlockNode at all, which should not occur for a parentId
+ *     produced by scanning the same fresh `doc`. Kept as defense-in-depth.
  *   - "composite-member": the re-resolved paragraph is currently a member of
  *     a matched CompositeBlock — delete must go through the CompositeBlock's
  *     own delete path (edit/deleteCompositeBlock.ts), never this one.
@@ -213,7 +229,12 @@ export function deleteParagraph(
 
   if (unit.parentId !== null) {
     const parent = doc.nodes.get(unit.parentId);
-    if (!parent || parent.type !== "section") {
+    // Phase 5P-5 ("list item 子 paragraph の Tree insert/delete 解禁"): a
+    // "list"-type parent is now in scope alongside "section" — see
+    // isInScopeParagraphParent's own doc comment below for the full
+    // rationale and for why this now-narrower rejection is kept as
+    // defense-in-depth rather than removed.
+    if (!parent || (parent.type !== "section" && parent.type !== "list")) {
       return rejected(doc.lines, "list-item-parent");
     }
   }
@@ -299,14 +320,26 @@ export function paragraphDeleteReasonText(
   }
 }
 
-// Re-exported for callers (view/OutlineTreeView.ts) that need to gate a
-// delete menu item's own VISIBILITY at menu-build time, without duplicating
-// this scope rule inline. Menu-time use only — never itself a green light to
-// write to the note; the actual delete always re-derives this same check
-// against a FRESH doc inside `deleteParagraph` above (see this module's top
-// doc comment).
+// Re-exported for callers (view/OutlineTreeView.ts, edit/insertParagraph.ts)
+// that need to gate a delete/insert menu item's own VISIBILITY at menu-build
+// time (or an insert's own write, via insertParagraph.ts's reuse of this
+// exact function), without duplicating this scope rule inline. Menu-time use
+// only — never itself a green light to write to the note; the actual
+// delete/insert always re-derives this same check against a FRESH doc inside
+// `deleteParagraph`/`insertParagraph` (see this module's top doc comment).
+//
+// Phase 5P-5 ("list item 子 paragraph の Tree insert/delete 解禁"): now
+// accepts a `"list"`-type parent alongside `"section"`. `BlockNodeType` is a
+// closed `"list" | "section"` union (model/block.ts), so `parent?.type` can
+// only ever be one of those two once `parent` is defined — the `undefined`
+// (parentId does not resolve to any node) branch is the only way this can
+// still return false for a non-null parentId, which should not occur for a
+// parentId produced by scanning the SAME doc passed in here. Kept exactly
+// as permissive/restrictive as that fact allows, per the Phase 5P-5 audit's
+// explicit instruction not to weaken the existing supported/ambiguous/
+// parent-unresolved guarantees resolveAnchorUnit already provides upstream.
 export function isInScopeParagraphParent(doc: ParsedDocument, parentId: string | null): boolean {
   if (parentId === null) return true;
   const parent = doc.nodes.get(parentId);
-  return parent?.type === "section";
+  return parent?.type === "section" || parent?.type === "list";
 }

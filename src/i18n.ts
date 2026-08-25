@@ -603,8 +603,13 @@ const en = {
     "Unified Outliner: the note changed, so the delete was cancelled.",
   "reason.paragraphDeleteAmbiguous":
     "Unified Outliner: this paragraph could not be uniquely identified, so the delete was cancelled.",
+  // Phase 5P-5: list-item-child paragraph delete is now supported, so this
+  // reason no longer fires for "is inside a list item" — kept only as
+  // defense-in-depth for a parentId that fails to resolve to any BlockNode
+  // at all (see edit/deleteParagraph.ts#isInScopeParagraphParent's own doc
+  // comment).
   "reason.paragraphDeleteListItemParent":
-    "Unified Outliner: this paragraph is inside a list item, which can't be deleted from the Outline Tree yet.",
+    "Unified Outliner: this paragraph's parent could not be resolved, so it can't be deleted from the Outline Tree.",
   "reason.paragraphDeleteCompositeMember":
     "Unified Outliner: this paragraph is part of an extended block; delete the extended block instead.",
 
@@ -620,10 +625,18 @@ const en = {
     "Unified Outliner: the note changed, so the insert was cancelled.",
   "reason.paragraphInsertAmbiguous":
     "Unified Outliner: this paragraph could not be uniquely identified, so the insert was cancelled.",
+  // Phase 5P-5: list-item-child paragraph insert is now supported, so this
+  // reason no longer fires for "is inside a list item" — kept only as
+  // defense-in-depth, mirroring reason.paragraphDeleteListItemParent above.
   "reason.paragraphInsertListItemParent":
-    "Unified Outliner: this paragraph is inside a list item, which can't have a paragraph inserted from the Outline Tree yet.",
+    "Unified Outliner: this paragraph's parent could not be resolved, so a paragraph can't be inserted from the Outline Tree.",
   "reason.paragraphInsertCompositeMember":
     "Unified Outliner: this paragraph is part of an extended block; insert is not available there.",
+  // Phase 5P-5: the target's parent is a list item whose own leading
+  // whitespace mixes tabs and spaces — its content column can't be trusted,
+  // so the insert is refused before any line is built.
+  "reason.paragraphInsertUnsafeIndent":
+    "Unified Outliner: this list item's indentation mixes tabs and spaces, so a paragraph can't be safely inserted there.",
 } as const;
 
 export type TranslationKey = keyof typeof en;
@@ -1062,7 +1075,7 @@ const ja: Record<TranslationKey, string> = {
   "reason.paragraphDeleteAmbiguous":
     "Unified Outliner: この段落を一意に特定できなかったため、削除を取り消した。",
   "reason.paragraphDeleteListItemParent":
-    "Unified Outliner: この段落はリスト項目内にあり、まだアウトラインツリーから削除できない。",
+    "Unified Outliner: この段落の親を解決できなかったため、アウトラインツリーから削除できない。",
   "reason.paragraphDeleteCompositeMember":
     "Unified Outliner: この段落は拡張ブロックの一部である。拡張ブロックごと削除してほしい。",
 
@@ -1076,9 +1089,11 @@ const ja: Record<TranslationKey, string> = {
   "reason.paragraphInsertAmbiguous":
     "Unified Outliner: この段落を一意に特定できなかったため、挿入を取り消した。",
   "reason.paragraphInsertListItemParent":
-    "Unified Outliner: この段落はリスト項目内にあり、まだアウトラインツリーから段落を挿入できない。",
+    "Unified Outliner: この段落の親を解決できなかったため、アウトラインツリーから段落を挿入できない。",
   "reason.paragraphInsertCompositeMember":
     "Unified Outliner: この段落は拡張ブロックの一部であるため、挿入は利用できない。",
+  "reason.paragraphInsertUnsafeIndent":
+    "Unified Outliner: このリスト項目はタブとスペースが混在したインデントのため、段落を安全に挿入できない。",
 };
 
 const DICTIONARIES: Record<SupportedLocale, Record<TranslationKey, string>> = {
