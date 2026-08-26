@@ -146,6 +146,12 @@ import {
   buildParagraphEditAnchor,
   ParagraphEditAnchor,
 } from "../edit/paragraphPartialEdit";
+import {
+  buildQuotePrefixProjection,
+  invertQuotePrefixProjection,
+  projectedDisplayText,
+  QuotePrefixProjection,
+} from "../edit/quotePrefixProjection";
 
 export const PARTIAL_EDIT_VIEW_TYPE = "unified-outliner-partial-edit";
 
@@ -175,6 +181,17 @@ export class PartialEditView extends ItemView {
   private label = "";
   /** The pane's "before editing" snapshot — see edit/partialEdit.ts's applySubtreeEdit doc comment. */
   private originalText = "";
+  /**
+   * Phase 5D-0.5: set (never for a paragraph/section/list, and never for a
+   * callout/blockquote that failed to project — see loadNodeInternal) when
+   * the loaded node is a callout/blockquote whose body is currently shown
+   * PREFIX-STRIPPED in the textarea. `originalText` above ALWAYS stays the
+   * raw, `>`-prefixed snapshot regardless of this field — see
+   * currentDisplayText's doc comment for the one place the two are
+   * reconciled. null means "show `originalText` verbatim" (every non-quote
+   * kind, a quote block with no body to project, and a fresh empty pane).
+   */
+  private quoteProjection: QuotePrefixProjection | null = null;
   /**
    * Phase 5C-4: the file path of the note `nodeId` was actually loaded
    * from, recorded once per loadNodeInternal call (never recomputed
@@ -219,6 +236,8 @@ export class PartialEditView extends ItemView {
   private siblingNextEl!: HTMLButtonElement;
   private siblingNextTargetEl!: HTMLElement;
   private subtreeNavEl!: HTMLElement;
+  /** Phase 5D-0.5: read-only display of a projecting callout's own header line (`> [!type]+ title`), shown ABOVE the textarea — see renderQuoteHeader's doc comment. Stays hidden for every other case (blockquote has no header; a raw-loaded node has nothing to separate out). */
+  private quoteHeaderEl!: HTMLElement;
   private textareaEl!: HTMLTextAreaElement;
   private applyButtonEl!: HTMLButtonElement;
   private cancelButtonEl!: HTMLButtonElement;
@@ -386,12 +405,22 @@ export class PartialEditView extends ItemView {
       cls: "unified-outliner-partial-edit-subtree-nav",
     });
 
+    // Phase 5D-0.5: created once here (like every other row in this
+    // method), visibility/content toggled per-load by renderQuoteHeader —
+    // same "create once in onOpen, mutate on each render" policy as
+    // breadcrumbEl/siblingNavEl/subtreeNavEl above.
+    this.quoteHeaderEl = this.contentEl.createDiv({
+      cls: "unified-outliner-partial-edit-quote-header",
+    });
+
     this.textareaEl = this.contentEl.createEl("textarea", {
       cls: "unified-outliner-partial-edit-textarea",
     });
     // See updateDirtyState's doc comment: Apply/Cancel are only shown once
     // there is something to Apply/Cancel, so every keystroke needs to
-    // re-check whether the textarea still matches originalText.
+    // re-check whether the textarea still matches its loaded snapshot
+    // (originalText, or — Phase 5D-0.5 — the projected displayText for a
+    // projecting callout/blockquote; see isDirty/currentDisplayText).
     this.textareaEl.addEventListener("input", () => this.updateDirtyState());
 
     // Real-device follow-up: keep exactly one visible close affordance.
@@ -531,6 +560,31 @@ export class PartialEditView extends ItemView {
       return;
     }
 
+    // Phase 5D-0.5: the quote-prefix-projection gate — deliberately BEFORE
+    // any field on this pane is mutated below, so a "nested" refusal
+    // leaves the pane exactly as it was (whatever was loaded before this
+    // call, or the empty state) and never touches the note. Only
+    // callout/blockquote ever attempt a projection; every other kind
+    // (section/list) leaves `quoteProjection` at null, same as a
+    // callout/blockquote whose reason is "no-body" (see
+    // buildQuotePrefixProjection's own doc comment) — both fall through to
+    // this pane's existing, unmodified raw-text load path below.
+    let quoteProjection: QuotePrefixProjection | null = null;
+    if (extracted.kind === "callout" || extracted.kind === "blockquote") {
+      const built = buildQuotePrefixProjection(extracted.text, extracted.kind);
+      if (!built.ok && built.reason === "nested") {
+        new Notice(this.plugin.t("partialEdit.quoteNestedUnsupported"));
+        return;
+      }
+      if (built.ok) {
+        quoteProjection = built.projection;
+      }
+      // built.reason === "no-body": quoteProjection stays null, and
+      // loadNodeInternal proceeds exactly as it always has — this specific
+      // callout is shown raw, `>` prefix and all, via the untouched path
+      // below (see renderLoadedState/currentDisplayText).
+    }
+
     const t = this.plugin.t.bind(this.plugin);
     const node = doc.nodes.get(nodeId);
     let label: string;
@@ -554,6 +608,7 @@ export class PartialEditView extends ItemView {
     // class's own doc comment).
     this.paragraphAnchor = null;
     this.originalText = extracted.text;
+    this.quoteProjection = quoteProjection;
     this.label = label;
     // Phase 5C-4: recorded fresh on every load, from the SAME `view` this
     // method already resolved `doc` from above — see the class field's own
@@ -610,6 +665,12 @@ export class PartialEditView extends ItemView {
     this.paragraphAnchor = buildParagraphEditAnchor(doc, paragraph);
     this.nodeKind = "paragraph";
     this.originalText = paragraph.text;
+    // Phase 5D-0.5: a paragraph never projects — see this class field's own
+    // doc comment (quoteProjection is exclusively a callout/blockquote
+    // concept). Reset alongside originalText/nodeKind above so a pane that
+    // was just showing a projected quote body doesn't leave a stale
+    // projection behind for currentDisplayText/isDirty to trip over.
+    this.quoteProjection = null;
     this.label = paragraph.preview;
     // Phase 5C-4 convention, reused as-is: recorded fresh on every load,
     // from the SAME `view` this method already resolved `doc` from above.
@@ -643,9 +704,13 @@ export class PartialEditView extends ItemView {
     // implicitly leaves nodeId/nodeKind at their initial null values (never
     // set here), so paragraphAnchor is cleared explicitly to match.
     this.paragraphAnchor = null;
+    // Phase 5D-0.5: reset alongside paragraphAnchor above — see the class
+    // field's own doc comment.
+    this.quoteProjection = null;
     this.renderBreadcrumb();
     this.renderSiblingNav();
     this.renderSubtreeNavigator();
+    this.renderQuoteHeader();
     this.updateDirtyState();
   }
 
@@ -678,11 +743,61 @@ export class PartialEditView extends ItemView {
     this.textareaEl.disabled = false;
     this.applyButtonEl.disabled = false;
     this.cancelButtonEl.disabled = false;
-    this.textareaEl.value = this.originalText;
+    // Phase 5D-0.5: currentDisplayText() returns the prefix-stripped
+    // projectedDisplayText for a projecting callout/blockquote, and
+    // `this.originalText` verbatim for every other case (including a
+    // callout/blockquote that fell back to raw editing) — see that
+    // method's own doc comment.
+    this.textareaEl.value = this.currentDisplayText();
     this.renderBreadcrumb();
     this.renderSiblingNav();
     this.renderSubtreeNavigator();
+    this.renderQuoteHeader();
     this.updateDirtyState();
+  }
+
+  /**
+   * Phase 5D-0.5: the pane's "what should the textarea currently show"
+   * value. Deliberately the ONLY place these two are reconciled — every
+   * other reader (applySubtreeEdit's conflict re-extraction inside
+   * applyEdit, the paragraph branch's own originalText bookkeeping) keeps
+   * reading `this.originalText` directly and must keep doing so, since
+   * that field is the raw snapshot applySubtreeEdit's contract requires.
+   * `quoteProjection` is non-null only for a callout/blockquote whose body
+   * was successfully projected (see loadNodeInternal/buildQuotePrefixProjection);
+   * every other case — section, list, paragraph, and a callout/blockquote
+   * that fell back to raw editing (the "no-body" case) — has
+   * `quoteProjection === null` and simply shows `originalText` verbatim,
+   * exactly as this pane always has.
+   */
+  private currentDisplayText(): string {
+    return this.quoteProjection ? projectedDisplayText(this.quoteProjection) : this.originalText;
+  }
+
+  /**
+   * Phase 5D-0.5: draw (or hide) the read-only callout-header row above
+   * the textarea. Only ever visible for a projecting CALLOUT — a
+   * projecting blockquote has no header concept at all
+   * (`quoteProjection.header` is always null for kind "blockquote"; see
+   * QuotePrefixProjection's own doc comment), and a non-projecting node of
+   * any kind has nothing to separate out. Deliberately NOT editable here
+   * — this initial version's approved scope explicitly excludes header
+   * editing ("callout header は読み取り専用"); the header is carried
+   * through Apply unedited, verbatim, by invertQuotePrefixProjection.
+   * Re-run only from loadNodeInternal's render call and renderEmptyState,
+   * i.e. exactly when the loaded node itself changes — never on every
+   * keystroke, matching renderBreadcrumb's own "static until the next
+   * load" policy immediately below.
+   */
+  private renderQuoteHeader(): void {
+    const header = this.quoteProjection?.header ?? null;
+    if (header === null) {
+      this.quoteHeaderEl.toggleVisibility(false);
+      this.quoteHeaderEl.setText("");
+      return;
+    }
+    this.quoteHeaderEl.toggleVisibility(true);
+    this.quoteHeaderEl.setText(header);
   }
 
   /**
@@ -949,7 +1064,12 @@ export class PartialEditView extends ItemView {
   /** Revert unsaved edits in the textarea — does not close the pane or change which node is loaded. */
   private cancelEdit(): void {
     if (!this.nodeId && !this.paragraphAnchor) return;
-    this.textareaEl.value = this.originalText;
+    // Phase 5D-0.5: reverts to the projected displayText (not the raw
+    // originalText) for a projecting callout/blockquote — see
+    // currentDisplayText's own doc comment. Every other kind is
+    // unaffected, since currentDisplayText falls through to originalText
+    // verbatim whenever quoteProjection is null.
+    this.textareaEl.value = this.currentDisplayText();
     this.updateDirtyState();
   }
 
@@ -1072,7 +1192,27 @@ export class PartialEditView extends ItemView {
       return true;
     }
 
-    const outcome = applySubtreeEdit(doc, this.nodeId!, this.originalText, this.textareaEl.value);
+    // Phase 5D-0.5: for a projecting callout/blockquote, the textarea
+    // holds prefix-stripped display text — invert it back to raw Markdown
+    // BEFORE handing anything to the raw-text splice call below (unmodified
+    // by this ticket — it only ever knows about raw text). A
+    // line-count-changed edit (add/remove/newline-split a line) is refused
+    // right here, with its own dedicated Notice, and never reaches that
+    // splice call at all — no partial/best-effort splice is attempted.
+    // Every other kind (quoteProjection === null) is untouched: newRawText
+    // is simply whatever the textarea already held, exactly as before
+    // this ticket.
+    let newRawText = this.textareaEl.value;
+    if (this.quoteProjection) {
+      const inverted = invertQuotePrefixProjection(this.quoteProjection, this.textareaEl.value);
+      if (!inverted.ok) {
+        new Notice(this.plugin.t("partialEdit.quoteLineCountChanged"));
+        return false;
+      }
+      newRawText = inverted.rawText;
+    }
+
+    const outcome = applySubtreeEdit(doc, this.nodeId!, this.originalText, newRawText);
     const node = doc.nodes.get(this.nodeId!);
     const startLine = node ? node.range.startLine : 0;
 
@@ -1094,7 +1234,37 @@ export class PartialEditView extends ItemView {
       () => {}
     );
 
-    this.originalText = this.textareaEl.value;
+    // Phase 5D-0.5: originalText re-anchors to the RECONSTRUCTED raw text
+    // (never the textarea's own, possibly prefix-stripped, value) — for
+    // every non-projecting kind newRawText === this.textareaEl.value
+    // already, so this is byte-identical to the pre-5D-0.5 behavior there.
+    this.originalText = newRawText;
+    if (this.quoteProjection) {
+      // Rebuild the projection/line-mapping fresh from the just-applied
+      // raw text, rather than trusting the pre-apply projection's now
+      // possibly-stale prefixes — this is what guarantees a SECOND Apply
+      // in the same pane session starts from a fully current basis (see
+      // the class doc comment's originalText/quoteProjection contract).
+      // A rebuild can fail here ONLY with reason "nested" — never
+      // "no-body" (line count, and therefore body-line count, cannot
+      // change on this path; see invertQuotePrefixProjection) — if the
+      // user's own edited content happened to introduce a literal leading
+      // `>` into a line (typed, not structural). That is not a data-loss
+      // risk (the Apply above already succeeded and the note already
+      // holds newRawText); this pane simply, safely degrades to showing
+      // that node raw from here on, exactly like the "no-body" fallback
+      // already does for a header-only callout.
+      const kind = this.quoteProjection.kind;
+      const rebuilt = buildQuotePrefixProjection(newRawText, kind);
+      this.quoteProjection = rebuilt.ok ? rebuilt.projection : null;
+      this.renderQuoteHeader();
+      // Keep the textarea itself in sync with whatever currentDisplayText()
+      // now resolves to (projected again, or raw on the rare degrade
+      // above) — normally a no-op, since projecting the just-reconstructed
+      // raw text back should reproduce exactly what the textarea already
+      // shows.
+      this.textareaEl.value = this.currentDisplayText();
+    }
     this.updateDirtyState();
 
     const lineLen = editor.getLine(outcome.newStartLine)?.length ?? 0;
@@ -1145,9 +1315,15 @@ export class PartialEditView extends ItemView {
    * so it lives in one place instead of being duplicated inline.
    */
   private isDirty(): boolean {
+    // Phase 5D-0.5: compares against currentDisplayText() (the projected
+    // displayText for a projecting callout/blockquote, originalText
+    // verbatim otherwise) — NEVER against raw originalText directly for a
+    // projecting node, or every keystroke in the prefix-stripped textarea
+    // would spuriously read as dirty relative to the still-`>`-prefixed
+    // raw snapshot. See currentDisplayText's own doc comment.
     return (
       (this.nodeId !== null || this.paragraphAnchor !== null) &&
-      this.textareaEl.value !== this.originalText
+      this.textareaEl.value !== this.currentDisplayText()
     );
   }
 

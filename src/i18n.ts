@@ -332,6 +332,18 @@ const en = {
   // Phase 5P-2: Apply-success notice for a paragraph loaded via
   // requestLoadParagraphAtCursor — see view/PartialEditView.ts's applyEdit.
   "partialEdit.paragraphUpdated": "Unified Outliner: paragraph updated.",
+  // Phase 5D-0.5: loadNodeInternal's quote-prefix-projection gate refuses
+  // to open the Pane at all for a nested quote/nested callout (see
+  // edit/quotePrefixProjection.ts's "nested" reason) — no raw fallback.
+  "partialEdit.quoteNestedUnsupported":
+    "Unified Outliner: nested quotes are not yet supported for editing quote body text here.",
+  // Phase 5D-0.5: applyEdit's invertQuotePrefixProjection refusal — the
+  // edited display text's line count no longer matches the loaded
+  // projection's own body-line count (a line was added, removed, or
+  // split/joined via a newline). Zero-byte-change: the note is never
+  // touched when this fires.
+  "partialEdit.quoteLineCountChanged":
+    "Unified Outliner: adding or removing lines is not supported here — edit existing line content only.",
   "partialEdit.unsavedChangesTitle": "Unified Outliner: unsaved changes",
   "partialEdit.unsavedChangesBody":
     "This node has unapplied edits. Apply them before switching, discard them, or stay here.",
@@ -856,6 +868,11 @@ const ja: Record<TranslationKey, string> = {
   "partialEdit.listSubtreeUpdated": "Unified Outliner: リストサブツリーを更新した。",
   "partialEdit.sectionUpdated": "Unified Outliner: セクションを更新した。",
   "partialEdit.paragraphUpdated": "Unified Outliner: 段落を更新した。",
+  // Phase 5D-0.5: ユーザー指定の文言をそのまま使用する。
+  "partialEdit.quoteNestedUnsupported":
+    "Unified Outliner: ネストした引用は現在の引用本文編集に未対応である。",
+  "partialEdit.quoteLineCountChanged":
+    "Unified Outliner: ここでは行の追加・削除に対応していない。既存の行の内容のみを編集してほしい。",
   "partialEdit.previousSibling": "前へ",
   "partialEdit.nextSibling": "次へ",
   "partialEdit.noPreviousSibling": "前の兄弟がない",

@@ -601,6 +601,25 @@ settings:
   max-width: none;
 }
 
+/* Phase 5D-0.5: read-only callout-header row shown above the textarea for
+ * a projecting callout (PartialEditView.ts's renderQuoteHeader). Hidden
+ * (display: none, via toggleVisibility) whenever there is no header to
+ * show — every non-callout kind, a projecting blockquote (no header
+ * concept), and a callout that fell back to raw editing. */
+.unified-outliner-partial-edit-quote-header {
+  flex-shrink: 0;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background-color: rgba(128, 128, 128, 0.08);
+  color: var(--uo-text-color);
+  opacity: 0.75;
+  font-size: calc(var(--uo-font-size, 14px) - 1px);
+  font-family: var(--font-monospace, monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .unified-outliner-partial-edit-textarea {
   flex: 1 1 auto;
   width: 100%;

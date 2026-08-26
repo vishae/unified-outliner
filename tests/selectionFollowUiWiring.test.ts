@@ -206,7 +206,14 @@ describe("PartialEditView.ts: selection follow wiring (Phase 5T-5A)", () => {
   });
 
   it("the section/list subtree save-success path also calls plugin.queueOutlineTreeSelectionFollow(outcome.newStartLine)", () => {
-    const subtreeIdx = partialEditTs.indexOf("applySubtreeEdit(doc, this.nodeId!, this.originalText, this.textareaEl.value)");
+    // Phase 5D-0.5: this call now passes `newRawText` (the textarea's raw
+    // Markdown, inverse-projected back from prefix-stripped display text
+    // for a projecting callout/blockquote — byte-identical to
+    // `this.textareaEl.value` for every other kind) rather than
+    // `this.textareaEl.value` directly — see
+    // tests/quotePrefixPartialEditViewWiring.test.ts for the dedicated
+    // wiring coverage of that change itself.
+    const subtreeIdx = partialEditTs.indexOf("applySubtreeEdit(doc, this.nodeId!, this.originalText, newRawText)");
     expect(subtreeIdx).toBeGreaterThan(-1);
     const followIdx = partialEditTs.indexOf(
       "this.plugin.queueOutlineTreeSelectionFollow(outcome.newStartLine);",
