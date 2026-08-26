@@ -1651,9 +1651,45 @@ export class OutlineTreeView extends ItemView {
         evt.preventDefault();
         this.showStandaloneComplexBlockMenu(evt, node.id);
       });
+    } else if (
+      isComplexMember &&
+      !node.isStandalone &&
+      (node.complexKind === "callout" || node.complexKind === "blockquote")
+    ) {
+      // Phase 5D-0.4: a FOURTH complex-member menu path — for a
+      // composite-member callout/blockquote row (node.isStandalone ===
+      // false). matchCompositeBlocks (parser/compositeBlocks.ts) already
+      // requires `editability === "supported"` for every member it
+      // accepts, so a row reaching this branch is always resolvable by
+      // extractSubtreeText exactly like a standalone row is — no
+      // additional editability check is needed here. fenced-code/table/
+      // thematic-break are excluded by the explicit kind check above even
+      // though no shipped CompositeBlockRule currently produces them as a
+      // second member (defensive, matches this ticket's own scope: only
+      // callout/blockquote members get an editing entry point).
+      //
+      // Deliberately a NEW, narrower menu (showComplexMemberPartialEditMenu)
+      // rather than reusing showStandaloneComplexBlockMenu as-is: that
+      // method also offers "Move standalone block up/down"
+      // (evaluateStandaloneComplexBlockMovability), which assumes the
+      // target is NOT a composite member (its own move-target search
+      // walks complexScan.blocks directly, with no composite-membership
+      // awareness) and which this ticket explicitly does not extend to
+      // composite members (no move/drag & drop for members — unchanged
+      // from Phase 5D-0.3 approval §1). The two Partial Edit items
+      // themselves call the exact same activatePartialEditView(nodeId)
+      // entry point as the standalone row, which re-resolves the target
+      // fresh via extractSubtreeText at click/Apply time regardless of
+      // whether nodeId happens to belong to a standalone or a
+      // composite-member block — no member-specific loader or Apply path
+      // exists or is needed.
+      selfEl.addEventListener("contextmenu", (evt) => {
+        evt.preventDefault();
+        this.showComplexMemberPartialEditMenu(evt, node.id);
+      });
     } else if (isParagraph) {
       // Phase 5T-1 ("Outline Tree の paragraph context menu からの安全な上下
-      // 移動"): a FOURTH, separate menu path — for a paragraph row only.
+      // 移動"): a FIFTH, separate menu path — for a paragraph row only.
       // Deliberately NOT gated by `!readOnly`, same reasoning as the
       // composite/standalone branches above (paragraph rows are always in
       // readOnlyNodeIds — see collectReadOnlyOutlineNodeIds — and stay that
@@ -2972,6 +3008,50 @@ export class OutlineTreeView extends ItemView {
       }
     }
 
+    this.showTrackedMenu(menu, evt);
+  }
+
+  /**
+   * Phase 5D-0.4: the composite-member counterpart of
+   * showStandaloneComplexBlockMenu above — for a callout/blockquote row
+   * that IS a CompositeBlock member (node.isStandalone === false). Offers
+   * ONLY the two Partial Edit items, both reusing the exact same
+   * activatePartialEditView(nodeId[, opts]) entry point and
+   * tree.menu.openPartialEditPane(NewWindow) i18n keys as every other
+   * "Open in Partial Edit" item in this file (section/list/standalone
+   * complex-member) — no member-specific loader, Apply path, or i18n text
+   * is introduced. activatePartialEditView's own re-parse (via
+   * PartialEditView's extractSubtreeText call) re-verifies fresh, at click
+   * time, that nodeId still resolves to a supported callout/blockquote —
+   * exactly like the standalone menu's own doc comment already explains —
+   * so no eligibility re-check is needed here either.
+   *
+   * Deliberately NOT a superset/reuse of showStandaloneComplexBlockMenu:
+   * that method also unconditionally computes and offers "Move up"/"Move
+   * down" via evaluateStandaloneComplexBlockMovability/
+   * buildStandaloneComplexBlockSnapshot, both of which assume their target
+   * is a standalone (non-member) block and have no composite-membership
+   * awareness at all. Composite-member move/drag & drop remains explicitly
+   * out of scope (Phase 5D-0.3 approval §1, unchanged by this ticket), so
+   * this menu never offers it — a member row's menu is always exactly
+   * these two items, never conditionally fewer or more.
+   */
+  private showComplexMemberPartialEditMenu(evt: MouseEvent, nodeId: string): void {
+    const menu = new Menu();
+    menu.addItem((item) =>
+      item
+        .setTitle(this.plugin.t("tree.menu.openPartialEditPane"))
+        .setIcon("edit-3")
+        .onClick(() => void this.plugin.activatePartialEditView(nodeId))
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle(this.plugin.t("tree.menu.openPartialEditPaneNewWindow"))
+        .setIcon("picture-in-picture-2")
+        .onClick(() =>
+          void this.plugin.activatePartialEditView(nodeId, { openInNewWindow: true })
+        )
+    );
     this.showTrackedMenu(menu, evt);
   }
 
