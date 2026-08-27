@@ -354,6 +354,13 @@ const en = {
   // this one is about the title, a single-line field by definition).
   "partialEdit.quoteTitleNewlineUnsupported":
     "Unified Outliner: the callout title cannot contain a line break.",
+  // Phase 5D-1B: tooltip/aria-label for the fold-marker <select> itself
+  // (see view/PartialEditView.ts's onOpen). The three option labels below
+  // are the user-approved exact wording for this ticket.
+  "partialEdit.quoteFoldMarkerLabel": "Callout fold behavior",
+  "partialEdit.quoteFoldMarkerNone": "Not foldable",
+  "partialEdit.quoteFoldMarkerExpand": "Foldable, expanded by default",
+  "partialEdit.quoteFoldMarkerCollapse": "Foldable, collapsed by default",
   "partialEdit.unsavedChangesTitle": "Unified Outliner: unsaved changes",
   "partialEdit.unsavedChangesBody":
     "This node has unapplied edits. Apply them before switching, discard them, or stay here.",
@@ -886,6 +893,11 @@ const ja: Record<TranslationKey, string> = {
   "partialEdit.quoteTitleLabel": "コールアウトのタイトル",
   "partialEdit.quoteTitleNewlineUnsupported":
     "Unified Outliner: コールアウトのタイトルには改行を含められない。",
+  // Phase 5D-1B: ユーザー承認済みの厳密な文言をそのまま使用する。
+  "partialEdit.quoteFoldMarkerLabel": "コールアウトの折りたたみ設定",
+  "partialEdit.quoteFoldMarkerNone": "固定（折りたたみなし）",
+  "partialEdit.quoteFoldMarkerExpand": "展開可能（初期状態: 展開）",
+  "partialEdit.quoteFoldMarkerCollapse": "展開可能（初期状態: 折りたたみ）",
   "partialEdit.previousSibling": "前へ",
   "partialEdit.nextSibling": "次へ",
   "partialEdit.noPreviousSibling": "前の兄弟がない",

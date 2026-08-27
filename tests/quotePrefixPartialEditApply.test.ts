@@ -305,15 +305,17 @@ describe("quote-prefix projection: existing refusal paths do not regress", () =>
   });
 });
 
-// ---- Phase 5D-1A ("Callout Header Title Editing") -----------------------
+// ---- Phase 5D-1A ("Callout Header Title Editing") / 5D-1B ("Callout
+// Fold Marker Editing") ----------------------------------------------------
 //
 // The same Apply pipeline above, extended with reconstructQuoteHeader for
 // a callout whose header successfully split out a titleSlot. Mirrors
 // view/PartialEditView.ts's applyEdit EXACTLY: invert the body first,
 // then — only when the projection's own titleSlot is non-null —
-// reconstruct the header from the title input's current value and splice
-// it in as the new first line, BEFORE the single applySubtreeEdit call.
-// Never two separate writes, never a new conflict-detection path.
+// reconstruct the header from the fold-marker select's and title input's
+// current values (ONE combined reconstruction) and splice it in as the
+// new first line, BEFORE the single applySubtreeEdit call. Never two
+// separate writes, never a new conflict-detection path.
 
 const OCR_COMPOSITE_FIXTURE = [
   "# Notes",
@@ -325,14 +327,23 @@ const OCR_COMPOSITE_FIXTURE = [
   "still here",
 ].join("\n");
 
+const LIST_CHILD_CALLOUT_FIXTURE = [
+  "# Notes",
+  "- list item",
+  "  > [!note] Child Callout",
+  "  > body line",
+  "# Next",
+].join("\n");
+
 /**
  * Mirrors the exact sequence PartialEditView.ts's applyEdit runs for a
  * projecting callout: invert the body via invertQuotePrefixProjection,
  * then — only when the projection's own titleSlot is non-null —
- * reconstruct the header via reconstructQuoteHeader and splice it in as
- * the new first line, before the single applySubtreeEdit call. This is
- * NOT a new production function — the real logic is the few inline lines
- * inside applyEdit, already pinned by
+ * reconstruct the header via reconstructQuoteHeader (now taking BOTH the
+ * fold-marker select's and the title input's current values, Phase
+ * 5D-1B) and splice it in as the new first line, before the single
+ * applySubtreeEdit call. This is NOT a new production function — the
+ * real logic is the few inline lines inside applyEdit, already pinned by
  * tests/quotePrefixPartialEditViewWiring.test.ts's static source checks;
  * this is a local test helper only, matching this file's own established
  * "exercise the identical sequence of pure calls the View makes,
@@ -344,10 +355,11 @@ function applyProjected(
   extractedText: string,
   projection: QuotePrefixProjection,
   editedBodyDisplay: string,
+  newMarkerValue: "" | "+" | "-",
   newTitleValue: string
 ):
   | { applied: false; stage: "invert"; reason: "line-count-changed" }
-  | { applied: false; stage: "reconstruct"; reason: "newline" }
+  | { applied: false; stage: "reconstruct"; reason: "newline" | "invalid-marker" }
   | { applied: true; outcome: ReturnType<typeof applySubtreeEdit>; newRawText: string } {
   const inverted = invertQuotePrefixProjection(projection, editedBodyDisplay);
   if (!inverted.ok) {
@@ -356,7 +368,7 @@ function applyProjected(
   let newRawText = inverted.rawText;
   const titleSlot = projection.titleSlot;
   if (titleSlot) {
-    const reconstructed = reconstructQuoteHeader(titleSlot, newTitleValue);
+    const reconstructed = reconstructQuoteHeader(titleSlot, newMarkerValue, newTitleValue);
     if (!reconstructed.ok) {
       return { applied: false, stage: "reconstruct", reason: reconstructed.reason };
     }
@@ -367,7 +379,7 @@ function applyProjected(
   return { applied: true, outcome, newRawText };
 }
 
-describe("quote-prefix projection Apply pipeline: title editing (Phase 5D-1A, standalone callout)", () => {
+describe("quote-prefix projection Apply pipeline: title editing, marker UNCHANGED (Phase 5D-1A regression, standalone callout)", () => {
   it("a title-only edit updates only the header's title, leaving every body line and its `>` prefix untouched", () => {
     const doc = parseDocument(FIXTURE);
     const id = calloutId(doc);
@@ -377,9 +389,18 @@ describe("quote-prefix projection Apply pipeline: title editing (Phase 5D-1A, st
     const built = buildQuotePrefixProjection(extracted.text, "callout");
     expect(built.ok).toBe(true);
     if (!built.ok) return;
+    const titleSlot = built.projection.titleSlot!;
 
     const unedited = projectedDisplayText(built.projection);
-    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "Renamed Title");
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      titleSlot.marker,
+      "Renamed Title"
+    );
     expect(result.applied).toBe(true);
     if (!result.applied) return;
     expect(result.outcome.changed).toBe(true);
@@ -409,9 +430,18 @@ describe("quote-prefix projection Apply pipeline: title editing (Phase 5D-1A, st
     const built = buildQuotePrefixProjection(extracted.text, "callout");
     expect(built.ok).toBe(true);
     if (!built.ok) return;
+    const titleSlot = built.projection.titleSlot!;
 
     const editedBody = ["line one EDITED", "line two"].join("\n");
-    const result = applyProjected(doc, id, extracted.text, built.projection, editedBody, "New Title");
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      editedBody,
+      titleSlot.marker,
+      "New Title"
+    );
     expect(result.applied).toBe(true);
     if (!result.applied) return;
     expect(result.outcome.changed).toBe(true);
@@ -432,7 +462,7 @@ describe("quote-prefix projection Apply pipeline: title editing (Phase 5D-1A, st
     );
   });
 
-  it("an unedited title + unedited body Apply leaves the callout byte-for-byte unchanged", () => {
+  it("an unedited title + unedited marker + unedited body Apply leaves the callout byte-for-byte unchanged", () => {
     const doc = parseDocument(FIXTURE);
     const id = calloutId(doc);
     const extracted = extractSubtreeText(doc, id);
@@ -446,7 +476,15 @@ describe("quote-prefix projection Apply pipeline: title editing (Phase 5D-1A, st
     if (!titleSlot) return;
 
     const unedited = projectedDisplayText(built.projection);
-    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, titleSlot.title);
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      titleSlot.marker,
+      titleSlot.title
+    );
     expect(result.applied).toBe(true);
     if (!result.applied) return;
     expect(result.newRawText).toBe(extracted.text);
@@ -455,7 +493,7 @@ describe("quote-prefix projection Apply pipeline: title editing (Phase 5D-1A, st
     expect(result.outcome.lines.join("\n")).toBe(FIXTURE);
   });
 
-  it("emptying an existing title reuses beforeTitle unmodified — no dangling separator space is left behind", () => {
+  it("emptying an existing title (marker unchanged) reuses the separator unmodified — no dangling separator space is left behind", () => {
     const doc = parseDocument(FIXTURE);
     const id = calloutId(doc);
     const extracted = extractSubtreeText(doc, id);
@@ -464,9 +502,10 @@ describe("quote-prefix projection Apply pipeline: title editing (Phase 5D-1A, st
     const built = buildQuotePrefixProjection(extracted.text, "callout");
     expect(built.ok).toBe(true);
     if (!built.ok) return;
+    const titleSlot = built.projection.titleSlot!;
 
     const unedited = projectedDisplayText(built.projection);
-    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "");
+    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, titleSlot.marker, "");
     expect(result.applied).toBe(true);
     if (!result.applied) return;
     expect(result.outcome.changed).toBe(true);
@@ -474,7 +513,7 @@ describe("quote-prefix projection Apply pipeline: title editing (Phase 5D-1A, st
     expect(result.outcome.lines).toContain("> [!note] ");
   });
 
-  it("adding a title to a previously title-less callout inserts exactly one separating space", () => {
+  it("adding a title to a previously title-less callout (marker unchanged) inserts exactly one separating space", () => {
     const doc = parseDocument(["# Notes", "> [!warning]", "> only body content", "# Next"].join("\n"));
     const id = calloutId(doc);
     const extracted = extractSubtreeText(doc, id);
@@ -483,9 +522,18 @@ describe("quote-prefix projection Apply pipeline: title editing (Phase 5D-1A, st
     const built = buildQuotePrefixProjection(extracted.text, "callout");
     expect(built.ok).toBe(true);
     if (!built.ok) return;
+    const titleSlot = built.projection.titleSlot!;
 
     const unedited = projectedDisplayText(built.projection);
-    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "New Title");
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      titleSlot.marker,
+      "New Title"
+    );
     expect(result.applied).toBe(true);
     if (!result.applied) return;
     expect(result.outcome.changed).toBe(true);
@@ -504,6 +552,7 @@ describe("quote-prefix projection Apply pipeline: title editing (Phase 5D-1A, st
     const built = buildQuotePrefixProjection(extracted.text, "callout");
     expect(built.ok).toBe(true);
     if (!built.ok) return;
+    const titleSlot = built.projection.titleSlot!;
 
     const editedBody = ["line one EDITED", "line two"].join("\n");
     const result = applyProjected(
@@ -512,6 +561,7 @@ describe("quote-prefix projection Apply pipeline: title editing (Phase 5D-1A, st
       extracted.text,
       built.projection,
       editedBody,
+      titleSlot.marker,
       "line one\nline two"
     );
     expect(result).toEqual({ applied: false, stage: "reconstruct", reason: "newline" });
@@ -521,8 +571,230 @@ describe("quote-prefix projection Apply pipeline: title editing (Phase 5D-1A, st
   });
 });
 
-describe("quote-prefix projection Apply pipeline: title editing (Phase 5D-1A, composite-member callout)", () => {
-  it("a composite-member callout's title-only edit produces the exact same shaped result as a standalone callout — no separate writer, no different behavior", () => {
+// ---- Phase 5D-1B ("Callout Fold Marker Editing") -------------------------
+
+describe("quote-prefix projection Apply pipeline: fold-marker editing (Phase 5D-1B, standalone callout)", () => {
+  it("a marker-only edit updates only the header's fold marker, leaving title, body, and every `>` prefix untouched", () => {
+    const doc = parseDocument(FIXTURE);
+    const id = calloutId(doc);
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const titleSlot = built.projection.titleSlot!;
+
+    const unedited = projectedDisplayText(built.projection);
+    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "+", titleSlot.title);
+    expect(result.applied).toBe(true);
+    if (!result.applied) return;
+    expect(result.outcome.changed).toBe(true);
+    if (!result.outcome.changed) return;
+    expect(result.outcome.lines.join("\n")).toBe(
+      [
+        "# Notes",
+        "- an unrelated list item",
+        "> [!note]+ My Callout",
+        "> line one",
+        "> line two",
+        "",
+        "> a blockquote line one",
+        "> a blockquote line two",
+        "# Next section",
+        "still here",
+      ].join("\n")
+    );
+  });
+
+  it("a marker+title simultaneous edit applies both in a single Apply", () => {
+    const doc = parseDocument(FIXTURE);
+    const id = calloutId(doc);
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+
+    const unedited = projectedDisplayText(built.projection);
+    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "-", "Renamed");
+    expect(result.applied).toBe(true);
+    if (!result.applied) return;
+    expect(result.outcome.changed).toBe(true);
+    if (!result.outcome.changed) return;
+    expect(result.outcome.lines).toContain("> [!note]- Renamed");
+  });
+
+  it("a marker+title+body simultaneous edit applies all three in a single Apply", () => {
+    const doc = parseDocument(FIXTURE);
+    const id = calloutId(doc);
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+
+    const editedBody = ["line one EDITED", "line two"].join("\n");
+    const result = applyProjected(doc, id, extracted.text, built.projection, editedBody, "+", "Renamed");
+    expect(result.applied).toBe(true);
+    if (!result.applied) return;
+    expect(result.outcome.changed).toBe(true);
+    if (!result.outcome.changed) return;
+    expect(result.outcome.lines.join("\n")).toBe(
+      [
+        "# Notes",
+        "- an unrelated list item",
+        "> [!note]+ Renamed",
+        "> line one EDITED",
+        "> line two",
+        "",
+        "> a blockquote line one",
+        "> a blockquote line two",
+        "# Next section",
+        "still here",
+      ].join("\n")
+    );
+  });
+
+  it("removing an existing fold marker (marker -> none, title/body unchanged) round-trips correctly", () => {
+    const doc = parseDocument(
+      ["# Notes", "> [!tip]- Folded Callout", "> body", "# Next"].join("\n")
+    );
+    const id = calloutId(doc);
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const titleSlot = built.projection.titleSlot!;
+
+    const unedited = projectedDisplayText(built.projection);
+    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "", titleSlot.title);
+    expect(result.applied).toBe(true);
+    if (!result.applied) return;
+    expect(result.outcome.changed).toBe(true);
+    if (!result.outcome.changed) return;
+    expect(result.outcome.lines.join("\n")).toBe(
+      ["# Notes", "> [!tip] Folded Callout", "> body", "# Next"].join("\n")
+    );
+  });
+
+  it("adding a marker to a previously title-less, marker-less callout composes the space-insertion rule and the marker insertion correctly", () => {
+    const doc = parseDocument(["# Notes", "> [!warning]", "> only body content", "# Next"].join("\n"));
+    const id = calloutId(doc);
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+
+    const unedited = projectedDisplayText(built.projection);
+    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "+", "New Title");
+    expect(result.applied).toBe(true);
+    if (!result.applied) return;
+    expect(result.outcome.changed).toBe(true);
+    if (!result.outcome.changed) return;
+    expect(result.outcome.lines.join("\n")).toBe(
+      ["# Notes", "> [!warning]+ New Title", "> only body content", "# Next"].join("\n")
+    );
+  });
+
+  it("an unedited marker + unedited title + unedited body Apply leaves the callout byte-for-byte unchanged, for a `+`-folded callout", () => {
+    const docText = ["# Notes", "> [!tip]+ Folded Callout", "> body", "# Next"].join("\n");
+    const doc = parseDocument(docText);
+    const id = calloutId(doc);
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const titleSlot = built.projection.titleSlot!;
+
+    const unedited = projectedDisplayText(built.projection);
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      titleSlot.marker,
+      titleSlot.title
+    );
+    expect(result.applied).toBe(true);
+    if (!result.applied) return;
+    expect(result.newRawText).toBe(extracted.text);
+    expect(result.outcome.changed).toBe(true);
+    if (!result.outcome.changed) return;
+    expect(result.outcome.lines).toEqual(docText.split("\n"));
+    expect(result.outcome.lines).toContain("> [!tip]+ Folded Callout");
+  });
+
+  it("two consecutive Applies both succeed after a marker change — the second starting from the freshly-reconstructed raw snapshot", () => {
+    let doc = parseDocument(FIXTURE);
+    const id = calloutId(doc);
+
+    let extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    let built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    let unedited = projectedDisplayText(built.projection);
+    let result = applyProjected(doc, id, extracted.text, built.projection, unedited, "+", "First Title");
+    expect(result.applied).toBe(true);
+    if (!result.applied || !result.outcome.changed) return;
+
+    // Re-parse the just-applied document — mirrors loadNodeInternal/
+    // applyEdit's own post-apply re-anchor, never reusing the stale `doc`.
+    doc = parseDocument(result.outcome.lines.join("\n"));
+    const idAgain = calloutId(doc);
+    extracted = extractSubtreeText(doc, idAgain);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    expect(extracted.text).toContain("> [!note]+ First Title");
+    built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    unedited = projectedDisplayText(built.projection);
+    result = applyProjected(doc, idAgain, extracted.text, built.projection, unedited, "-", "Second Title");
+    expect(result.applied).toBe(true);
+    if (!result.applied) return;
+    expect(result.outcome.changed).toBe(true);
+    if (!result.outcome.changed) return;
+    expect(result.outcome.lines).toContain("> [!note]- Second Title");
+  });
+});
+
+describe("quote-prefix projection Apply pipeline: fold-marker editing (Phase 5D-1B, list-item-child callout, standalone but not composite-member)", () => {
+  it("a marker+title edit on a list-item-owned, indented (but not composite-member) callout produces the same result shape as a top-level callout", () => {
+    const doc = parseDocument(LIST_CHILD_CALLOUT_FIXTURE);
+    const id = calloutId(doc);
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+
+    const unedited = projectedDisplayText(built.projection);
+    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "+", "Renamed Child");
+    expect(result.applied).toBe(true);
+    if (!result.applied) return;
+    expect(result.outcome.changed).toBe(true);
+    if (!result.outcome.changed) return;
+    expect(result.outcome.lines.join("\n")).toBe(
+      ["# Notes", "- list item", "  > [!note]+ Renamed Child", "  > body line", "# Next"].join("\n")
+    );
+  });
+});
+
+describe("quote-prefix projection Apply pipeline: fold-marker + title editing (Phase 5D-1A / 5D-1B, composite-member callout)", () => {
+  it("a composite-member callout's marker+title edit produces the exact same shaped result as a standalone callout — no separate writer, no different behavior", () => {
     const doc = parseDocument(OCR_COMPOSITE_FIXTURE);
     const complexScan = scanComplexBlocks(doc);
     const info = complexScan.blocks.find((b) => b.kind === "callout");
@@ -542,7 +814,51 @@ describe("quote-prefix projection Apply pipeline: title editing (Phase 5D-1A, co
     if (!built.ok) return;
 
     const unedited = projectedDisplayText(built.projection);
-    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "Renamed Scan");
+    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "-", "Renamed Scan");
+    expect(result.applied).toBe(true);
+    if (!result.applied) return;
+    expect(result.outcome.changed).toBe(true);
+    if (!result.outcome.changed) return;
+    expect(result.outcome.lines.join("\n")).toBe(
+      [
+        "# Notes",
+        "- ![[scan.png]]",
+        "> [!ocr]- Renamed Scan",
+        "> extracted line one",
+        "> extracted line two",
+        "# Next section",
+        "still here",
+      ].join("\n")
+    );
+  });
+
+  it("a title-only edit (marker unchanged) still produces the exact same shaped result as a standalone callout — 5D-1A regression check on the same composite-member fixture", () => {
+    const doc = parseDocument(OCR_COMPOSITE_FIXTURE);
+    const complexScan = scanComplexBlocks(doc);
+    const info = complexScan.blocks.find((b) => b.kind === "callout");
+    expect(info).toBeDefined();
+    const composites = matchCompositeBlocks(doc, complexScan, DEFAULT_COMPOSITE_BLOCK_RULES);
+    expect(composites.some((c) => c.members.some((m) => m.id === info!.id))).toBe(true);
+
+    const id = info!.id;
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const titleSlot = built.projection.titleSlot!;
+
+    const unedited = projectedDisplayText(built.projection);
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      titleSlot.marker,
+      "Renamed Scan"
+    );
     expect(result.applied).toBe(true);
     if (!result.applied) return;
     expect(result.outcome.changed).toBe(true);
@@ -561,7 +877,7 @@ describe("quote-prefix projection Apply pipeline: title editing (Phase 5D-1A, co
   });
 });
 
-describe("quote-prefix projection: existing refusal paths do not regress when a title edit is pending (Phase 5D-1A)", () => {
+describe("quote-prefix projection: existing refusal paths do not regress when a marker and/or title edit is pending (Phase 5D-1A / 5D-1B)", () => {
   it("applySubtreeEdit still refuses with 'conflict' when the header's title changed elsewhere between load and Apply, even though the pane's own pending edit was ALSO a title edit — no new conflict-detection logic needed", () => {
     const doc = parseDocument(FIXTURE);
     const id = calloutId(doc);
@@ -571,9 +887,18 @@ describe("quote-prefix projection: existing refusal paths do not regress when a 
     const built = buildQuotePrefixProjection(extracted.text, "callout");
     expect(built.ok).toBe(true);
     if (!built.ok) return;
+    const titleSlot = built.projection.titleSlot!;
 
     const unedited = projectedDisplayText(built.projection);
-    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "Pane's New Title");
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      titleSlot.marker,
+      "Pane's New Title"
+    );
     expect(result.applied).toBe(true);
     if (!result.applied) return;
 
@@ -586,7 +911,33 @@ describe("quote-prefix projection: existing refusal paths do not regress when a 
     expect(outcome.lines).toBe(changedElsewhere.lines);
   });
 
-  it("applySubtreeEdit still refuses with 'resolve-failed' when the target callout was deleted before Apply, even with a pending title edit", () => {
+  it("applySubtreeEdit still refuses with 'conflict' when the header's fold marker changed elsewhere between load and Apply, even though the pane's own pending edit was a DIFFERENT marker change — no new conflict-detection logic needed", () => {
+    const doc = parseDocument(FIXTURE);
+    const id = calloutId(doc);
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const titleSlot = built.projection.titleSlot!;
+
+    const unedited = projectedDisplayText(built.projection);
+    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "+", titleSlot.title);
+    expect(result.applied).toBe(true);
+    if (!result.applied) return;
+
+    // Someone else externally added a "-" marker to the SAME header, from
+    // the SAME originally-loaded state, before this pane's own "+" Apply
+    // reaches applySubtreeEdit.
+    const changedElsewhere = parseDocument(FIXTURE.replace("> [!note] My Callout", "> [!note]- My Callout"));
+    const outcome = applySubtreeEdit(changedElsewhere, id, extracted.text, result.newRawText);
+    expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("conflict");
+    expect(outcome.lines).toBe(changedElsewhere.lines);
+  });
+
+  it("applySubtreeEdit still refuses with 'resolve-failed' when the target callout was deleted before Apply, even with a pending marker+title edit", () => {
     const doc = parseDocument(FIXTURE);
     const id = calloutId(doc);
     const extracted = extractSubtreeText(doc, id);
@@ -597,7 +948,7 @@ describe("quote-prefix projection: existing refusal paths do not regress when a 
     if (!built.ok) return;
 
     const unedited = projectedDisplayText(built.projection);
-    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "Pane's New Title");
+    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "-", "Pane's New Title");
     expect(result.applied).toBe(true);
     if (!result.applied) return;
 

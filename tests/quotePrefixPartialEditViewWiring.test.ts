@@ -157,9 +157,9 @@ describe("view/PartialEditView.ts quote-prefix-projection wiring (static source 
     expect(body).toContain("this.quoteHeaderLabelEl.setText(header);");
   });
 
-  it("renderQuoteHeader (Phase 5D-1A): when quoteProjection.titleSlot is non-null, it shows the row, sets the label to beforeTitle, reveals+enables the title input, and pre-fills it with the loaded title", () => {
+  it("renderQuoteHeader (Phase 5D-1B): when quoteProjection.titleSlot is non-null, it shows the row, sets the label to beforeMarker, reveals+enables the title input, and pre-fills it with the loaded title", () => {
     const body = bodyOf(viewTs, "private renderQuoteHeader(): void {", "renderQuoteHeader()");
-    expect(body).toContain("this.quoteHeaderLabelEl.setText(titleSlot.beforeTitle);");
+    expect(body).toContain("this.quoteHeaderLabelEl.setText(titleSlot.beforeMarker);");
     expect(body).toContain("this.quoteTitleInputEl.toggleVisibility(true);");
     expect(body).toContain("this.quoteTitleInputEl.disabled = false;");
     expect(body).toContain("this.quoteTitleInputEl.value = titleSlot.title;");
@@ -171,6 +171,19 @@ describe("view/PartialEditView.ts quote-prefix-projection wiring (static source 
     expect(body).toContain('this.quoteTitleInputEl.value = "";');
   });
 
+  it("renderQuoteHeader (Phase 5D-1B): when titleSlot is non-null, it also reveals+enables the fold-marker select and pre-fills it with the loaded marker", () => {
+    const body = bodyOf(viewTs, "private renderQuoteHeader(): void {", "renderQuoteHeader()");
+    expect(body).toContain("this.quoteMarkerSelectEl.toggleVisibility(true);");
+    expect(body).toContain("this.quoteMarkerSelectEl.disabled = false;");
+    expect(body).toContain("this.quoteMarkerSelectEl.value = titleSlot.marker;");
+  });
+
+  it("renderQuoteHeader (Phase 5D-1B): hides the fold-marker select and resets it to the empty (not-foldable) option whenever titleSlot is null", () => {
+    const body = bodyOf(viewTs, "private renderQuoteHeader(): void {", "renderQuoteHeader()");
+    expect(body).toContain("this.quoteMarkerSelectEl.toggleVisibility(false);");
+    expect(body).toContain('this.quoteMarkerSelectEl.value = "";');
+  });
+
   it("onOpen (Phase 5D-1A): creates quoteHeaderLabelEl and quoteTitleInputEl as children of quoteHeaderEl, and wires the title input's own 'input' listener to updateDirtyState", () => {
     const body = bodyOf(viewTs, "async onOpen(): Promise<void> {", "onOpen()");
     expect(body).toContain("this.quoteHeaderLabelEl = this.quoteHeaderEl.createSpan(");
@@ -180,9 +193,46 @@ describe("view/PartialEditView.ts quote-prefix-projection wiring (static source 
     );
   });
 
+  it("onOpen (Phase 5D-1B): creates quoteMarkerSelectEl as a child of quoteHeaderEl, with exactly the three closed-set options (\"\", \"+\", \"-\"), a tooltip, and its own 'change' listener wired to updateDirtyState", () => {
+    const body = bodyOf(viewTs, "async onOpen(): Promise<void> {", "onOpen()");
+    expect(body).toContain('this.quoteMarkerSelectEl = this.quoteHeaderEl.createEl("select"');
+    expect(body).toContain('value: "",');
+    expect(body).toContain('text: this.plugin.t("partialEdit.quoteFoldMarkerNone"),');
+    expect(body).toContain('value: "+",');
+    expect(body).toContain('text: this.plugin.t("partialEdit.quoteFoldMarkerExpand"),');
+    expect(body).toContain('value: "-",');
+    expect(body).toContain('text: this.plugin.t("partialEdit.quoteFoldMarkerCollapse"),');
+    expect(body).toContain(
+      'setTooltip(this.quoteMarkerSelectEl, this.plugin.t("partialEdit.quoteFoldMarkerLabel"));'
+    );
+    expect(body).toContain(
+      'this.quoteMarkerSelectEl.addEventListener("change", () => this.updateDirtyState());'
+    );
+  });
+
+  it("onOpen (Phase 5D-1B): quoteMarkerSelectEl is created BEFORE quoteTitleInputEl — the fold-behavior control sits between the read-only label and the title input", () => {
+    const body = bodyOf(viewTs, "async onOpen(): Promise<void> {", "onOpen()");
+    const selectIndex = body.indexOf('this.quoteMarkerSelectEl = this.quoteHeaderEl.createEl("select"');
+    const titleInputIndex = body.indexOf('this.quoteTitleInputEl = this.quoteHeaderEl.createEl("input"');
+    expect(selectIndex).toBeGreaterThan(-1);
+    expect(titleInputIndex).toBeGreaterThan(-1);
+    expect(selectIndex).toBeLessThan(titleInputIndex);
+  });
+
   it("cancelEdit (Phase 5D-1A): reverts the title input back to the loaded titleSlot's own title whenever a titleSlot is active", () => {
     const body = bodyOf(viewTs, "private cancelEdit(): void {", "cancelEdit()");
     expect(body).toContain("this.quoteTitleInputEl.value = titleSlot.title;");
+  });
+
+  it("cancelEdit (Phase 5D-1B): also reverts the fold-marker select back to the loaded titleSlot's own marker, in the same titleSlot-gated branch as the title revert", () => {
+    const body = bodyOf(viewTs, "private cancelEdit(): void {", "cancelEdit()");
+    expect(body).toContain("this.quoteMarkerSelectEl.value = titleSlot.marker;");
+    const markerRevertIndex = body.indexOf("this.quoteMarkerSelectEl.value = titleSlot.marker;");
+    const titleRevertIndex = body.indexOf("this.quoteTitleInputEl.value = titleSlot.title;");
+    const ifTitleSlotIndex = body.lastIndexOf("if (titleSlot)", markerRevertIndex);
+    expect(ifTitleSlotIndex).toBeGreaterThan(-1);
+    expect(ifTitleSlotIndex).toBeLessThan(markerRevertIndex);
+    expect(ifTitleSlotIndex).toBeLessThan(titleRevertIndex);
   });
 
   it("isDirty (Phase 5D-1A): considers the title input dirty too — the pane is dirty if EITHER the textarea OR the title input differs from its own loaded value", () => {
@@ -191,27 +241,77 @@ describe("view/PartialEditView.ts quote-prefix-projection wiring (static source 
     expect(body).toMatch(/this\.textareaEl\.value !== this\.currentDisplayText\(\)\s*\|\|\s*titleDirty/);
   });
 
-  it("applyEdit (Phase 5D-1A): when titleSlot is active, reconstructs the header from the title input's CURRENT value via reconstructQuoteHeader, refuses (returns false) on failure BEFORE ever calling applySubtreeEdit, and otherwise splices the reconstructed header in as newRawText's first line", () => {
+  it("isDirty (Phase 5D-1B): also considers the fold-marker select dirty — markerDirty is computed from quoteMarkerSelectEl vs. titleSlot.marker, gated the same way as titleDirty, and included in the same OR chain", () => {
+    const body = bodyOf(viewTs, "private isDirty(): boolean {", "isDirty()");
+    expect(body).toContain(
+      "const markerDirty = titleSlot !== null && this.quoteMarkerSelectEl.value !== titleSlot.marker;"
+    );
+    expect(body).toMatch(
+      /this\.textareaEl\.value !== this\.currentDisplayText\(\)\s*\|\|\s*titleDirty\s*\|\|\s*markerDirty/
+    );
+  });
+
+  it("applyEdit (Phase 5D-1B): when titleSlot is active, reconstructs the header from BOTH the fold-marker select's and the title input's CURRENT values via a single reconstructQuoteHeader(titleSlot, newMarker, title) call, refuses (returns false) on failure BEFORE ever calling applySubtreeEdit, and otherwise splices the reconstructed header in as newRawText's first line", () => {
     const body = bodyOf(viewTs, "private applyEdit(): boolean {", "applyEdit()");
+    const newMarkerCastIndex = body.indexOf(
+      "const newMarker = this.quoteMarkerSelectEl.value as CalloutFoldMarker;"
+    );
     const reconstructIndex = body.indexOf(
-      "reconstructQuoteHeader(titleSlot, this.quoteTitleInputEl.value)"
+      "reconstructQuoteHeader(titleSlot, newMarker, this.quoteTitleInputEl.value)"
     );
     const noticeIndex = body.indexOf('this.plugin.t("partialEdit.quoteTitleNewlineUnsupported")');
     const applySubtreeEditIndex = body.indexOf(
       "applySubtreeEdit(doc, this.nodeId!, this.originalText, newRawText)"
     );
+    expect(newMarkerCastIndex).toBeGreaterThan(-1);
     expect(reconstructIndex).toBeGreaterThan(-1);
     expect(noticeIndex).toBeGreaterThan(-1);
     expect(applySubtreeEditIndex).toBeGreaterThan(-1);
+    expect(newMarkerCastIndex).toBeLessThan(reconstructIndex);
     expect(reconstructIndex).toBeLessThan(noticeIndex);
     expect(noticeIndex).toBeLessThan(applySubtreeEditIndex);
     expect(body).toContain("const bodyOnlyLines = newRawText.split(\"\\n\").slice(1);");
     expect(body).toContain("newRawText = [reconstructed.header, ...bodyOnlyLines].join(\"\\n\");");
   });
 
+  it("applyEdit (Phase 5D-1B): a reconstructQuoteHeader failure shows the newline Notice only for reason \"newline\" — the unreachable \"invalid-marker\" reason is a silent, safe no-op with NO new user-facing Notice added for it", () => {
+    const body = bodyOf(viewTs, "private applyEdit(): boolean {", "applyEdit()");
+    const failureStart = body.indexOf("if (!reconstructed.ok) {");
+    expect(failureStart).toBeGreaterThan(-1);
+    const returnFalseIndex = body.indexOf("return false;", failureStart);
+    expect(returnFalseIndex).toBeGreaterThan(-1);
+    const failureBlock = body.slice(failureStart, returnFalseIndex + "return false;".length);
+    expect(failureBlock).toContain('if (reconstructed.reason === "newline") {');
+    // Exactly one Notice call in the whole failure-handling block — the
+    // "invalid-marker" reason (structurally unreachable through this
+    // view's own closed-set <select>) falls through to the bare
+    // `return false;` with no Notice of its own, per the ticket's
+    // explicit "既存のNoticeを増やさない" instruction.
+    const noticeCallCount = (failureBlock.match(/new Notice\(/g) ?? []).length;
+    expect(noticeCallCount).toBe(1);
+  });
+
   it("the i18n keys this ticket introduces (quoteNestedUnsupported / quoteLineCountChanged) exist with non-empty en/ja text", () => {
     const i18nTs = readFileSync(path.resolve(__dirname, "../src/i18n.ts"), "utf-8");
     for (const key of ["partialEdit.quoteNestedUnsupported", "partialEdit.quoteLineCountChanged"]) {
+      const matches = i18nTs.match(new RegExp(`"${key}":\\s*\\n?\\s*"([^"]+)"`, "g")) ?? [];
+      // Present in both the en and ja dictionaries.
+      expect(matches.length).toBe(2);
+      for (const m of matches) {
+        const textMatch = m.match(/"([^"]+)"\s*$/);
+        expect(textMatch?.[1]?.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("the i18n keys Phase 5D-1B introduces (quoteFoldMarkerLabel / quoteFoldMarkerNone / quoteFoldMarkerExpand / quoteFoldMarkerCollapse) exist with non-empty en/ja text", () => {
+    const i18nTs = readFileSync(path.resolve(__dirname, "../src/i18n.ts"), "utf-8");
+    for (const key of [
+      "partialEdit.quoteFoldMarkerLabel",
+      "partialEdit.quoteFoldMarkerNone",
+      "partialEdit.quoteFoldMarkerExpand",
+      "partialEdit.quoteFoldMarkerCollapse",
+    ]) {
       const matches = i18nTs.match(new RegExp(`"${key}":\\s*\\n?\\s*"([^"]+)"`, "g")) ?? [];
       // Present in both the en and ja dictionaries.
       expect(matches.length).toBe(2);

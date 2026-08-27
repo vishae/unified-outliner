@@ -148,6 +148,7 @@ import {
 } from "../edit/paragraphPartialEdit";
 import {
   buildQuotePrefixProjection,
+  CalloutFoldMarker,
   invertQuotePrefixProjection,
   projectedDisplayText,
   QuotePrefixProjection,
@@ -243,18 +244,35 @@ export class PartialEditView extends ItemView {
    * hidden for every other case (blockquote has no header; a raw-loaded
    * node has nothing to separate out).
    *
-   * Phase 5D-1A: this container now holds TWO children —
-   * `quoteHeaderLabelEl` (read-only: quote prefix, `[!type]`, fold
-   * marker, original separator whitespace) and `quoteTitleInputEl` (the
-   * editable title). Never call `.setText()` on `quoteHeaderEl` itself
-   * any more — that would wipe out `quoteTitleInputEl` as a side effect,
-   * since `setText` replaces the element's entire text content including
-   * child elements. Always target `quoteHeaderLabelEl` for the read-only
-   * text instead.
+   * Phase 5D-1A: this container now holds `quoteHeaderLabelEl` (read-
+   * only: quote prefix and `[!type]`, since 5D-1B — originally also
+   * carried fold marker and separator, see that field's own doc comment)
+   * and `quoteTitleInputEl` (the editable title). Never call `.setText()`
+   * on `quoteHeaderEl` itself any more — that would wipe out its children
+   * as a side effect, since `setText` replaces the element's entire text
+   * content including child elements. Always target `quoteHeaderLabelEl`
+   * for the read-only text instead.
+   *
+   * Phase 5D-1B: a THIRD child, `quoteMarkerSelectEl`, sits between the
+   * label and the title input — see that field's own doc comment.
    */
   private quoteHeaderEl!: HTMLElement;
-  /** Phase 5D-1A: the read-only label child of quoteHeaderEl — see that field's own doc comment for why this exists as a separate child rather than text directly on quoteHeaderEl. */
+  /** Phase 5D-1A: the read-only label child of quoteHeaderEl — quote prefix and `[!type]` only (see that field's own doc comment for why this exists as a separate child rather than text directly on quoteHeaderEl). Phase 5D-1B: no longer includes the fold marker or separator whitespace — those are now represented by quoteMarkerSelectEl's own selected option, not rendered as raw text in this label. */
   private quoteHeaderLabelEl!: HTMLElement;
+  /**
+   * Phase 5D-1B: single-line fold-marker picker — a native tri-state
+   * `<select>` (this view's first `<select>` element) offering exactly
+   * the three values `CalloutFoldMarker` allows: `""` (not foldable),
+   * `"+"` (foldable, expanded by default), `"-"` (foldable, collapsed by
+   * default). A closed-set control by design — see reconstructQuoteHeader's
+   * own doc comment for why this is what keeps "invalid-marker" a
+   * defensive, effectively-unreachable path rather than something a user
+   * can trigger from this UI. Shown/hidden and enabled/disabled in lockstep
+   * with `quoteTitleInputEl` — both are gated on the exact same
+   * `this.quoteProjection?.titleSlot != null` condition, since both are
+   * carved out of the same header line's same titleSlot.
+   */
+  private quoteMarkerSelectEl!: HTMLSelectElement;
   /**
    * Phase 5D-1A: single-line, editable title input — the first
    * `<input type="text">` this view (or this plugin's view layer at all)
@@ -438,16 +456,39 @@ export class PartialEditView extends ItemView {
     // same "create once in onOpen, mutate on each render" policy as
     // breadcrumbEl/siblingNavEl/subtreeNavEl above.
     //
-    // Phase 5D-1A: now a two-child row — quoteHeaderLabelEl (read-only)
+    // Phase 5D-1A: now a multi-child row — quoteHeaderLabelEl (read-only)
     // and quoteTitleInputEl (editable) — see both fields' own doc
     // comments for why `.setText()` must never be called on
     // quoteHeaderEl itself any more.
+    // Phase 5D-1B: quoteMarkerSelectEl is created BETWEEN the two, so the
+    // header row reads left-to-right as "quote prefix + [!type]" ->
+    // "fold behavior" -> "title".
     this.quoteHeaderEl = this.contentEl.createDiv({
       cls: "unified-outliner-partial-edit-quote-header",
     });
     this.quoteHeaderLabelEl = this.quoteHeaderEl.createSpan({
       cls: "unified-outliner-partial-edit-quote-header-label",
     });
+    this.quoteMarkerSelectEl = this.quoteHeaderEl.createEl("select", {
+      cls: "unified-outliner-partial-edit-quote-marker-select",
+    });
+    this.quoteMarkerSelectEl.createEl("option", {
+      value: "",
+      text: this.plugin.t("partialEdit.quoteFoldMarkerNone"),
+    });
+    this.quoteMarkerSelectEl.createEl("option", {
+      value: "+",
+      text: this.plugin.t("partialEdit.quoteFoldMarkerExpand"),
+    });
+    this.quoteMarkerSelectEl.createEl("option", {
+      value: "-",
+      text: this.plugin.t("partialEdit.quoteFoldMarkerCollapse"),
+    });
+    setTooltip(this.quoteMarkerSelectEl, this.plugin.t("partialEdit.quoteFoldMarkerLabel"));
+    // Same dirty-tracking policy as quoteTitleInputEl/textareaEl's own
+    // listeners — every change to the select must also re-check
+    // isDirty(), since isDirty() now considers the marker select too.
+    this.quoteMarkerSelectEl.addEventListener("change", () => this.updateDirtyState());
     this.quoteTitleInputEl = this.quoteHeaderEl.createEl("input", {
       type: "text",
       cls: "unified-outliner-partial-edit-quote-title-input",
@@ -835,27 +876,41 @@ export class PartialEditView extends ItemView {
    * Phase 5D-1A: the row is no longer uniformly read-only. When
    * `quoteProjection.titleSlot` is set (a callout whose title was
    * successfully split out — see buildQuoteHeaderTitleSlot), this shows
-   * `beforeTitle` (quote prefix, `[!type]`, fold marker, original
-   * separator whitespace) in the READ-ONLY `quoteHeaderLabelEl`, and
-   * reveals `quoteTitleInputEl` pre-filled with the loaded `title` —
-   * type/fold marker/prefix stay exactly as read-only as they were
-   * before this ticket, only the title itself becomes editable. Every
-   * other case (blockquote, non-projecting, or a callout whose title
-   * slot failed to build — see QuotePrefixProjection's own doc comment
-   * on `titleSlot`) hides `quoteTitleInputEl` and falls back to the
-   * pre-5D-1A behavior: the full raw header line shown read-only in
-   * `quoteHeaderLabelEl`, or nothing at all.
+   * the READ-ONLY portion in `quoteHeaderLabelEl`, and reveals
+   * `quoteTitleInputEl` pre-filled with the loaded `title` — type/prefix
+   * stay exactly as read-only as they were before this ticket, only the
+   * title itself becomes editable. Every other case (blockquote, non-
+   * projecting, or a callout whose title slot failed to build — see
+   * QuotePrefixProjection's own doc comment on `titleSlot`) hides
+   * `quoteTitleInputEl` and falls back to the pre-5D-1A behavior: the
+   * full raw header line shown read-only in `quoteHeaderLabelEl`, or
+   * nothing at all.
+   *
+   * Phase 5D-1B: `quoteHeaderLabelEl` now shows ONLY `titleSlot.beforeMarker`
+   * (quote prefix + `[!type]`) — the fold marker itself is no longer
+   * rendered as raw `+`/`-` text here at all, since `quoteMarkerSelectEl`
+   * (revealed/pre-filled in lockstep with `quoteTitleInputEl`, same
+   * `titleSlot` gate) now represents it as a real, editable control
+   * instead. `titleSlot.separator` is likewise never rendered literally —
+   * it is a reconstruction-time concern only (see reconstructQuoteHeader),
+   * with the header row's own visual spacing coming from CSS layout
+   * (flex gap) between the three DOM children instead.
    */
   private renderQuoteHeader(): void {
     const titleSlot = this.quoteProjection?.titleSlot ?? null;
     if (titleSlot) {
       this.quoteHeaderEl.toggleVisibility(true);
-      this.quoteHeaderLabelEl.setText(titleSlot.beforeTitle);
+      this.quoteHeaderLabelEl.setText(titleSlot.beforeMarker);
+      this.quoteMarkerSelectEl.toggleVisibility(true);
+      this.quoteMarkerSelectEl.disabled = false;
+      this.quoteMarkerSelectEl.value = titleSlot.marker;
       this.quoteTitleInputEl.toggleVisibility(true);
       this.quoteTitleInputEl.disabled = false;
       this.quoteTitleInputEl.value = titleSlot.title;
       return;
     }
+    this.quoteMarkerSelectEl.toggleVisibility(false);
+    this.quoteMarkerSelectEl.value = "";
     this.quoteTitleInputEl.toggleVisibility(false);
     this.quoteTitleInputEl.value = "";
 
@@ -1142,8 +1197,11 @@ export class PartialEditView extends ItemView {
     // Phase 5D-1A: revert the title input to its loaded value too, when a
     // title slot is active — a no-op (value already unchanged) otherwise,
     // since quoteTitleInputEl is empty/hidden whenever titleSlot is null.
+    // Phase 5D-1B: revert the fold-marker select the same way, in the
+    // same branch — both are carved out of the same titleSlot.
     const titleSlot = this.quoteProjection?.titleSlot ?? null;
     if (titleSlot) {
+      this.quoteMarkerSelectEl.value = titleSlot.marker;
       this.quoteTitleInputEl.value = titleSlot.title;
     }
     this.updateDirtyState();
@@ -1289,22 +1347,38 @@ export class PartialEditView extends ItemView {
 
       // Phase 5D-1A: when this callout's title was successfully split out
       // (titleSlot non-null), reconstruct its header from the title
-      // input's CURRENT value and splice it in as the new first line —
+      // input's CURRENT value (and, Phase 5D-1B, the fold-marker select's
+      // CURRENT value) and splice it in as the new first line —
       // `inverted.rawText` above already reattached the OLD, unedited
       // header verbatim (invertQuotePrefixProjection itself is untouched
-      // by this ticket), so this replaces exactly that one line. A
-      // newline in the title input refuses the WHOLE Apply here, before
-      // the raw-text splice call below is ever reached — any body edit
-      // already computed above is discarded along with it, matching the
-      // quoteLineCountChanged refusal's own "reject the whole thing,
-      // zero-byte-change" contract. Blockquote/non-title-editable callouts
-      // (titleSlot null) leave newRawText exactly as invertQuotePrefixProjection
-      // produced it, unchanged from pre-5D-1A behavior.
+      // by this ticket), so this replaces exactly that one line, ONE
+      // combined marker+title reconstruction, ONE splice — never two
+      // separate rewrites. A newline in the title input refuses the WHOLE
+      // Apply here, before the raw-text splice call below is ever
+      // reached — any body edit already computed above is discarded
+      // along with it, matching the quoteLineCountChanged refusal's own
+      // "reject the whole thing, zero-byte-change" contract.
+      // Blockquote/non-title-editable callouts (titleSlot null) leave
+      // newRawText exactly as invertQuotePrefixProjection produced it,
+      // unchanged from pre-5D-1A behavior.
       const titleSlot = this.quoteProjection.titleSlot;
       if (titleSlot) {
-        const reconstructed = reconstructQuoteHeader(titleSlot, this.quoteTitleInputEl.value);
+        // Phase 5D-1B: quoteMarkerSelectEl is a closed-set <select> whose
+        // only possible values are "", "+", "-" (see that field's own
+        // doc comment) — this cast reflects that DOM-level guarantee.
+        // reconstructQuoteHeader still runtime-guards against anything
+        // else reaching it (e.g. via out-of-band DOM manipulation) and
+        // returns reason "invalid-marker" rather than throwing; since
+        // that path is unreachable through this view's own UI, it is
+        // handled as a silent, safe no-op below rather than a new
+        // user-facing Notice (no Notice text would accurately describe a
+        // state the UI itself can never produce).
+        const newMarker = this.quoteMarkerSelectEl.value as CalloutFoldMarker;
+        const reconstructed = reconstructQuoteHeader(titleSlot, newMarker, this.quoteTitleInputEl.value);
         if (!reconstructed.ok) {
-          new Notice(this.plugin.t("partialEdit.quoteTitleNewlineUnsupported"));
+          if (reconstructed.reason === "newline") {
+            new Notice(this.plugin.t("partialEdit.quoteTitleNewlineUnsupported"));
+          }
           return false;
         }
         const bodyOnlyLines = newRawText.split("\n").slice(1);
@@ -1433,11 +1507,14 @@ export class PartialEditView extends ItemView {
     // false) for every case except a callout whose title was
     // successfully split out, so this is a no-op addition for
     // blockquote/section/list/paragraph/non-title-editable callouts.
+    // Phase 5D-1B: ALSO dirty when the fold-marker select differs from
+    // its loaded titleSlot.marker, same gating as titleDirty.
     const titleSlot = this.quoteProjection?.titleSlot ?? null;
     const titleDirty = titleSlot !== null && this.quoteTitleInputEl.value !== titleSlot.title;
+    const markerDirty = titleSlot !== null && this.quoteMarkerSelectEl.value !== titleSlot.marker;
     return (
       (this.nodeId !== null || this.paragraphAnchor !== null) &&
-      (this.textareaEl.value !== this.currentDisplayText() || titleDirty)
+      (this.textareaEl.value !== this.currentDisplayText() || titleDirty || markerDirty)
     );
   }
 

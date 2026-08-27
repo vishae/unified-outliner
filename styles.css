@@ -607,13 +607,20 @@ settings:
  * show — every non-callout kind, a projecting blockquote (no header
  * concept), and a callout that fell back to raw editing.
  *
- * Phase 5D-1A: now a flex row hosting two children — the read-only
- * quote-prefix/[!type]/fold-marker label (quoteHeaderLabelEl) and, when
- * the callout's title was successfully split out, an editable title
- * input (quoteTitleInputEl) that flexes to fill the remaining width. */
+ * Phase 5D-1A: now a flex row hosting the read-only quote-prefix/[!type]
+ * label (quoteHeaderLabelEl) and, when the callout's title was
+ * successfully split out, an editable title input (quoteTitleInputEl)
+ * that flexes to fill the remaining width.
+ *
+ * Phase 5D-1B: a THIRD child, the fold-marker <select>
+ * (quoteMarkerSelectEl), sits between the two — `gap` provides the
+ * visual spacing between all three children now that the label no
+ * longer renders the header's own raw separator whitespace (see
+ * quote-header-label's own doc comment below). */
 .unified-outliner-partial-edit-quote-header {
   display: flex;
   align-items: center;
+  gap: 6px;
   flex-shrink: 0;
   margin-bottom: 8px;
   padding: 6px 8px;
@@ -623,16 +630,43 @@ settings:
   font-family: var(--font-monospace, monospace);
 }
 
-/* Phase 5D-1A: the read-only portion of the header row (quote prefix,
- * `[!type]`, fold marker, original separator whitespace) — never
- * editable, styled to read as inert/label-like next to the title input
- * beside it. `pre` preserves the original separator whitespace exactly
- * as reconstructQuoteHeader relies on (no collapsing/trimming display). */
+/* Phase 5D-1A: the read-only portion of the header row — never editable,
+ * styled to read as inert/label-like next to the marker select and title
+ * input beside it. `pre` preserves the raw string's leading indentation
+ * (list-item-owned continuation) exactly, with no collapsing/trimming.
+ *
+ * Phase 5D-1B: now shows ONLY quote prefix + `[!type]` (beforeMarker) —
+ * the fold marker and its separator whitespace are no longer part of
+ * this label's text at all; the marker is represented by
+ * quote-marker-select's own selected option instead (see
+ * PartialEditView.ts's renderQuoteHeader). */
 .unified-outliner-partial-edit-quote-header-label {
   flex-shrink: 0;
   color: var(--uo-text-color);
   opacity: 0.75;
   white-space: pre;
+}
+
+/* Phase 5D-1B: the callout's fold-marker picker — this plugin's first
+ * <select> element (see quoteMarkerSelectEl's doc comment in
+ * PartialEditView.ts). Deliberately compact (fixed, content-driven
+ * width via `flex-shrink: 0` rather than flexing to fill space like the
+ * title input beside it) so it reads as a small inline control, not a
+ * competing text field. */
+.unified-outliner-partial-edit-quote-marker-select {
+  flex-shrink: 0;
+  max-width: 45%;
+  background-color: var(--uo-bg-color);
+  color: var(--uo-text-color);
+  font-size: inherit;
+  font-family: inherit;
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.unified-outliner-partial-edit-quote-marker-select:disabled {
+  opacity: 0.6;
 }
 
 /* Phase 5D-1A: the callout title's own editable input — this plugin's

@@ -196,51 +196,69 @@ describe("invertQuotePrefixProjection: line-count-changed refusal", () => {
 // normalized/trimmed" contract as the body-line split above — see both
 // functions' own doc comments in edit/quotePrefixProjection.ts for the
 // exact invariant and the ticket's 3 fixed whitespace rules.
+//
+// Phase 5D-1B ("Callout Fold Marker Editing") extended
+// QuoteHeaderTitleSlot's shape — `beforeTitle` (prefix + [!type] + fold
+// marker + separator, one opaque span) was split further into
+// `beforeMarker` (prefix + [!type] only) / `marker` / `separator`, and
+// reconstructQuoteHeader's signature grew a `newMarker` parameter
+// (`reconstructQuoteHeader(slot, newMarker, newTitle)`). Every test below
+// reflects that new shape; the 5D-1A separator-rule tests below still
+// exist and still pass an UNCHANGED marker (`slot.marker`) into
+// reconstructQuoteHeader, confirming pure title editing regresses none of
+// its 5D-1A behavior now that marker travels alongside it.
 
-describe("buildQuoteHeaderTitleSlot: lossless header split (Phase 5D-1A)", () => {
-  it("splits a header WITH a title into beforeTitle (prefix + [!type] + fold marker + separator) and title, round-tripping byte-for-byte", () => {
+describe("buildQuoteHeaderTitleSlot: lossless 4-piece header split (Phase 5D-1A / 5D-1B)", () => {
+  it("splits a header WITH a title and no marker into beforeMarker / marker(\"\") / separator / title, round-tripping byte-for-byte", () => {
     const header = "> [!note] My Title";
     const slot = buildQuoteHeaderTitleSlot(header);
     expect(slot).not.toBeNull();
     if (!slot) return;
-    expect(slot.beforeTitle).toBe("> [!note] ");
+    expect(slot.beforeMarker).toBe("> [!note]");
+    expect(slot.marker).toBe("");
+    expect(slot.separator).toBe(" ");
     expect(slot.title).toBe("My Title");
-    expect(slot.beforeTitle + slot.title).toBe(header);
+    expect(slot.beforeMarker + slot.marker + slot.separator + slot.title).toBe(header);
   });
 
-  it("splits a header with NO title into beforeTitle === the whole line and title === ''", () => {
+  it("splits a header with NO title and NO marker into beforeMarker === the whole line, marker/separator/title all ''", () => {
     const header = "> [!warning]";
     const slot = buildQuoteHeaderTitleSlot(header);
     expect(slot).not.toBeNull();
     if (!slot) return;
-    expect(slot.beforeTitle).toBe(header);
+    expect(slot.beforeMarker).toBe(header);
+    expect(slot.marker).toBe("");
+    expect(slot.separator).toBe("");
     expect(slot.title).toBe("");
-    expect(slot.beforeTitle + slot.title).toBe(header);
+    expect(slot.beforeMarker + slot.marker + slot.separator + slot.title).toBe(header);
   });
 
-  it("keeps the fold marker (+/-) inside beforeTitle, never inside title", () => {
+  it("splits the fold marker (+/-) into its OWN field, never inside beforeMarker or title", () => {
     for (const fold of ["+", "-"]) {
       const header = `> [!tip]${fold} Folded Title`;
       const slot = buildQuoteHeaderTitleSlot(header);
       expect(slot).not.toBeNull();
       if (!slot) continue;
-      expect(slot.beforeTitle).toBe(`> [!tip]${fold} `);
+      expect(slot.beforeMarker).toBe("> [!tip]");
+      expect(slot.marker).toBe(fold);
+      expect(slot.separator).toBe(" ");
       expect(slot.title).toBe("Folded Title");
-      expect(slot.beforeTitle + slot.title).toBe(header);
+      expect(slot.beforeMarker + slot.marker + slot.separator + slot.title).toBe(header);
     }
   });
 
-  it("preserves list-item-owned indentation before the `>` marker inside beforeTitle", () => {
+  it("preserves list-item-owned indentation before the `>` marker inside beforeMarker", () => {
     const header = "  > [!ocr] Scan";
     const slot = buildQuoteHeaderTitleSlot(header);
     expect(slot).not.toBeNull();
     if (!slot) return;
-    expect(slot.beforeTitle).toBe("  > [!ocr] ");
+    expect(slot.beforeMarker).toBe("  > [!ocr]");
+    expect(slot.separator).toBe(" ");
     expect(slot.title).toBe("Scan");
-    expect(slot.beforeTitle + slot.title).toBe(header);
+    expect(slot.beforeMarker + slot.marker + slot.separator + slot.title).toBe(header);
   });
 
-  it("round-trips byte-for-byte across title-present / title-absent / fold-marker / indented header shapes", () => {
+  it("round-trips byte-for-byte across title-present / title-absent / fold-marker(none/+/-) / indented / 0-or-1-space-after->  header shapes", () => {
     const headers = [
       "> [!note] Title",
       "> [!warning]",
@@ -248,60 +266,62 @@ describe("buildQuoteHeaderTitleSlot: lossless header split (Phase 5D-1A)", () =>
       "> [!tip]- Folded",
       "  > [!ocr] Indented Title",
       "    > [!ocr]",
+      ">[!note] no space after >",
+      "> [!tip]+  Old Title", // double-space separator
     ];
     for (const header of headers) {
       const slot = buildQuoteHeaderTitleSlot(header);
       expect(slot).not.toBeNull();
       if (!slot) continue;
-      expect(slot.beforeTitle + slot.title).toBe(header);
+      expect(slot.beforeMarker + slot.marker + slot.separator + slot.title).toBe(header);
     }
   });
 });
 
-describe("reconstructQuoteHeader: title-slot round-trip and the 3 fixed whitespace rules (Phase 5D-1A)", () => {
-  it("rule 3 (unedited): the same non-empty title reconstructs the header byte-identical to the original", () => {
+describe("reconstructQuoteHeader: title-slot round-trip and the 3 fixed separator rules, marker held UNCHANGED (Phase 5D-1A regression, now via the 5D-1B signature)", () => {
+  it("rule 3 (unedited): the same non-empty title AND same marker reconstructs the header byte-identical to the original", () => {
     const slot = buildQuoteHeaderTitleSlot("> [!note] My Title")!;
-    const result = reconstructQuoteHeader(slot, "My Title");
+    const result = reconstructQuoteHeader(slot, slot.marker, "My Title");
     expect(result).toEqual({ ok: true, header: "> [!note] My Title" });
   });
 
-  it("rule 1: a non-empty title emptied reuses beforeTitle completely unmodified, including its trailing separator space", () => {
+  it("rule 1: a non-empty title emptied (marker unchanged) reuses the separator completely unmodified", () => {
     const slot = buildQuoteHeaderTitleSlot("> [!note] My Title")!;
-    const result = reconstructQuoteHeader(slot, "");
+    const result = reconstructQuoteHeader(slot, slot.marker, "");
     expect(result).toEqual({ ok: true, header: "> [!note] " });
   });
 
-  it("rule 1: an already-empty title left empty (unedited) also reconstructs byte-identical to the original", () => {
+  it("rule 1: an already-empty title left empty (unedited, marker unchanged) also reconstructs byte-identical to the original", () => {
     const slot = buildQuoteHeaderTitleSlot("> [!warning]")!;
-    const result = reconstructQuoteHeader(slot, "");
+    const result = reconstructQuoteHeader(slot, slot.marker, "");
     expect(result).toEqual({ ok: true, header: "> [!warning]" });
   });
 
-  it("rule 2: an empty title made non-empty, with NO existing separator in beforeTitle, inserts exactly one space", () => {
+  it("rule 2: an empty title made non-empty (marker unchanged), with NO existing separator, inserts exactly one space", () => {
     const slot = buildQuoteHeaderTitleSlot("> [!warning]")!;
-    const result = reconstructQuoteHeader(slot, "New Title");
+    const result = reconstructQuoteHeader(slot, slot.marker, "New Title");
     expect(result).toEqual({ ok: true, header: "> [!warning] New Title" });
   });
 
-  it("rule 2: an empty title made non-empty, with an EXISTING trailing separator already in beforeTitle, does not duplicate the space", () => {
-    // A stray trailing space after the marker even with no title present
-    // (e.g. left behind by an external editor) — the split regex still
-    // captures it as part of beforeTitle, since title itself is "".
+  it("rule 2: an empty title made non-empty (marker unchanged), with an EXISTING trailing separator, does not duplicate the space", () => {
+    // A stray trailing space after the marker position even with no title
+    // present (e.g. left behind by an external editor) — the split regex
+    // still captures it as `separator`, since title itself is "".
     const slot = buildQuoteHeaderTitleSlot("> [!warning] ")!;
     expect(slot.title).toBe("");
-    expect(slot.beforeTitle).toBe("> [!warning] ");
-    const result = reconstructQuoteHeader(slot, "New Title");
+    expect(slot.separator).toBe(" ");
+    const result = reconstructQuoteHeader(slot, slot.marker, "New Title");
     expect(result).toEqual({ ok: true, header: "> [!warning] New Title" });
   });
 
-  it("rule 3: a non-empty title changed to a different non-empty title preserves beforeTitle byte-for-byte, including its original (non-single-space) separator convention", () => {
+  it("rule 3: a non-empty title changed to a different non-empty title (marker unchanged) preserves the separator byte-for-byte, including a non-single-space convention", () => {
     const slot = buildQuoteHeaderTitleSlot("> [!tip]+  Old Title")!; // two spaces before the title
-    expect(slot.beforeTitle).toBe("> [!tip]+  ");
-    const result = reconstructQuoteHeader(slot, "New Title");
+    expect(slot.separator).toBe("  ");
+    const result = reconstructQuoteHeader(slot, slot.marker, "New Title");
     expect(result).toEqual({ ok: true, header: "> [!tip]+  New Title" });
   });
 
-  it("passes through wiki links, URLs, emoji, Japanese, inline Markdown, and an embedded `>` in the title completely untouched", () => {
+  it("passes through wiki links, URLs, emoji, Japanese, inline Markdown, and an embedded `>` in the title completely untouched (marker unchanged)", () => {
     const titles = [
       "[[Some Note]] reference",
       "see https://example.com/path?q=1",
@@ -312,40 +332,157 @@ describe("reconstructQuoteHeader: title-slot round-trip and the 3 fixed whitespa
     ];
     for (const title of titles) {
       const slot = buildQuoteHeaderTitleSlot("> [!note] placeholder")!;
-      const result = reconstructQuoteHeader(slot, title);
+      const result = reconstructQuoteHeader(slot, slot.marker, title);
       expect(result).toEqual({ ok: true, header: `> [!note] ${title}` });
     }
   });
 
-  it("rejects a title containing a newline with reason 'newline'", () => {
+  it("rejects a title containing a newline with reason 'newline' (marker unchanged)", () => {
     const slot = buildQuoteHeaderTitleSlot("> [!note] Title")!;
-    const result = reconstructQuoteHeader(slot, "line one\nline two");
+    const result = reconstructQuoteHeader(slot, slot.marker, "line one\nline two");
     expect(result).toEqual({ ok: false, reason: "newline" });
   });
 });
 
-describe("buildQuotePrefixProjection: titleSlot field (Phase 5D-1A)", () => {
-  it("a callout WITH a title gets a non-null titleSlot matching buildQuoteHeaderTitleSlot's own split of the same header", () => {
+describe("buildQuotePrefixProjection: titleSlot field, 4-piece shape (Phase 5D-1A / 5D-1B)", () => {
+  it("a callout WITH a title and no marker gets a non-null titleSlot matching buildQuoteHeaderTitleSlot's own split of the same header", () => {
     const raw = ["> [!note] My Title", "> body"].join("\n");
     const built = buildQuotePrefixProjection(raw, "callout");
     expect(built.ok).toBe(true);
     if (!built.ok) return;
-    expect(built.projection.titleSlot).toEqual({ beforeTitle: "> [!note] ", title: "My Title" });
+    expect(built.projection.titleSlot).toEqual({
+      beforeMarker: "> [!note]",
+      marker: "",
+      separator: " ",
+      title: "My Title",
+    });
   });
 
-  it("a callout with NO title still gets a non-null titleSlot, with title === ''", () => {
+  it("a callout with NO title still gets a non-null titleSlot, with marker/separator/title all ''", () => {
     const raw = ["> [!warning]", "> body"].join("\n");
     const built = buildQuotePrefixProjection(raw, "callout");
     expect(built.ok).toBe(true);
     if (!built.ok) return;
-    expect(built.projection.titleSlot).toEqual({ beforeTitle: "> [!warning]", title: "" });
+    expect(built.projection.titleSlot).toEqual({
+      beforeMarker: "> [!warning]",
+      marker: "",
+      separator: "",
+      title: "",
+    });
   });
 
-  it("a blockquote always has titleSlot === null — no header line, no title concept", () => {
+  it("a blockquote always has titleSlot === null — no header line, no title/marker concept", () => {
     const raw = ["> line one", "> line two"].join("\n");
     const built = buildQuotePrefixProjection(raw, "blockquote");
     expect(built.ok).toBe(true);
     if (!built.ok) return;
     expect(built.projection.titleSlot).toBeNull();
+  });
+});
+
+// ---- Phase 5D-1B ("Callout Fold Marker Editing") -------------------------
+//
+// Pure-function tests for the marker half of reconstructQuoteHeader — the
+// title half is already covered exhaustively above (with marker held
+// unchanged); these tests hold TITLE unchanged and exercise the marker
+// transitions, plus the runtime guard and simultaneous marker+title edits.
+
+describe("reconstructQuoteHeader: fold-marker transitions, title UNCHANGED (Phase 5D-1B)", () => {
+  it("round-trips all 4 marker transitions (none->+, none->-, +->none, -->+) with title held unchanged", () => {
+    const cases: Array<[string, "" | "+" | "-", string]> = [
+      ["> [!note] My Title", "+", "> [!note]+ My Title"],
+      ["> [!note] My Title", "-", "> [!note]- My Title"],
+      ["> [!tip]+ Folded", "", "> [!tip] Folded"],
+      ["> [!tip]- Folded", "+", "> [!tip]+ Folded"],
+    ];
+    for (const [header, newMarker, expected] of cases) {
+      const slot = buildQuoteHeaderTitleSlot(header)!;
+      const result = reconstructQuoteHeader(slot, newMarker, slot.title);
+      expect(result).toEqual({ ok: true, header: expected });
+    }
+  });
+
+  it("a marker-only change on a title-less callout keeps title empty and does not synthesize a separator (title stays empty, rule 1 applies)", () => {
+    const slot = buildQuoteHeaderTitleSlot("> [!warning]")!;
+    const toPlus = reconstructQuoteHeader(slot, "+", slot.title);
+    expect(toPlus).toEqual({ ok: true, header: "> [!warning]+" });
+    const toMinus = reconstructQuoteHeader(slot, "-", slot.title);
+    expect(toMinus).toEqual({ ok: true, header: "> [!warning]-" });
+  });
+
+  it("a marker-only change on an indented, list-item-owned callout preserves the indentation and quote prefix exactly", () => {
+    const slot = buildQuoteHeaderTitleSlot("  > [!ocr] Scan")!;
+    const result = reconstructQuoteHeader(slot, "-", slot.title);
+    expect(result).toEqual({ ok: true, header: "  > [!ocr]- Scan" });
+  });
+
+  it("a marker-only change preserves a multi-space separator convention byte-for-byte", () => {
+    const slot = buildQuoteHeaderTitleSlot("> [!tip]+  Old Title")!;
+    const result = reconstructQuoteHeader(slot, "-", slot.title);
+    expect(result).toEqual({ ok: true, header: "> [!tip]-  Old Title" });
+  });
+
+  it("marker-only changes never alter type, quote prefix, or title — beforeMarker and title are always byte-identical to the original", () => {
+    const slot = buildQuoteHeaderTitleSlot("  > [!custom-type] Some Title")!;
+    for (const newMarker of ["", "+", "-"] as const) {
+      const result = reconstructQuoteHeader(slot, newMarker, slot.title);
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      expect(result.header.startsWith(slot.beforeMarker)).toBe(true);
+      expect(result.header.endsWith(slot.title)).toBe(true);
+    }
+  });
+
+  it("an unedited marker (newMarker === slot.marker) with title unchanged reconstructs byte-identical to the original, for none/+/- alike", () => {
+    for (const header of ["> [!note] Title", "> [!tip]+ Title", "> [!tip]- Title"]) {
+      const slot = buildQuoteHeaderTitleSlot(header)!;
+      const result = reconstructQuoteHeader(slot, slot.marker, slot.title);
+      expect(result).toEqual({ ok: true, header });
+    }
+  });
+});
+
+describe("reconstructQuoteHeader: simultaneous marker + title edits, single reassembly (Phase 5D-1B)", () => {
+  it("marker none->+ AND title empty->non-empty together: rule 2's space-insertion still applies correctly", () => {
+    const slot = buildQuoteHeaderTitleSlot("> [!warning]")!;
+    const result = reconstructQuoteHeader(slot, "+", "New Title");
+    expect(result).toEqual({ ok: true, header: "> [!warning]+ New Title" });
+  });
+
+  it("marker none->- AND title emptied together: rule 1's separator-preservation still applies correctly", () => {
+    const slot = buildQuoteHeaderTitleSlot("> [!note] Old")!;
+    const result = reconstructQuoteHeader(slot, "-", "");
+    expect(result).toEqual({ ok: true, header: "> [!note]- " });
+  });
+
+  it("marker +->none AND title changed to a different non-empty value together: rule 3's separator-preservation still applies correctly", () => {
+    const slot = buildQuoteHeaderTitleSlot("> [!tip]+ Folded")!;
+    const result = reconstructQuoteHeader(slot, "", "New");
+    expect(result).toEqual({ ok: true, header: "> [!tip] New" });
+  });
+
+  it("simultaneous marker+title change on an indented, multi-space-separator header composes correctly", () => {
+    const slot = buildQuoteHeaderTitleSlot("  > [!ocr]-  Old Scan")!;
+    const result = reconstructQuoteHeader(slot, "+", "New Scan");
+    expect(result).toEqual({ ok: true, header: "  > [!ocr]+  New Scan" });
+  });
+});
+
+describe("reconstructQuoteHeader: invalid-marker runtime guard (Phase 5D-1B)", () => {
+  it("rejects any newMarker value outside \"\" | \"+\" | \"-\" with reason 'invalid-marker', never throwing and never silently coercing it", () => {
+    const slot = buildQuoteHeaderTitleSlot("> [!note] Title")!;
+    // The TypeScript signature restricts newMarker to CalloutFoldMarker;
+    // this simulates an out-of-band value (e.g. from DOM manipulation
+    // bypassing the closed-set <select>) reaching the function anyway.
+    for (const bogus of ["*", "++", " ", "warning", "\n"]) {
+      const result = reconstructQuoteHeader(slot, bogus as unknown as "" | "+" | "-", slot.title);
+      expect(result).toEqual({ ok: false, reason: "invalid-marker" });
+    }
+  });
+
+  it("checks marker validity independently of title validity — an invalid marker is rejected even when the title itself is otherwise fine", () => {
+    const slot = buildQuoteHeaderTitleSlot("> [!note] Title")!;
+    const result = reconstructQuoteHeader(slot, "toggle" as unknown as "" | "+" | "-", "A perfectly fine title");
+    expect(result).toEqual({ ok: false, reason: "invalid-marker" });
   });
 });

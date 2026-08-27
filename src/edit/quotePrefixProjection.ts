@@ -90,17 +90,45 @@ export interface QuotePrefixLineMapping {
 }
 
 /**
- * Phase 5D-1A ("Callout Header Title Editing"): the callout header line
- * split into a READ-ONLY portion (`beforeTitle` — quote prefix, `[!type]`,
- * fold marker, and whatever separator whitespace originally followed it)
- * and the EDITABLE `title` itself. Exactly the same lossless-split
- * discipline as QuotePrefixLineMapping above: `beforeTitle + title` always
- * reconstructs the original header line byte-for-byte — see
- * buildQuoteHeaderTitleSlot's own doc comment. Only ever built for kind
- * "callout"; a blockquote has no header/title concept at all.
+ * Phase 5D-1B ("Callout Fold Marker Editing"): the callout header's own
+ * fold marker — `""` (absent: not foldable), `"+"` (foldable, expanded by
+ * default), or `"-"` (foldable, collapsed by default). See
+ * https://obsidian.md/help/callouts — "You can make a callout foldable by
+ * adding a plus (+) or a minus (-) directly after the type identifier. A
+ * plus sign expands the callout by default, and a minus sign collapses it
+ * instead." (the no-marker "not foldable" behavior itself is this
+ * plugin's own documented real-device observation, not spelled out
+ * verbatim in that page).
+ */
+export type CalloutFoldMarker = "" | "+" | "-";
+
+/**
+ * Phase 5D-1A ("Callout Header Title Editing") / 5D-1B ("Callout Fold
+ * Marker Editing"): the callout header line split into four lossless
+ * pieces — `beforeMarker` (quote prefix through the closing `]` of
+ * `[!type]`, NEVER touched by title or marker edits), `marker` (the fold
+ * marker itself, edited in 5D-1B), `separator` (whatever run of spaces/
+ * tabs originally sat between the marker position and the title, edited
+ * in neither ticket directly but its CONTENT reused verbatim — see
+ * reconstructQuoteHeader's own doc comment for the one case where a
+ * single space is synthesized instead of reused), and `title` (edited in
+ * 5D-1A). Exactly the same lossless-split discipline as
+ * QuotePrefixLineMapping above:
+ *
+ *   beforeMarker + marker + separator + title === the original header
+ *   line, byte-for-byte, unconditionally — see buildQuoteHeaderTitleSlot's
+ *   own doc comment.
+ *
+ * Only ever built for kind "callout"; a blockquote has no header/title/
+ * marker concept at all. The type name (`QuoteHeaderTitleSlot`, not
+ * `QuoteHeaderSlot`) is kept unchanged from 5D-1A despite now also
+ * carrying the marker split, per Phase 5D-1B's own approved ticket
+ * wording ("QuoteHeaderTitleSlot を...拡張する").
  */
 export interface QuoteHeaderTitleSlot {
-  beforeTitle: string;
+  beforeMarker: string;
+  marker: CalloutFoldMarker;
+  separator: string;
   title: string;
 }
 
@@ -153,34 +181,39 @@ const LINE_PREFIX_RE = /^([ \t]*>[ \t]?)(.*)$/;
 const NESTED_QUOTE_CONTENT_RE = /^[ \t]*>/;
 
 /**
- * Phase 5D-1A: splits a callout HEADER line into (beforeTitle, title),
- * covering the whole line — mirrors LINE_PREFIX_RE's split discipline
- * exactly, just anchored to the header's own shape (quote prefix,
- * `[!type]`, optional fold marker, then whatever run of spaces/tabs
- * follows) instead of a body line's bare `>` prefix. Structurally the
- * same anchor as parser/complexBlocks.ts's CALLOUT_START_RE, but with the
- * ENTIRE "everything before the title" span captured as ONE group
- * (rather than separate type/fold groups) — this module only ever needs
- * to treat that whole span as an opaque, read-only, reused-verbatim unit,
- * never to inspect type or fold marker individually (both stay
- * unconditionally read-only per this ticket's approved scope).
+ * Phase 5D-1A / 5D-1B: splits a callout HEADER line into all FOUR
+ * lossless pieces in one pass — mirrors LINE_PREFIX_RE's split discipline
+ * exactly, just anchored to the header's own shape instead of a body
+ * line's bare `>` prefix. Structurally the same anchor as
+ * parser/complexBlocks.ts's CALLOUT_START_RE (group 1 here ==
+ * CALLOUT_START_RE's quote-prefix-through-`[!type]` span, group 2 ==
+ * CALLOUT_START_RE's own fold-marker group verbatim), but additionally
+ * separates the fold marker (group 2) from its trailing separator
+ * whitespace (group 3) and the title (group 4) — 5D-1A only needed
+ * groups 1+2+3 collapsed into one opaque `beforeTitle` span; 5D-1B needs
+ * the marker split out on its own so it can be edited independently of
+ * the quote-prefix/type portion that must never change.
  */
-const HEADER_TITLE_SPLIT_RE = /^([ \t]*>[ \t]?\[![^\]]+\][+-]?[ \t]*)(.*)$/;
+const HEADER_SLOT_RE = /^([ \t]*>[ \t]?\[![^\]]+\])([+-]?)([ \t]*)(.*)$/;
 
 /**
  * Build a QuoteHeaderTitleSlot from a raw callout header line. Returns
  * null only defensively — a header line that already matched
  * CALLOUT_START_RE at scan time (the only way a block is ever classified
  * "callout" in the first place) is structurally guaranteed to also match
- * HEADER_TITLE_SPLIT_RE above, since the latter is anchored identically.
- * A caller seeing null here should treat it exactly like a callout with
- * no title slot at all — fall back to read-only header display, offer no
- * title input — never throw or guess.
+ * HEADER_SLOT_RE above, since the latter is anchored identically (see
+ * that const's own doc comment for the group-by-group correspondence). A
+ * caller seeing null here should treat it exactly like a callout with no
+ * title/marker slot at all — fall back to read-only header display,
+ * offer no title input or fold-marker select — never throw or guess.
  */
 export function buildQuoteHeaderTitleSlot(headerLine: string): QuoteHeaderTitleSlot | null {
-  const m = headerLine.match(HEADER_TITLE_SPLIT_RE);
+  const m = headerLine.match(HEADER_SLOT_RE);
   if (!m) return null;
-  return { beforeTitle: m[1], title: m[2] };
+  // `[+-]?` in HEADER_SLOT_RE guarantees m[2] is always "" | "+" | "-" —
+  // this cast reflects that regex-level guarantee, not an assumption.
+  const marker = m[2] as CalloutFoldMarker;
+  return { beforeMarker: m[1], marker, separator: m[3], title: m[4] };
 }
 
 /**
@@ -270,63 +303,89 @@ export function invertQuotePrefixProjection(
   return { ok: true, rawText: rawLines.join("\n") };
 }
 
-export type QuoteHeaderTitleReconstructReason = "newline";
+export type QuoteHeaderTitleReconstructReason = "newline" | "invalid-marker";
 
 export type QuoteHeaderTitleReconstructResult =
   | { ok: true; header: string }
   | { ok: false; reason: QuoteHeaderTitleReconstructReason };
 
 /**
- * Phase 5D-1A: reconstruct a full callout header line from `slot` (the
- * ORIGINAL, load-time split — never mutated) and `newTitle` (the title
- * input's CURRENT value, edited or not). `slot.beforeTitle` — quote
- * prefix, `[!type]`, fold marker, original separator whitespace — is
- * NEVER altered by this function; only the title portion changes.
+ * Phase 5D-1A ("Callout Header Title Editing") / 5D-1B ("Callout Fold
+ * Marker Editing"): reconstruct a full callout header line from `slot`
+ * (the ORIGINAL, load-time split — never mutated), `newMarker` (the fold
+ * marker select's CURRENT value, edited or not), and `newTitle` (the
+ * title input's CURRENT value, edited or not). `slot.beforeMarker` —
+ * quote prefix and `[!type]` — is NEVER altered by this function; only
+ * the marker and title portions change. Both new values are independent
+ * inputs combined in a SINGLE reassembly (`beforeMarker + newMarker +
+ * effectiveSeparator + newTitle`) — there is no meaningful "order" in
+ * which marker vs. title is applied, since each is just one piece of one
+ * concatenation; a caller changing only one of the two simply passes the
+ * OTHER one unchanged (`slot.marker` / `slot.title`) and gets a byte-
+ * identical result for that piece, exactly like an unedited title already
+ * did in 5D-1A.
  *
- * Refuses with reason "newline" whenever `newTitle` contains one — a
- * callout header is exactly one raw Markdown line, so a title spanning
- * multiple lines has no well-formed reconstruction. Callers must treat
- * this exactly like invertQuotePrefixProjection's own
- * "line-count-changed": reject the WHOLE Apply (title edit AND any body
- * edit together), zero-byte-change, never a partial write.
+ * Refuses with reason "newline" whenever `newTitle` contains one (5D-1A,
+ * unchanged) — a callout header is exactly one raw Markdown line. Refuses
+ * with reason "invalid-marker" whenever `newMarker` is anything other
+ * than `"" | "+" | "-"` — defense-in-depth only: the TypeScript
+ * `CalloutFoldMarker` union already restricts this at compile time, and
+ * the View's own fold-marker control is a closed-set `<select>` that can
+ * only ever emit one of these three values, so this branch should be
+ * unreachable via normal UI. It exists for the same reason
+ * buildQuotePrefixProjection's own "should be unreachable in practice"
+ * guards exist: never throw, never silently coerce/normalize an
+ * unexpected value — fail closed as a safe, ordinary result instead.
+ * Either refusal rejects the WHOLE Apply (marker edit, title edit, AND
+ * any body edit together), zero-byte-change, never a partial write —
+ * mirroring invertQuotePrefixProjection's own "line-count-changed"
+ * refusal contract.
  *
- * The three formatting rules below are this ticket's own approved,
- * fixed specification — not a heuristic this function invents:
+ * The separator rules below are 5D-1A's own approved, fixed
+ * specification, restated here in terms of `slot.separator` (the
+ * whitespace between the marker position and the title) instead of
+ * "beforeTitle's trailing whitespace" — the underlying rule is
+ * unchanged, and does not depend on whether the marker itself changed:
  *
  *   1. newTitle === "" (title emptied, or was already empty and stays
- *      empty/unedited): `slot.beforeTitle` is reused completely
- *      unmodified, including any trailing separator whitespace it may
- *      already contain. Nothing is trimmed.
- *   2. `slot.title === ""` (the ORIGINAL title was empty) and newTitle
- *      is non-empty: if `slot.beforeTitle` already ends in a space or
- *      tab, `beforeTitle + newTitle`; otherwise exactly one space is
- *      inserted (`beforeTitle + " " + newTitle`) — the minimum
- *      readability correction needed for a brand-new title to not glue
- *      onto `]`/the fold marker. This is a pure insertion; it never
- *      touches `beforeTitle` itself.
- *   3. `slot.title !== ""` and newTitle is non-empty (non-empty to a
- *      different non-empty value): `beforeTitle + newTitle`, no space
- *      logic — `beforeTitle` already carries whatever separator
- *      convention the ORIGINAL non-empty title used, and rule 3
- *      deliberately preserves that as-is rather than reformatting it.
+ *      empty/unedited): `slot.separator` is reused completely unmodified.
+ *      Nothing is trimmed, regardless of what newMarker is.
+ *   2. `slot.title === ""` (the ORIGINAL title was empty) AND
+ *      `slot.separator === ""` (no existing separator at all) and
+ *      newTitle is non-empty: exactly one space is synthesized instead
+ *      of reusing the (empty) separator — the minimum readability
+ *      correction needed for a brand-new title to not glue onto `]` or
+ *      the new marker character. This is a pure insertion; it never
+ *      touches `beforeMarker`.
+ *   3. Every other case (a non-empty separator already existed, or the
+ *      original title was already non-empty): `slot.separator` is reused
+ *      verbatim, no space logic — the original separator convention is
+ *      deliberately preserved as-is rather than reformatted.
  *
- * An unedited title (newTitle === slot.title, non-empty) also falls
- * under rule 3 and reconstructs the header byte-identical to the
- * original — the same "unedited Apply changes nothing" guarantee
- * QuotePrefixProjection's body-line split already provides.
+ * An unedited title AND unedited marker (newTitle === slot.title,
+ * newMarker === slot.marker) also falls under rule 1 or rule 3 and
+ * reconstructs the header byte-identical to the original — the same
+ * "unedited Apply changes nothing" guarantee QuotePrefixProjection's
+ * body-line split already provides.
  */
 export function reconstructQuoteHeader(
   slot: QuoteHeaderTitleSlot,
+  newMarker: CalloutFoldMarker,
   newTitle: string
 ): QuoteHeaderTitleReconstructResult {
+  if (newMarker !== "" && newMarker !== "+" && newMarker !== "-") {
+    return { ok: false, reason: "invalid-marker" };
+  }
   if (newTitle.includes("\n")) {
     return { ok: false, reason: "newline" };
   }
+  let separator: string;
   if (newTitle === "") {
-    return { ok: true, header: slot.beforeTitle };
+    separator = slot.separator;
+  } else if (slot.title === "" && slot.separator === "") {
+    separator = " ";
+  } else {
+    separator = slot.separator;
   }
-  if (slot.title === "" && !/[ \t]$/.test(slot.beforeTitle)) {
-    return { ok: true, header: slot.beforeTitle + " " + newTitle };
-  }
-  return { ok: true, header: slot.beforeTitle + newTitle };
+  return { ok: true, header: slot.beforeMarker + newMarker + separator + newTitle };
 }
