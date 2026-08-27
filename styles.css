@@ -616,7 +616,14 @@ settings:
  * (quoteMarkerSelectEl), sits between the two — `gap` provides the
  * visual spacing between all three children now that the label no
  * longer renders the header's own raw separator whitespace (see
- * quote-header-label's own doc comment below). */
+ * quote-header-label's own doc comment below).
+ *
+ * Phase 5D-1C: a FOURTH and FIFTH child — the editable type combobox
+ * (quoteTypeInputEl) and a second read-only bracket label
+ * (quoteTypeCloseLabelEl, reusing this same quote-header-label class) —
+ * sit between quote-header-label (now just quote prefix + literal `[!`)
+ * and the fold-marker select, so the row reads "quote prefix + [!" ->
+ * type -> "]" -> fold behavior -> title. */
 .unified-outliner-partial-edit-quote-header {
   display: flex;
   align-items: center;
@@ -639,12 +646,46 @@ settings:
  * the fold marker and its separator whitespace are no longer part of
  * this label's text at all; the marker is represented by
  * quote-marker-select's own selected option instead (see
- * PartialEditView.ts's renderQuoteHeader). */
+ * PartialEditView.ts's renderQuoteHeader).
+ *
+ * Phase 5D-1C: quoteHeaderLabelEl now shows only quote prefix + literal
+ * `[!` (the type itself moved to quote-type-input below). This same
+ * class is also reused, unmodified, by quoteTypeCloseLabelEl for the
+ * literal closing `]` immediately after the type input — both are
+ * equally inert, read-only bracket/prefix text. */
 .unified-outliner-partial-edit-quote-header-label {
   flex-shrink: 0;
   color: var(--uo-text-color);
   opacity: 0.75;
   white-space: pre;
+}
+
+/* Phase 5D-1C: the callout's type combobox — free text backed by a
+ * <datalist> of suggestions (see quoteTypeInputEl's doc comment in
+ * PartialEditView.ts for why a <select> was deliberately rejected for
+ * type specifically). Sized like quote-marker-select beside it (compact,
+ * content-driven via flex-shrink: 0) rather than flexing to fill space
+ * like the title input further along the row — it is a short keyword,
+ * not free-form prose. */
+.unified-outliner-partial-edit-quote-type-input {
+  flex-shrink: 0;
+  width: 8em;
+  max-width: 45%;
+  border: none;
+  background: transparent;
+  color: var(--uo-text-color);
+  font-size: inherit;
+  font-family: inherit;
+  padding: 0;
+}
+
+.unified-outliner-partial-edit-quote-type-input:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.unified-outliner-partial-edit-quote-type-input:disabled {
+  opacity: 0.6;
 }
 
 /* Phase 5D-1B: the callout's fold-marker picker — this plugin's first

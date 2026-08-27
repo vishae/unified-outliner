@@ -230,6 +230,35 @@ export class PartialEditView extends ItemView {
    */
   private static readonly SUBTREE_VISIBLE_CHILDREN = 5;
 
+  /**
+   * Phase 5D-1C: the `id` shared between quoteTypeDatalistEl and
+   * quoteTypeInputEl's own `list` attribute — this ticket's own approved
+   * literal id string.
+   */
+  private static readonly QUOTE_TYPE_DATALIST_ID = "unified-outliner-callout-types";
+  /**
+   * Phase 5D-1C: the 13 standard Obsidian callout type keywords, per this
+   * ticket's own approved candidate list — deliberately excludes type
+   * aliases (e.g. "caution" for "warning"); alias coverage is explicitly
+   * deferred to a future, separate UX ticket. Populates
+   * quoteTypeDatalistEl's `<option>` children once, in onOpen.
+   */
+  private static readonly QUOTE_TYPE_DATALIST_OPTIONS = [
+    "note",
+    "abstract",
+    "info",
+    "todo",
+    "tip",
+    "success",
+    "question",
+    "warning",
+    "failure",
+    "danger",
+    "bug",
+    "example",
+    "quote",
+  ];
+
   private titleEl!: HTMLElement;
   private breadcrumbEl!: HTMLElement;
   private siblingNavEl!: HTMLElement;
@@ -245,20 +274,62 @@ export class PartialEditView extends ItemView {
    * node has nothing to separate out).
    *
    * Phase 5D-1A: this container now holds `quoteHeaderLabelEl` (read-
-   * only: quote prefix and `[!type]`, since 5D-1B — originally also
-   * carried fold marker and separator, see that field's own doc comment)
-   * and `quoteTitleInputEl` (the editable title). Never call `.setText()`
-   * on `quoteHeaderEl` itself any more — that would wipe out its children
-   * as a side effect, since `setText` replaces the element's entire text
-   * content including child elements. Always target `quoteHeaderLabelEl`
-   * for the read-only text instead.
+   * only: quote prefix and the literal `[!`/`]` brackets, since 5D-1C —
+   * originally also carried the type/fold marker/separator, see that
+   * field's own doc comment) and `quoteTitleInputEl` (the editable
+   * title). Never call `.setText()` on `quoteHeaderEl` itself any more —
+   * that would wipe out its children as a side effect, since `setText`
+   * replaces the element's entire text content including child elements.
+   * Always target `quoteHeaderLabelEl` for the read-only text instead.
    *
    * Phase 5D-1B: a THIRD child, `quoteMarkerSelectEl`, sits between the
    * label and the title input — see that field's own doc comment.
+   *
+   * Phase 5D-1C: a FOURTH and FIFTH child, `quoteTypeInputEl` (editable
+   * type combobox) and `quoteTypeCloseLabelEl` (read-only literal `]`),
+   * sit between `quoteHeaderLabelEl` (now just quote prefix + literal
+   * `[!`) and `quoteMarkerSelectEl` — see each field's own doc comment.
+   * The row now reads left-to-right as "quote prefix + `[!`" ->
+   * "type" -> "`]`" -> "fold behavior" -> "title".
    */
   private quoteHeaderEl!: HTMLElement;
-  /** Phase 5D-1A: the read-only label child of quoteHeaderEl — quote prefix and `[!type]` only (see that field's own doc comment for why this exists as a separate child rather than text directly on quoteHeaderEl). Phase 5D-1B: no longer includes the fold marker or separator whitespace — those are now represented by quoteMarkerSelectEl's own selected option, not rendered as raw text in this label. */
+  /** Phase 5D-1A: the read-only label child of quoteHeaderEl (see that field's own doc comment for why this exists as a separate child rather than text directly on quoteHeaderEl). Phase 5D-1B: no longer includes the fold marker or separator whitespace — those are represented by quoteMarkerSelectEl's own selected option, not rendered as raw text in this label. Phase 5D-1C: no longer includes `[!type]` either — only the quote prefix plus the literal `[!` opening bracket; the type itself is `quoteTypeInputEl`, and the closing `]` is `quoteTypeCloseLabelEl`. */
   private quoteHeaderLabelEl!: HTMLElement;
+  /**
+   * Phase 5D-1C: single-line, editable callout-type combobox — a plain
+   * `<input type="text">` with a `list` attribute pointing at
+   * `quoteTypeDatalistEl`'s id, per this ticket's own approved UI
+   * decision (a closed-set `<select>`, like `quoteMarkerSelectEl`, was
+   * explicitly rejected for TYPE specifically, because Obsidian callout
+   * types are NOT a closed set — any string is syntactically valid, and
+   * an unrecognized one merely falls back to `note`'s ICON/COLOR at
+   * render time, never at the raw-text level; see
+   * reconstructQuoteHeader's own doc comment). The `<datalist>` offers
+   * the 13 standard type keywords purely as suggestions — it never
+   * constrains what can actually be typed or pasted here, so any custom
+   * type, alias, or unknown type already present in the user's vault
+   * (e.g. the real `[!ai]` example that motivated this ticket) loads and
+   * round-trips completely unmodified. Shown/hidden and enabled/disabled
+   * in lockstep with `quoteTitleInputEl`/`quoteMarkerSelectEl` — all
+   * three are gated on the exact same
+   * `this.quoteProjection?.titleSlot != null` condition, since all three
+   * are carved out of the same header line's same titleSlot.
+   */
+  private quoteTypeInputEl!: HTMLInputElement;
+  /**
+   * Phase 5D-1C: the `<datalist>` backing `quoteTypeInputEl`'s `list`
+   * attribute — created once in onOpen with the 13 standard callout type
+   * keywords (note/abstract/info/todo/tip/success/question/warning/
+   * failure/danger/bug/example/quote) as its `<option>` children, per
+   * this ticket's own approved candidate list. Deliberately does NOT
+   * include type aliases (e.g. "caution", "tldr") — the ticket's own
+   * explicit instruction defers alias coverage to a future, separate UX
+   * ticket. Never itself shown/hidden — a `<datalist>` has no visual
+   * presence of its own; only `quoteTypeInputEl`'s own visibility matters.
+   */
+  private quoteTypeDatalistEl!: HTMLDataListElement;
+  /** Phase 5D-1C: the read-only label child rendering the literal closing `]` of `[!type]`, immediately after `quoteTypeInputEl` — shown/hidden in lockstep with it. Kept as its own element (rather than baked into `quoteHeaderLabelEl`, which sits BEFORE the now-editable type) so the header row's static bracket punctuation survives the type becoming an editable control in between. */
+  private quoteTypeCloseLabelEl!: HTMLElement;
   /**
    * Phase 5D-1B: single-line fold-marker picker — a native tri-state
    * `<select>` (this view's first `<select>` element) offering exactly
@@ -267,9 +338,11 @@ export class PartialEditView extends ItemView {
    * default). A closed-set control by design — see reconstructQuoteHeader's
    * own doc comment for why this is what keeps "invalid-marker" a
    * defensive, effectively-unreachable path rather than something a user
-   * can trigger from this UI. Shown/hidden and enabled/disabled in lockstep
-   * with `quoteTitleInputEl` — both are gated on the exact same
-   * `this.quoteProjection?.titleSlot != null` condition, since both are
+   * can trigger from this UI (contrast `quoteTypeInputEl` above, whose
+   * own "invalid-type" failure IS user-reachable). Shown/hidden and
+   * enabled/disabled in lockstep with `quoteTitleInputEl`/
+   * `quoteTypeInputEl` — all are gated on the exact same
+   * `this.quoteProjection?.titleSlot != null` condition, since all are
    * carved out of the same header line's same titleSlot.
    */
   private quoteMarkerSelectEl!: HTMLSelectElement;
@@ -463,10 +536,46 @@ export class PartialEditView extends ItemView {
     // Phase 5D-1B: quoteMarkerSelectEl is created BETWEEN the two, so the
     // header row reads left-to-right as "quote prefix + [!type]" ->
     // "fold behavior" -> "title".
+    // Phase 5D-1C: quoteTypeInputEl (+ its quoteTypeDatalistEl) and
+    // quoteTypeCloseLabelEl are created between quoteHeaderLabelEl and
+    // quoteMarkerSelectEl, so the row now reads "quote prefix + [!" ->
+    // "type" -> "]" -> "fold behavior" -> "title".
     this.quoteHeaderEl = this.contentEl.createDiv({
       cls: "unified-outliner-partial-edit-quote-header",
     });
     this.quoteHeaderLabelEl = this.quoteHeaderEl.createSpan({
+      cls: "unified-outliner-partial-edit-quote-header-label",
+    });
+    // Phase 5D-1C: the editable type combobox and its backing datalist —
+    // created BETWEEN quoteHeaderLabelEl (quote prefix + literal `[!`)
+    // and quoteTypeCloseLabelEl (literal `]`), so the row's static
+    // bracket punctuation still reads naturally around the now-editable
+    // type. The datalist only ever offers suggestions — see
+    // quoteTypeInputEl's own doc comment for why its `list` attribute
+    // never constrains what can actually be typed/pasted here.
+    this.quoteTypeDatalistEl = this.quoteHeaderEl.createEl("datalist", {
+      attr: { id: PartialEditView.QUOTE_TYPE_DATALIST_ID },
+    });
+    for (const type of PartialEditView.QUOTE_TYPE_DATALIST_OPTIONS) {
+      this.quoteTypeDatalistEl.createEl("option", { value: type });
+    }
+    this.quoteTypeInputEl = this.quoteHeaderEl.createEl("input", {
+      type: "text",
+      cls: "unified-outliner-partial-edit-quote-type-input",
+      attr: { list: PartialEditView.QUOTE_TYPE_DATALIST_ID },
+    });
+    setTooltip(this.quoteTypeInputEl, this.plugin.t("partialEdit.quoteTypeLabel"));
+    // Same dirty-tracking policy as quoteTitleInputEl/quoteMarkerSelectEl's
+    // own listeners — every keystroke in the type combobox must also
+    // re-check isDirty(), since isDirty() now considers the type input
+    // too. It must ALSO re-filter the datalist's own suggestion list —
+    // see refreshQuoteTypeDatalistOptions's own doc comment for why the
+    // browser's native filtering isn't good enough here.
+    this.quoteTypeInputEl.addEventListener("input", () => {
+      this.refreshQuoteTypeDatalistOptions();
+      this.updateDirtyState();
+    });
+    this.quoteTypeCloseLabelEl = this.quoteHeaderEl.createSpan({
       cls: "unified-outliner-partial-edit-quote-header-label",
     });
     this.quoteMarkerSelectEl = this.quoteHeaderEl.createEl("select", {
@@ -862,6 +971,31 @@ export class PartialEditView extends ItemView {
   }
 
   /**
+   * Phase 5D-1C fix: Chromium's own native `<datalist>` filtering matches
+   * a candidate whenever the typed text appears ANYWHERE in it (e.g.
+   * typing "n" also surfaces "warning"/"question"/"danger"), not just at
+   * the start — so left on its own it does not give the prefix-only
+   * suggestion behavior ("n" -> "note" alone) this ticket's UI is meant
+   * to offer. This never touches what can actually be typed/pasted/
+   * Applied (the datalist only ever offers candidates — see
+   * quoteTypeInputEl's own doc comment); it only narrows which
+   * `<option>` children quoteTypeDatalistEl currently exposes, so the
+   * suggestion dropdown itself does prefix-only matching. Called on every
+   * keystroke in quoteTypeInputEl, and again whenever its value is set
+   * programmatically (render/cancel), so the suggestion list never goes
+   * stale after a node switch or a revert.
+   */
+  private refreshQuoteTypeDatalistOptions(): void {
+    const query = this.quoteTypeInputEl.value.toLowerCase();
+    this.quoteTypeDatalistEl.empty();
+    for (const type of PartialEditView.QUOTE_TYPE_DATALIST_OPTIONS) {
+      if (type.startsWith(query)) {
+        this.quoteTypeDatalistEl.createEl("option", { value: type });
+      }
+    }
+  }
+
+  /**
    * Phase 5D-0.5: draw (or hide) the callout-header row above the
    * textarea. Only ever visible for a projecting CALLOUT — a projecting
    * blockquote has no header concept at all (`quoteProjection.header` is
@@ -895,12 +1029,25 @@ export class PartialEditView extends ItemView {
    * it is a reconstruction-time concern only (see reconstructQuoteHeader),
    * with the header row's own visual spacing coming from CSS layout
    * (flex gap) between the three DOM children instead.
+   *
+   * Phase 5D-1C: `quoteHeaderLabelEl` now shows ONLY `titleSlot.quotePrefix
+   * + "[!"` — the type itself moved to `quoteTypeInputEl` (revealed/
+   * pre-filled in lockstep, same `titleSlot` gate) verbatim, with no
+   * case-folding/trimming/fallback-to-"note" of any kind. The literal
+   * closing `]` is rendered by `quoteTypeCloseLabelEl`, shown/hidden in
+   * the exact same lockstep.
    */
   private renderQuoteHeader(): void {
     const titleSlot = this.quoteProjection?.titleSlot ?? null;
     if (titleSlot) {
       this.quoteHeaderEl.toggleVisibility(true);
-      this.quoteHeaderLabelEl.setText(titleSlot.beforeMarker);
+      this.quoteHeaderLabelEl.setText(titleSlot.quotePrefix + "[!");
+      this.quoteTypeInputEl.toggleVisibility(true);
+      this.quoteTypeInputEl.disabled = false;
+      this.quoteTypeInputEl.value = titleSlot.type;
+      this.refreshQuoteTypeDatalistOptions();
+      this.quoteTypeCloseLabelEl.toggleVisibility(true);
+      this.quoteTypeCloseLabelEl.setText("]");
       this.quoteMarkerSelectEl.toggleVisibility(true);
       this.quoteMarkerSelectEl.disabled = false;
       this.quoteMarkerSelectEl.value = titleSlot.marker;
@@ -909,6 +1056,11 @@ export class PartialEditView extends ItemView {
       this.quoteTitleInputEl.value = titleSlot.title;
       return;
     }
+    this.quoteTypeInputEl.toggleVisibility(false);
+    this.quoteTypeInputEl.value = "";
+    this.refreshQuoteTypeDatalistOptions();
+    this.quoteTypeCloseLabelEl.toggleVisibility(false);
+    this.quoteTypeCloseLabelEl.setText("");
     this.quoteMarkerSelectEl.toggleVisibility(false);
     this.quoteMarkerSelectEl.value = "";
     this.quoteTitleInputEl.toggleVisibility(false);
@@ -1199,8 +1351,12 @@ export class PartialEditView extends ItemView {
     // since quoteTitleInputEl is empty/hidden whenever titleSlot is null.
     // Phase 5D-1B: revert the fold-marker select the same way, in the
     // same branch — both are carved out of the same titleSlot.
+    // Phase 5D-1C: revert the type combobox the same way too — verbatim
+    // back to the loaded titleSlot.type, no case/trim normalization.
     const titleSlot = this.quoteProjection?.titleSlot ?? null;
     if (titleSlot) {
+      this.quoteTypeInputEl.value = titleSlot.type;
+      this.refreshQuoteTypeDatalistOptions();
       this.quoteMarkerSelectEl.value = titleSlot.marker;
       this.quoteTitleInputEl.value = titleSlot.title;
     }
@@ -1352,17 +1508,25 @@ export class PartialEditView extends ItemView {
       // `inverted.rawText` above already reattached the OLD, unedited
       // header verbatim (invertQuotePrefixProjection itself is untouched
       // by this ticket), so this replaces exactly that one line, ONE
-      // combined marker+title reconstruction, ONE splice — never two
-      // separate rewrites. A newline in the title input refuses the WHOLE
-      // Apply here, before the raw-text splice call below is ever
-      // reached — any body edit already computed above is discarded
-      // along with it, matching the quoteLineCountChanged refusal's own
-      // "reject the whole thing, zero-byte-change" contract.
+      // combined type+marker+title reconstruction, ONE splice — never
+      // multiple separate rewrites. A validation failure on any of the
+      // three refuses the WHOLE Apply here, before the raw-text splice
+      // call below is ever reached — any body edit already computed
+      // above is discarded along with it, matching the
+      // quoteLineCountChanged refusal's own "reject the whole thing,
+      // zero-byte-change" contract.
       // Blockquote/non-title-editable callouts (titleSlot null) leave
       // newRawText exactly as invertQuotePrefixProjection produced it,
       // unchanged from pre-5D-1A behavior.
       const titleSlot = this.quoteProjection.titleSlot;
       if (titleSlot) {
+        // Phase 5D-1C: quoteTypeInputEl is free text — unlike
+        // quoteMarkerSelectEl's closed-set <select> below, a user CAN
+        // reach reconstructQuoteHeader's "invalid-type" refusal through
+        // completely ordinary typing/pasting (clearing the field, or
+        // pasting a string containing "]" or a line break), so this is a
+        // real, user-facing failure mode — see the Notice branch below.
+        const newType = this.quoteTypeInputEl.value;
         // Phase 5D-1B: quoteMarkerSelectEl is a closed-set <select> whose
         // only possible values are "", "+", "-" (see that field's own
         // doc comment) — this cast reflects that DOM-level guarantee.
@@ -1374,10 +1538,17 @@ export class PartialEditView extends ItemView {
         // user-facing Notice (no Notice text would accurately describe a
         // state the UI itself can never produce).
         const newMarker = this.quoteMarkerSelectEl.value as CalloutFoldMarker;
-        const reconstructed = reconstructQuoteHeader(titleSlot, newMarker, this.quoteTitleInputEl.value);
+        const reconstructed = reconstructQuoteHeader(
+          titleSlot,
+          newType,
+          newMarker,
+          this.quoteTitleInputEl.value
+        );
         if (!reconstructed.ok) {
           if (reconstructed.reason === "newline") {
             new Notice(this.plugin.t("partialEdit.quoteTitleNewlineUnsupported"));
+          } else if (reconstructed.reason === "invalid-type") {
+            new Notice(this.plugin.t("partialEdit.quoteTypeInvalidUnsupported"));
           }
           return false;
         }
@@ -1509,12 +1680,15 @@ export class PartialEditView extends ItemView {
     // blockquote/section/list/paragraph/non-title-editable callouts.
     // Phase 5D-1B: ALSO dirty when the fold-marker select differs from
     // its loaded titleSlot.marker, same gating as titleDirty.
+    // Phase 5D-1C: ALSO dirty when the type combobox differs from its
+    // loaded titleSlot.type, same gating as titleDirty/markerDirty.
     const titleSlot = this.quoteProjection?.titleSlot ?? null;
     const titleDirty = titleSlot !== null && this.quoteTitleInputEl.value !== titleSlot.title;
     const markerDirty = titleSlot !== null && this.quoteMarkerSelectEl.value !== titleSlot.marker;
+    const typeDirty = titleSlot !== null && this.quoteTypeInputEl.value !== titleSlot.type;
     return (
       (this.nodeId !== null || this.paragraphAnchor !== null) &&
-      (this.textareaEl.value !== this.currentDisplayText() || titleDirty || markerDirty)
+      (this.textareaEl.value !== this.currentDisplayText() || titleDirty || markerDirty || typeDirty)
     );
   }
 

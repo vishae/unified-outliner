@@ -157,9 +157,14 @@ describe("view/PartialEditView.ts quote-prefix-projection wiring (static source 
     expect(body).toContain("this.quoteHeaderLabelEl.setText(header);");
   });
 
-  it("renderQuoteHeader (Phase 5D-1B): when quoteProjection.titleSlot is non-null, it shows the row, sets the label to beforeMarker, reveals+enables the title input, and pre-fills it with the loaded title", () => {
+  it("renderQuoteHeader (Phase 5D-1C): when quoteProjection.titleSlot is non-null, it shows the row, sets the label to quotePrefix + \"[!\", reveals+enables the type input pre-filled with the loaded type, shows the type close label as \"]\", reveals+enables the title input, and pre-fills it with the loaded title", () => {
     const body = bodyOf(viewTs, "private renderQuoteHeader(): void {", "renderQuoteHeader()");
-    expect(body).toContain("this.quoteHeaderLabelEl.setText(titleSlot.beforeMarker);");
+    expect(body).toContain('this.quoteHeaderLabelEl.setText(titleSlot.quotePrefix + "[!");');
+    expect(body).toContain("this.quoteTypeInputEl.toggleVisibility(true);");
+    expect(body).toContain("this.quoteTypeInputEl.disabled = false;");
+    expect(body).toContain("this.quoteTypeInputEl.value = titleSlot.type;");
+    expect(body).toContain("this.quoteTypeCloseLabelEl.toggleVisibility(true);");
+    expect(body).toContain('this.quoteTypeCloseLabelEl.setText("]");');
     expect(body).toContain("this.quoteTitleInputEl.toggleVisibility(true);");
     expect(body).toContain("this.quoteTitleInputEl.disabled = false;");
     expect(body).toContain("this.quoteTitleInputEl.value = titleSlot.title;");
@@ -169,6 +174,14 @@ describe("view/PartialEditView.ts quote-prefix-projection wiring (static source 
     const body = bodyOf(viewTs, "private renderQuoteHeader(): void {", "renderQuoteHeader()");
     expect(body).toContain("this.quoteTitleInputEl.toggleVisibility(false);");
     expect(body).toContain('this.quoteTitleInputEl.value = "";');
+  });
+
+  it("renderQuoteHeader (Phase 5D-1C): hides and clears the type input and its close label whenever titleSlot is null", () => {
+    const body = bodyOf(viewTs, "private renderQuoteHeader(): void {", "renderQuoteHeader()");
+    expect(body).toContain("this.quoteTypeInputEl.toggleVisibility(false);");
+    expect(body).toContain('this.quoteTypeInputEl.value = "";');
+    expect(body).toContain("this.quoteTypeCloseLabelEl.toggleVisibility(false);");
+    expect(body).toContain('this.quoteTypeCloseLabelEl.setText("");');
   });
 
   it("renderQuoteHeader (Phase 5D-1B): when titleSlot is non-null, it also reveals+enables the fold-marker select and pre-fills it with the loaded marker", () => {
@@ -219,6 +232,91 @@ describe("view/PartialEditView.ts quote-prefix-projection wiring (static source 
     expect(selectIndex).toBeLessThan(titleInputIndex);
   });
 
+  it("onOpen (Phase 5D-1C): creates quoteTypeDatalistEl with the QUOTE_TYPE_DATALIST_ID id and populates it with all 13 standard callout type <option> values", () => {
+    const body = bodyOf(viewTs, "async onOpen(): Promise<void> {", "onOpen()");
+    expect(body).toContain('this.quoteTypeDatalistEl = this.quoteHeaderEl.createEl("datalist"');
+    expect(body).toContain("attr: { id: PartialEditView.QUOTE_TYPE_DATALIST_ID }");
+    expect(body).toContain("for (const type of PartialEditView.QUOTE_TYPE_DATALIST_OPTIONS)");
+    expect(body).toContain('this.quoteTypeDatalistEl.createEl("option", { value: type });');
+  });
+
+  it("onOpen (Phase 5D-1C, updated by the datalist-filtering fix): creates quoteTypeInputEl as a free-text input wired to the datalist via its list attribute, with a tooltip and an 'input' listener wired to BOTH refreshQuoteTypeDatalistOptions AND updateDirtyState", () => {
+    const body = bodyOf(viewTs, "async onOpen(): Promise<void> {", "onOpen()");
+    expect(body).toContain('this.quoteTypeInputEl = this.quoteHeaderEl.createEl("input"');
+    expect(body).toContain("attr: { list: PartialEditView.QUOTE_TYPE_DATALIST_ID }");
+    expect(body).toContain(
+      'setTooltip(this.quoteTypeInputEl, this.plugin.t("partialEdit.quoteTypeLabel"));'
+    );
+    const listenerIndex = body.indexOf('this.quoteTypeInputEl.addEventListener("input", () => {');
+    expect(listenerIndex).toBeGreaterThan(-1);
+    const listenerEnd = body.indexOf("});", listenerIndex);
+    expect(listenerEnd).toBeGreaterThan(-1);
+    const listenerBody = body.slice(listenerIndex, listenerEnd + "});".length);
+    expect(listenerBody).toContain("this.refreshQuoteTypeDatalistOptions();");
+    expect(listenerBody).toContain("this.updateDirtyState();");
+  });
+
+  it("refreshQuoteTypeDatalistOptions (fix applied after real-device verification): filters quoteTypeDatalistEl's <option> children to only the standard types that START WITH the current (lower-cased) input value, rebuilding it from PartialEditView.QUOTE_TYPE_DATALIST_OPTIONS every call — this takes over from the browser's own native <datalist> filtering (which matches ANY substring position, not just the start) but never restricts what can actually be typed/pasted/Applied", () => {
+    const body = bodyOf(
+      viewTs,
+      "private refreshQuoteTypeDatalistOptions(): void {",
+      "refreshQuoteTypeDatalistOptions()"
+    );
+    expect(body).toContain("const query = this.quoteTypeInputEl.value.toLowerCase();");
+    expect(body).toContain("this.quoteTypeDatalistEl.empty();");
+    expect(body).toContain("for (const type of PartialEditView.QUOTE_TYPE_DATALIST_OPTIONS) {");
+    expect(body).toContain("if (type.startsWith(query)) {");
+    expect(body).toContain('this.quoteTypeDatalistEl.createEl("option", { value: type });');
+  });
+
+  it("renderQuoteHeader (fix applied after real-device verification): re-filters the datalist immediately after setting quoteTypeInputEl.value, in BOTH the titleSlot-present and titleSlot-null branches, so the suggestion list never goes stale across a node switch", () => {
+    const body = bodyOf(viewTs, "private renderQuoteHeader(): void {", "renderQuoteHeader()");
+    const presentValueIndex = body.indexOf("this.quoteTypeInputEl.value = titleSlot.type;");
+    expect(presentValueIndex).toBeGreaterThan(-1);
+    const presentRefreshIndex = body.indexOf(
+      "this.refreshQuoteTypeDatalistOptions();",
+      presentValueIndex
+    );
+    expect(presentRefreshIndex).toBeGreaterThan(-1);
+    expect(presentRefreshIndex).toBeLessThan(
+      body.indexOf("this.quoteTypeCloseLabelEl.toggleVisibility(true);")
+    );
+
+    const nullValueIndex = body.indexOf('this.quoteTypeInputEl.value = "";');
+    expect(nullValueIndex).toBeGreaterThan(-1);
+    const nullRefreshIndex = body.indexOf("this.refreshQuoteTypeDatalistOptions();", nullValueIndex);
+    expect(nullRefreshIndex).toBeGreaterThan(-1);
+    expect(nullRefreshIndex).toBeLessThan(
+      body.indexOf("this.quoteTypeCloseLabelEl.toggleVisibility(false);")
+    );
+  });
+
+  it("cancelEdit (fix applied after real-device verification): re-filters the datalist immediately after reverting quoteTypeInputEl.value back to titleSlot.type", () => {
+    const body = bodyOf(viewTs, "private cancelEdit(): void {", "cancelEdit()");
+    const valueIndex = body.indexOf("this.quoteTypeInputEl.value = titleSlot.type;");
+    expect(valueIndex).toBeGreaterThan(-1);
+    const refreshIndex = body.indexOf("this.refreshQuoteTypeDatalistOptions();", valueIndex);
+    expect(refreshIndex).toBeGreaterThan(-1);
+  });
+
+  it("onOpen (Phase 5D-1C): creates quoteTypeCloseLabelEl as a read-only span reusing the quote-header-label CSS class", () => {
+    const body = bodyOf(viewTs, "async onOpen(): Promise<void> {", "onOpen()");
+    expect(body).toContain("this.quoteTypeCloseLabelEl = this.quoteHeaderEl.createSpan(");
+    expect(body).toContain('cls: "unified-outliner-partial-edit-quote-header-label"');
+  });
+
+  it("onOpen (Phase 5D-1C): quoteTypeDatalistEl and quoteTypeInputEl are created BEFORE quoteMarkerSelectEl — the type combobox sits between the read-only \"[!\" label and the fold-marker select", () => {
+    const body = bodyOf(viewTs, "async onOpen(): Promise<void> {", "onOpen()");
+    const datalistIndex = body.indexOf('this.quoteTypeDatalistEl = this.quoteHeaderEl.createEl("datalist"');
+    const typeInputIndex = body.indexOf('this.quoteTypeInputEl = this.quoteHeaderEl.createEl("input"');
+    const selectIndex = body.indexOf('this.quoteMarkerSelectEl = this.quoteHeaderEl.createEl("select"');
+    expect(datalistIndex).toBeGreaterThan(-1);
+    expect(typeInputIndex).toBeGreaterThan(-1);
+    expect(selectIndex).toBeGreaterThan(-1);
+    expect(datalistIndex).toBeLessThan(typeInputIndex);
+    expect(typeInputIndex).toBeLessThan(selectIndex);
+  });
+
   it("cancelEdit (Phase 5D-1A): reverts the title input back to the loaded titleSlot's own title whenever a titleSlot is active", () => {
     const body = bodyOf(viewTs, "private cancelEdit(): void {", "cancelEdit()");
     expect(body).toContain("this.quoteTitleInputEl.value = titleSlot.title;");
@@ -233,6 +331,15 @@ describe("view/PartialEditView.ts quote-prefix-projection wiring (static source 
     expect(ifTitleSlotIndex).toBeGreaterThan(-1);
     expect(ifTitleSlotIndex).toBeLessThan(markerRevertIndex);
     expect(ifTitleSlotIndex).toBeLessThan(titleRevertIndex);
+  });
+
+  it("cancelEdit (Phase 5D-1C): also reverts the type input back to the loaded titleSlot's own type, in the same titleSlot-gated branch as the marker/title revert", () => {
+    const body = bodyOf(viewTs, "private cancelEdit(): void {", "cancelEdit()");
+    expect(body).toContain("this.quoteTypeInputEl.value = titleSlot.type;");
+    const typeRevertIndex = body.indexOf("this.quoteTypeInputEl.value = titleSlot.type;");
+    const ifTitleSlotIndex = body.lastIndexOf("if (titleSlot)", typeRevertIndex);
+    expect(ifTitleSlotIndex).toBeGreaterThan(-1);
+    expect(ifTitleSlotIndex).toBeLessThan(typeRevertIndex);
   });
 
   it("isDirty (Phase 5D-1A): considers the title input dirty too — the pane is dirty if EITHER the textarea OR the title input differs from its own loaded value", () => {
@@ -251,30 +358,51 @@ describe("view/PartialEditView.ts quote-prefix-projection wiring (static source 
     );
   });
 
-  it("applyEdit (Phase 5D-1B): when titleSlot is active, reconstructs the header from BOTH the fold-marker select's and the title input's CURRENT values via a single reconstructQuoteHeader(titleSlot, newMarker, title) call, refuses (returns false) on failure BEFORE ever calling applySubtreeEdit, and otherwise splices the reconstructed header in as newRawText's first line", () => {
+  it("isDirty (Phase 5D-1C): also considers the type input dirty — typeDirty is computed from quoteTypeInputEl vs. titleSlot.type, gated the same way as titleDirty/markerDirty, and included in the same OR chain", () => {
+    const body = bodyOf(viewTs, "private isDirty(): boolean {", "isDirty()");
+    expect(body).toContain(
+      "const typeDirty = titleSlot !== null && this.quoteTypeInputEl.value !== titleSlot.type;"
+    );
+    expect(body).toMatch(
+      /this\.textareaEl\.value !== this\.currentDisplayText\(\)\s*\|\|\s*titleDirty\s*\|\|\s*markerDirty\s*\|\|\s*typeDirty/
+    );
+  });
+
+  it("applyEdit (Phase 5D-1C): when titleSlot is active, reconstructs the header from the type input's, fold-marker select's, and title input's CURRENT values via a single reconstructQuoteHeader(titleSlot, newType, newMarker, title) call, refuses (returns false) on failure BEFORE ever calling applySubtreeEdit, and otherwise splices the reconstructed header in as newRawText's first line", () => {
     const body = bodyOf(viewTs, "private applyEdit(): boolean {", "applyEdit()");
+    const newTypeIndex = body.indexOf("const newType = this.quoteTypeInputEl.value;");
     const newMarkerCastIndex = body.indexOf(
       "const newMarker = this.quoteMarkerSelectEl.value as CalloutFoldMarker;"
     );
-    const reconstructIndex = body.indexOf(
-      "reconstructQuoteHeader(titleSlot, newMarker, this.quoteTitleInputEl.value)"
+    const reconstructCallIndex = body.indexOf("const reconstructed = reconstructQuoteHeader(");
+    expect(newTypeIndex).toBeGreaterThan(-1);
+    expect(newMarkerCastIndex).toBeGreaterThan(-1);
+    expect(reconstructCallIndex).toBeGreaterThan(-1);
+    expect(newTypeIndex).toBeLessThan(newMarkerCastIndex);
+    expect(newMarkerCastIndex).toBeLessThan(reconstructCallIndex);
+    // The call spans multiple lines — confirm it passes titleSlot,
+    // newType, newMarker, and the title input's current value, in that
+    // exact order.
+    const reconstructCallBlock = body.slice(
+      reconstructCallIndex,
+      body.indexOf(");", reconstructCallIndex) + 2
+    );
+    expect(reconstructCallBlock).toMatch(
+      /reconstructQuoteHeader\(\s*titleSlot,\s*newType,\s*newMarker,\s*this\.quoteTitleInputEl\.value\s*\)/
     );
     const noticeIndex = body.indexOf('this.plugin.t("partialEdit.quoteTitleNewlineUnsupported")');
     const applySubtreeEditIndex = body.indexOf(
       "applySubtreeEdit(doc, this.nodeId!, this.originalText, newRawText)"
     );
-    expect(newMarkerCastIndex).toBeGreaterThan(-1);
-    expect(reconstructIndex).toBeGreaterThan(-1);
     expect(noticeIndex).toBeGreaterThan(-1);
     expect(applySubtreeEditIndex).toBeGreaterThan(-1);
-    expect(newMarkerCastIndex).toBeLessThan(reconstructIndex);
-    expect(reconstructIndex).toBeLessThan(noticeIndex);
+    expect(reconstructCallIndex).toBeLessThan(noticeIndex);
     expect(noticeIndex).toBeLessThan(applySubtreeEditIndex);
     expect(body).toContain("const bodyOnlyLines = newRawText.split(\"\\n\").slice(1);");
     expect(body).toContain("newRawText = [reconstructed.header, ...bodyOnlyLines].join(\"\\n\");");
   });
 
-  it("applyEdit (Phase 5D-1B): a reconstructQuoteHeader failure shows the newline Notice only for reason \"newline\" — the unreachable \"invalid-marker\" reason is a silent, safe no-op with NO new user-facing Notice added for it", () => {
+  it("applyEdit (Phase 5D-1C): a reconstructQuoteHeader failure shows a Notice for reason \"newline\" AND for reason \"invalid-type\" — the unreachable \"invalid-marker\" reason remains a silent, safe no-op with no Notice of its own", () => {
     const body = bodyOf(viewTs, "private applyEdit(): boolean {", "applyEdit()");
     const failureStart = body.indexOf("if (!reconstructed.ok) {");
     expect(failureStart).toBeGreaterThan(-1);
@@ -282,13 +410,19 @@ describe("view/PartialEditView.ts quote-prefix-projection wiring (static source 
     expect(returnFalseIndex).toBeGreaterThan(-1);
     const failureBlock = body.slice(failureStart, returnFalseIndex + "return false;".length);
     expect(failureBlock).toContain('if (reconstructed.reason === "newline") {');
-    // Exactly one Notice call in the whole failure-handling block — the
+    expect(failureBlock).toContain('} else if (reconstructed.reason === "invalid-type") {');
+    expect(failureBlock).toContain(
+      'new Notice(this.plugin.t("partialEdit.quoteTypeInvalidUnsupported"));'
+    );
+    // Exactly two Notice calls in the whole failure-handling block — one
+    // for "newline", one for the newly-reachable "invalid-type". The
     // "invalid-marker" reason (structurally unreachable through this
-    // view's own closed-set <select>) falls through to the bare
+    // view's own closed-set <select>) still falls through to the bare
     // `return false;` with no Notice of its own, per the ticket's
-    // explicit "既存のNoticeを増やさない" instruction.
+    // explicit "既存のNoticeを増やさない" instruction (extended, not
+    // broken, by this phase).
     const noticeCallCount = (failureBlock.match(/new Notice\(/g) ?? []).length;
-    expect(noticeCallCount).toBe(1);
+    expect(noticeCallCount).toBe(2);
   });
 
   it("the i18n keys this ticket introduces (quoteNestedUnsupported / quoteLineCountChanged) exist with non-empty en/ja text", () => {
@@ -317,6 +451,25 @@ describe("view/PartialEditView.ts quote-prefix-projection wiring (static source 
       expect(matches.length).toBe(2);
       for (const m of matches) {
         const textMatch = m.match(/"([^"]+)"\s*$/);
+        expect(textMatch?.[1]?.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("the i18n keys Phase 5D-1C introduces (quoteTypeLabel / quoteTypeInvalidUnsupported) exist with non-empty en/ja text", () => {
+    const i18nTs = readFileSync(path.resolve(__dirname, "../src/i18n.ts"), "utf-8");
+    // quoteTypeInvalidUnsupported's own wording (per the ticket) contains
+    // a literal double-quoted "]" inside the message, so — unlike every
+    // other key checked in this file — its dictionary entries are
+    // single-quoted string literals rather than double-quoted ones; this
+    // regex accepts either quote style around the value.
+    for (const key of ["partialEdit.quoteTypeLabel", "partialEdit.quoteTypeInvalidUnsupported"]) {
+      const matches =
+        i18nTs.match(new RegExp(`"${key}":\\s*\\n?\\s*(?:"[^"]+"|'[^']+')`, "g")) ?? [];
+      // Present in both the en and ja dictionaries.
+      expect(matches.length).toBe(2);
+      for (const m of matches) {
+        const textMatch = m.match(/["']([^"']+)["']\s*$/);
         expect(textMatch?.[1]?.length).toBeGreaterThan(0);
       }
     }

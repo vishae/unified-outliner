@@ -339,11 +339,12 @@ const LIST_CHILD_CALLOUT_FIXTURE = [
  * Mirrors the exact sequence PartialEditView.ts's applyEdit runs for a
  * projecting callout: invert the body via invertQuotePrefixProjection,
  * then — only when the projection's own titleSlot is non-null —
- * reconstruct the header via reconstructQuoteHeader (now taking BOTH the
- * fold-marker select's and the title input's current values, Phase
- * 5D-1B) and splice it in as the new first line, before the single
- * applySubtreeEdit call. This is NOT a new production function — the
- * real logic is the few inline lines inside applyEdit, already pinned by
+ * reconstruct the header via reconstructQuoteHeader (now taking the type
+ * combobox's, the fold-marker select's, and the title input's current
+ * values ALL together, Phase 5D-1C) and splice it in as the new first
+ * line, before the single applySubtreeEdit call. This is NOT a new
+ * production function — the real logic is the few inline lines inside
+ * applyEdit, already pinned by
  * tests/quotePrefixPartialEditViewWiring.test.ts's static source checks;
  * this is a local test helper only, matching this file's own established
  * "exercise the identical sequence of pure calls the View makes,
@@ -355,11 +356,12 @@ function applyProjected(
   extractedText: string,
   projection: QuotePrefixProjection,
   editedBodyDisplay: string,
+  newTypeValue: string,
   newMarkerValue: "" | "+" | "-",
   newTitleValue: string
 ):
   | { applied: false; stage: "invert"; reason: "line-count-changed" }
-  | { applied: false; stage: "reconstruct"; reason: "newline" | "invalid-marker" }
+  | { applied: false; stage: "reconstruct"; reason: "newline" | "invalid-marker" | "invalid-type" }
   | { applied: true; outcome: ReturnType<typeof applySubtreeEdit>; newRawText: string } {
   const inverted = invertQuotePrefixProjection(projection, editedBodyDisplay);
   if (!inverted.ok) {
@@ -368,7 +370,7 @@ function applyProjected(
   let newRawText = inverted.rawText;
   const titleSlot = projection.titleSlot;
   if (titleSlot) {
-    const reconstructed = reconstructQuoteHeader(titleSlot, newMarkerValue, newTitleValue);
+    const reconstructed = reconstructQuoteHeader(titleSlot, newTypeValue, newMarkerValue, newTitleValue);
     if (!reconstructed.ok) {
       return { applied: false, stage: "reconstruct", reason: reconstructed.reason };
     }
@@ -398,6 +400,7 @@ describe("quote-prefix projection Apply pipeline: title editing, marker UNCHANGE
       extracted.text,
       built.projection,
       unedited,
+      titleSlot.type,
       titleSlot.marker,
       "Renamed Title"
     );
@@ -439,6 +442,7 @@ describe("quote-prefix projection Apply pipeline: title editing, marker UNCHANGE
       extracted.text,
       built.projection,
       editedBody,
+      titleSlot.type,
       titleSlot.marker,
       "New Title"
     );
@@ -482,6 +486,7 @@ describe("quote-prefix projection Apply pipeline: title editing, marker UNCHANGE
       extracted.text,
       built.projection,
       unedited,
+      titleSlot.type,
       titleSlot.marker,
       titleSlot.title
     );
@@ -505,7 +510,16 @@ describe("quote-prefix projection Apply pipeline: title editing, marker UNCHANGE
     const titleSlot = built.projection.titleSlot!;
 
     const unedited = projectedDisplayText(built.projection);
-    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, titleSlot.marker, "");
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      titleSlot.type,
+      titleSlot.marker,
+      ""
+    );
     expect(result.applied).toBe(true);
     if (!result.applied) return;
     expect(result.outcome.changed).toBe(true);
@@ -531,6 +545,7 @@ describe("quote-prefix projection Apply pipeline: title editing, marker UNCHANGE
       extracted.text,
       built.projection,
       unedited,
+      titleSlot.type,
       titleSlot.marker,
       "New Title"
     );
@@ -561,6 +576,7 @@ describe("quote-prefix projection Apply pipeline: title editing, marker UNCHANGE
       extracted.text,
       built.projection,
       editedBody,
+      titleSlot.type,
       titleSlot.marker,
       "line one\nline two"
     );
@@ -586,7 +602,16 @@ describe("quote-prefix projection Apply pipeline: fold-marker editing (Phase 5D-
     const titleSlot = built.projection.titleSlot!;
 
     const unedited = projectedDisplayText(built.projection);
-    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "+", titleSlot.title);
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      titleSlot.type,
+      "+",
+      titleSlot.title
+    );
     expect(result.applied).toBe(true);
     if (!result.applied) return;
     expect(result.outcome.changed).toBe(true);
@@ -618,7 +643,16 @@ describe("quote-prefix projection Apply pipeline: fold-marker editing (Phase 5D-
     if (!built.ok) return;
 
     const unedited = projectedDisplayText(built.projection);
-    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "-", "Renamed");
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      built.projection.titleSlot!.type,
+      "-",
+      "Renamed"
+    );
     expect(result.applied).toBe(true);
     if (!result.applied) return;
     expect(result.outcome.changed).toBe(true);
@@ -637,7 +671,16 @@ describe("quote-prefix projection Apply pipeline: fold-marker editing (Phase 5D-
     if (!built.ok) return;
 
     const editedBody = ["line one EDITED", "line two"].join("\n");
-    const result = applyProjected(doc, id, extracted.text, built.projection, editedBody, "+", "Renamed");
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      editedBody,
+      built.projection.titleSlot!.type,
+      "+",
+      "Renamed"
+    );
     expect(result.applied).toBe(true);
     if (!result.applied) return;
     expect(result.outcome.changed).toBe(true);
@@ -672,7 +715,16 @@ describe("quote-prefix projection Apply pipeline: fold-marker editing (Phase 5D-
     const titleSlot = built.projection.titleSlot!;
 
     const unedited = projectedDisplayText(built.projection);
-    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "", titleSlot.title);
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      titleSlot.type,
+      "",
+      titleSlot.title
+    );
     expect(result.applied).toBe(true);
     if (!result.applied) return;
     expect(result.outcome.changed).toBe(true);
@@ -693,7 +745,16 @@ describe("quote-prefix projection Apply pipeline: fold-marker editing (Phase 5D-
     if (!built.ok) return;
 
     const unedited = projectedDisplayText(built.projection);
-    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "+", "New Title");
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      built.projection.titleSlot!.type,
+      "+",
+      "New Title"
+    );
     expect(result.applied).toBe(true);
     if (!result.applied) return;
     expect(result.outcome.changed).toBe(true);
@@ -722,6 +783,7 @@ describe("quote-prefix projection Apply pipeline: fold-marker editing (Phase 5D-
       extracted.text,
       built.projection,
       unedited,
+      titleSlot.type,
       titleSlot.marker,
       titleSlot.title
     );
@@ -745,7 +807,16 @@ describe("quote-prefix projection Apply pipeline: fold-marker editing (Phase 5D-
     expect(built.ok).toBe(true);
     if (!built.ok) return;
     let unedited = projectedDisplayText(built.projection);
-    let result = applyProjected(doc, id, extracted.text, built.projection, unedited, "+", "First Title");
+    let result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      built.projection.titleSlot!.type,
+      "+",
+      "First Title"
+    );
     expect(result.applied).toBe(true);
     if (!result.applied || !result.outcome.changed) return;
 
@@ -761,7 +832,16 @@ describe("quote-prefix projection Apply pipeline: fold-marker editing (Phase 5D-
     expect(built.ok).toBe(true);
     if (!built.ok) return;
     unedited = projectedDisplayText(built.projection);
-    result = applyProjected(doc, idAgain, extracted.text, built.projection, unedited, "-", "Second Title");
+    result = applyProjected(
+      doc,
+      idAgain,
+      extracted.text,
+      built.projection,
+      unedited,
+      built.projection.titleSlot!.type,
+      "-",
+      "Second Title"
+    );
     expect(result.applied).toBe(true);
     if (!result.applied) return;
     expect(result.outcome.changed).toBe(true);
@@ -782,7 +862,16 @@ describe("quote-prefix projection Apply pipeline: fold-marker editing (Phase 5D-
     if (!built.ok) return;
 
     const unedited = projectedDisplayText(built.projection);
-    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "+", "Renamed Child");
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      built.projection.titleSlot!.type,
+      "+",
+      "Renamed Child"
+    );
     expect(result.applied).toBe(true);
     if (!result.applied) return;
     expect(result.outcome.changed).toBe(true);
@@ -814,7 +903,16 @@ describe("quote-prefix projection Apply pipeline: fold-marker + title editing (P
     if (!built.ok) return;
 
     const unedited = projectedDisplayText(built.projection);
-    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "-", "Renamed Scan");
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      built.projection.titleSlot!.type,
+      "-",
+      "Renamed Scan"
+    );
     expect(result.applied).toBe(true);
     if (!result.applied) return;
     expect(result.outcome.changed).toBe(true);
@@ -856,6 +954,7 @@ describe("quote-prefix projection Apply pipeline: fold-marker + title editing (P
       extracted.text,
       built.projection,
       unedited,
+      titleSlot.type,
       titleSlot.marker,
       "Renamed Scan"
     );
@@ -896,6 +995,7 @@ describe("quote-prefix projection: existing refusal paths do not regress when a 
       extracted.text,
       built.projection,
       unedited,
+      titleSlot.type,
       titleSlot.marker,
       "Pane's New Title"
     );
@@ -923,7 +1023,16 @@ describe("quote-prefix projection: existing refusal paths do not regress when a 
     const titleSlot = built.projection.titleSlot!;
 
     const unedited = projectedDisplayText(built.projection);
-    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "+", titleSlot.title);
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      titleSlot.type,
+      "+",
+      titleSlot.title
+    );
     expect(result.applied).toBe(true);
     if (!result.applied) return;
 
@@ -948,7 +1057,401 @@ describe("quote-prefix projection: existing refusal paths do not regress when a 
     if (!built.ok) return;
 
     const unedited = projectedDisplayText(built.projection);
-    const result = applyProjected(doc, id, extracted.text, built.projection, unedited, "-", "Pane's New Title");
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      built.projection.titleSlot!.type,
+      "-",
+      "Pane's New Title"
+    );
+    expect(result.applied).toBe(true);
+    if (!result.applied) return;
+
+    const withCalloutDeleted = parseDocument(
+      ["# Notes", "- an unrelated list item", "# Next section", "still here"].join("\n")
+    );
+    const outcome = applySubtreeEdit(withCalloutDeleted, id, extracted.text, result.newRawText);
+    expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("resolve-failed");
+  });
+});
+
+// ---- Phase 5D-1C ("Callout Type Editing") --------------------------------
+//
+// The same Apply pipeline above, now exercising the type combobox's
+// current value alongside marker/title in applyProjected's single
+// reconstructQuoteHeader call. No new conflict/resolve-failed logic — the
+// existing refusal-path tests below reconfirm applySubtreeEdit's own
+// unmodified raw-snapshot comparison already catches an externally-
+// changed type exactly like it already catches title/marker/body/kind.
+
+describe("quote-prefix projection Apply pipeline: type editing, marker/title UNCHANGED (Phase 5D-1C, standalone callout)", () => {
+  it("a type-only edit updates only the header's type, leaving marker, title, body, and every `>` prefix untouched", () => {
+    const doc = parseDocument(FIXTURE);
+    const id = calloutId(doc);
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const titleSlot = built.projection.titleSlot!;
+
+    const unedited = projectedDisplayText(built.projection);
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      "warning",
+      titleSlot.marker,
+      titleSlot.title
+    );
+    expect(result.applied).toBe(true);
+    if (!result.applied) return;
+    expect(result.outcome.changed).toBe(true);
+    if (!result.outcome.changed) return;
+    expect(result.outcome.lines.join("\n")).toBe(
+      [
+        "# Notes",
+        "- an unrelated list item",
+        "> [!warning] My Callout",
+        "> line one",
+        "> line two",
+        "",
+        "> a blockquote line one",
+        "> a blockquote line two",
+        "# Next section",
+        "still here",
+      ].join("\n")
+    );
+  });
+
+  it("changing a custom type to a different custom type round-trips correctly through the full Apply pipeline — the real `[!ai]` case", () => {
+    const doc = parseDocument(["# Notes", "> [!ai] AI Notes", "> body", "# Next"].join("\n"));
+    const id = calloutId(doc);
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const titleSlot = built.projection.titleSlot!;
+    expect(titleSlot.type).toBe("ai");
+
+    const unedited = projectedDisplayText(built.projection);
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      "ocr",
+      titleSlot.marker,
+      titleSlot.title
+    );
+    expect(result.applied).toBe(true);
+    if (!result.applied) return;
+    expect(result.outcome.changed).toBe(true);
+    if (!result.outcome.changed) return;
+    expect(result.outcome.lines.join("\n")).toBe(
+      ["# Notes", "> [!ocr] AI Notes", "> body", "# Next"].join("\n")
+    );
+  });
+
+  it("an unedited custom type + unedited marker + unedited title + unedited body Apply leaves the callout byte-for-byte unchanged — no normalization of any kind", () => {
+    const docText = ["# Notes", "> [!ai] AI Notes", "> body", "# Next"].join("\n");
+    const doc = parseDocument(docText);
+    const id = calloutId(doc);
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const titleSlot = built.projection.titleSlot!;
+
+    const unedited = projectedDisplayText(built.projection);
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      titleSlot.type,
+      titleSlot.marker,
+      titleSlot.title
+    );
+    expect(result.applied).toBe(true);
+    if (!result.applied) return;
+    expect(result.newRawText).toBe(extracted.text);
+    expect(result.outcome.changed).toBe(true);
+    if (!result.outcome.changed) return;
+    expect(result.outcome.lines).toEqual(docText.split("\n"));
+  });
+
+  it("a type + marker + title simultaneous edit applies all three in a single Apply", () => {
+    const doc = parseDocument(FIXTURE);
+    const id = calloutId(doc);
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+
+    const editedBody = ["line one EDITED", "line two"].join("\n");
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      editedBody,
+      "danger",
+      "+",
+      "Renamed"
+    );
+    expect(result.applied).toBe(true);
+    if (!result.applied) return;
+    expect(result.outcome.changed).toBe(true);
+    if (!result.outcome.changed) return;
+    expect(result.outcome.lines.join("\n")).toBe(
+      [
+        "# Notes",
+        "- an unrelated list item",
+        "> [!danger]+ Renamed",
+        "> line one EDITED",
+        "> line two",
+        "",
+        "> a blockquote line one",
+        "> a blockquote line two",
+        "# Next section",
+        "still here",
+      ].join("\n")
+    );
+  });
+
+  it("an invalid (empty) type is refused before applySubtreeEdit is ever called — zero-byte-change, and a simultaneously-pending body/marker/title edit is discarded too", () => {
+    const doc = parseDocument(FIXTURE);
+    const id = calloutId(doc);
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+
+    const editedBody = ["line one EDITED", "line two"].join("\n");
+    const result = applyProjected(doc, id, extracted.text, built.projection, editedBody, "", "+", "Renamed");
+    expect(result).toEqual({ applied: false, stage: "reconstruct", reason: "invalid-type" });
+  });
+
+  it("a type containing `]` is refused with reason 'invalid-type', zero-byte-change", () => {
+    const doc = parseDocument(FIXTURE);
+    const id = calloutId(doc);
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const titleSlot = built.projection.titleSlot!;
+
+    const unedited = projectedDisplayText(built.projection);
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      "bad]type",
+      titleSlot.marker,
+      titleSlot.title
+    );
+    expect(result).toEqual({ applied: false, stage: "reconstruct", reason: "invalid-type" });
+  });
+
+  it("a type containing a line break is refused with reason 'invalid-type', zero-byte-change", () => {
+    const doc = parseDocument(FIXTURE);
+    const id = calloutId(doc);
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const titleSlot = built.projection.titleSlot!;
+
+    const unedited = projectedDisplayText(built.projection);
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      "line\none",
+      titleSlot.marker,
+      titleSlot.title
+    );
+    expect(result).toEqual({ applied: false, stage: "reconstruct", reason: "invalid-type" });
+  });
+});
+
+describe("quote-prefix projection Apply pipeline: type editing (Phase 5D-1C, list-item-child callout, standalone but not composite-member)", () => {
+  it("a type+marker+title edit on a list-item-owned, indented (but not composite-member) callout produces the same result shape as a top-level callout", () => {
+    const doc = parseDocument(LIST_CHILD_CALLOUT_FIXTURE);
+    const id = calloutId(doc);
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+
+    const unedited = projectedDisplayText(built.projection);
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      "tip",
+      "+",
+      "Renamed Child"
+    );
+    expect(result.applied).toBe(true);
+    if (!result.applied) return;
+    expect(result.outcome.changed).toBe(true);
+    if (!result.outcome.changed) return;
+    expect(result.outcome.lines.join("\n")).toBe(
+      ["# Notes", "- list item", "  > [!tip]+ Renamed Child", "  > body line", "# Next"].join("\n")
+    );
+  });
+});
+
+describe("quote-prefix projection Apply pipeline: type editing (Phase 5D-1C, composite-member callout)", () => {
+  it("a composite-member callout's type edit produces the exact same shaped result as a standalone callout — no separate writer, no different behavior, composite-member-ness unaffected by the type string itself", () => {
+    const doc = parseDocument(OCR_COMPOSITE_FIXTURE);
+    const complexScan = scanComplexBlocks(doc);
+    const info = complexScan.blocks.find((b) => b.kind === "callout");
+    expect(info).toBeDefined();
+    const composites = matchCompositeBlocks(doc, complexScan, DEFAULT_COMPOSITE_BLOCK_RULES);
+    expect(composites.some((c) => c.members.some((m) => m.id === info!.id))).toBe(true);
+
+    const id = info!.id;
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const titleSlot = built.projection.titleSlot!;
+    expect(titleSlot.type).toBe("ocr");
+
+    const unedited = projectedDisplayText(built.projection);
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      "note",
+      titleSlot.marker,
+      titleSlot.title
+    );
+    expect(result.applied).toBe(true);
+    if (!result.applied) return;
+    expect(result.outcome.changed).toBe(true);
+    if (!result.outcome.changed) return;
+    expect(result.outcome.lines.join("\n")).toBe(
+      [
+        "# Notes",
+        "- ![[scan.png]]",
+        "> [!note] Scan Result",
+        "> extracted line one",
+        "> extracted line two",
+        "# Next section",
+        "still here",
+      ].join("\n")
+    );
+
+    // The changed type does not disturb composite-member recognition —
+    // re-scanning the just-applied document still matches the same
+    // "image + OCR-style callout" composite (matchCompositeBlocks matches
+    // by ComplexBlockKind "callout" only, never by the [!type] string —
+    // see model/compositeBlock.ts's DEFAULT_COMPOSITE_BLOCK_RULES).
+    const reparsed = parseDocument(result.outcome.lines.join("\n"));
+    const reScan = scanComplexBlocks(reparsed);
+    const reComposites = matchCompositeBlocks(reparsed, reScan, DEFAULT_COMPOSITE_BLOCK_RULES);
+    const newCalloutInfo = reScan.blocks.find((b) => b.kind === "callout");
+    expect(newCalloutInfo).toBeDefined();
+    expect(reComposites.some((c) => c.members.some((m) => m.id === newCalloutInfo!.id))).toBe(true);
+  });
+});
+
+describe("quote-prefix projection: existing refusal paths do not regress when a type edit is pending (Phase 5D-1C)", () => {
+  it("applySubtreeEdit still refuses with 'conflict' when the header's type changed elsewhere between load and Apply, even though the pane's own pending edit was ALSO a type edit — no new conflict-detection logic needed", () => {
+    const doc = parseDocument(FIXTURE);
+    const id = calloutId(doc);
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const titleSlot = built.projection.titleSlot!;
+
+    const unedited = projectedDisplayText(built.projection);
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      "warning",
+      titleSlot.marker,
+      titleSlot.title
+    );
+    expect(result.applied).toBe(true);
+    if (!result.applied) return;
+
+    // Someone else externally changed the SAME header's type to a
+    // DIFFERENT value, from the SAME originally-loaded state, before this
+    // pane's own "warning" Apply reaches applySubtreeEdit.
+    const changedElsewhere = parseDocument(
+      FIXTURE.replace("> [!note] My Callout", "> [!danger] My Callout")
+    );
+    const outcome = applySubtreeEdit(changedElsewhere, id, extracted.text, result.newRawText);
+    expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("conflict");
+    expect(outcome.lines).toBe(changedElsewhere.lines);
+  });
+
+  it("applySubtreeEdit still refuses with 'resolve-failed' when the target callout was deleted before Apply, even with a pending type+marker+title edit", () => {
+    const doc = parseDocument(FIXTURE);
+    const id = calloutId(doc);
+    const extracted = extractSubtreeText(doc, id);
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    const built = buildQuotePrefixProjection(extracted.text, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+
+    const unedited = projectedDisplayText(built.projection);
+    const result = applyProjected(
+      doc,
+      id,
+      extracted.text,
+      built.projection,
+      unedited,
+      "danger",
+      "-",
+      "Pane's New Title"
+    );
     expect(result.applied).toBe(true);
     if (!result.applied) return;
 

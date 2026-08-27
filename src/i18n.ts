@@ -361,6 +361,15 @@ const en = {
   "partialEdit.quoteFoldMarkerNone": "Not foldable",
   "partialEdit.quoteFoldMarkerExpand": "Foldable, expanded by default",
   "partialEdit.quoteFoldMarkerCollapse": "Foldable, collapsed by default",
+  // Phase 5D-1C: tooltip/aria-label for the type combobox (see
+  // view/PartialEditView.ts's onOpen), and the Notice shown when
+  // reconstructQuoteHeader refuses with reason "invalid-type" (empty, or
+  // containing "]", or containing a line break — all three explained in
+  // one message per the ticket's own instruction). User-approved exact
+  // wording.
+  "partialEdit.quoteTypeLabel": "Callout type",
+  "partialEdit.quoteTypeInvalidUnsupported":
+    'Unified Outliner: the callout type must not be empty or contain "]" or a line break.',
   "partialEdit.unsavedChangesTitle": "Unified Outliner: unsaved changes",
   "partialEdit.unsavedChangesBody":
     "This node has unapplied edits. Apply them before switching, discard them, or stay here.",
@@ -898,6 +907,10 @@ const ja: Record<TranslationKey, string> = {
   "partialEdit.quoteFoldMarkerNone": "固定（折りたたみなし）",
   "partialEdit.quoteFoldMarkerExpand": "展開可能（初期状態: 展開）",
   "partialEdit.quoteFoldMarkerCollapse": "展開可能（初期状態: 折りたたみ）",
+  // Phase 5D-1C: ユーザー承認済みの厳密な文言をそのまま使用する。
+  "partialEdit.quoteTypeLabel": "コールアウトの種類",
+  "partialEdit.quoteTypeInvalidUnsupported":
+    'Unified Outliner: コールアウトの種類は空にできず、"]" または改行を含められません。',
   "partialEdit.previousSibling": "前へ",
   "partialEdit.nextSibling": "次へ",
   "partialEdit.noPreviousSibling": "前の兄弟がない",
