@@ -344,6 +344,16 @@ const en = {
   // touched when this fires.
   "partialEdit.quoteLineCountChanged":
     "Unified Outliner: adding or removing lines is not supported here — edit existing line content only.",
+  // Phase 5D-1A: placeholder/tooltip label for the callout title input
+  // (see view/PartialEditView.ts's onOpen/renderQuoteHeader).
+  "partialEdit.quoteTitleLabel": "Callout title",
+  // Phase 5D-1A: applyEdit's reconstructQuoteHeader refusal — the title
+  // input contains a newline. Rejects the WHOLE Apply (title and any body
+  // edit together), zero-byte-change. Deliberately a distinct key from
+  // quoteLineCountChanged (that one is about the BODY's own line count;
+  // this one is about the title, a single-line field by definition).
+  "partialEdit.quoteTitleNewlineUnsupported":
+    "Unified Outliner: the callout title cannot contain a line break.",
   "partialEdit.unsavedChangesTitle": "Unified Outliner: unsaved changes",
   "partialEdit.unsavedChangesBody":
     "This node has unapplied edits. Apply them before switching, discard them, or stay here.",
@@ -873,6 +883,9 @@ const ja: Record<TranslationKey, string> = {
     "Unified Outliner: ネストした引用は現在の引用本文編集に未対応である。",
   "partialEdit.quoteLineCountChanged":
     "Unified Outliner: ここでは行の追加・削除に対応していない。既存の行の内容のみを編集してほしい。",
+  "partialEdit.quoteTitleLabel": "コールアウトのタイトル",
+  "partialEdit.quoteTitleNewlineUnsupported":
+    "Unified Outliner: コールアウトのタイトルには改行を含められない。",
   "partialEdit.previousSibling": "前へ",
   "partialEdit.nextSibling": "次へ",
   "partialEdit.noPreviousSibling": "前の兄弟がない",

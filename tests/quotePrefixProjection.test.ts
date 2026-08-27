@@ -9,9 +9,11 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  buildQuoteHeaderTitleSlot,
   buildQuotePrefixProjection,
   invertQuotePrefixProjection,
   projectedDisplayText,
+  reconstructQuoteHeader,
 } from "../src/edit/quotePrefixProjection";
 
 describe("buildQuotePrefixProjection + projectedDisplayText: blockquote", () => {
@@ -183,5 +185,167 @@ describe("invertQuotePrefixProjection: line-count-changed refusal", () => {
     const edited = ["a single", "body line"].join("\n");
     const inverted = invertQuotePrefixProjection(built.projection, edited);
     expect(inverted).toEqual({ ok: false, reason: "line-count-changed" });
+  });
+});
+
+// ---- Phase 5D-1A ("Callout Header Title Editing") -----------------------
+//
+// Pure-function tests for buildQuoteHeaderTitleSlot / reconstructQuoteHeader
+// (both new this ticket), plus the new `titleSlot` field on
+// QuotePrefixProjection itself. Same "raw text in, raw text out, never
+// normalized/trimmed" contract as the body-line split above — see both
+// functions' own doc comments in edit/quotePrefixProjection.ts for the
+// exact invariant and the ticket's 3 fixed whitespace rules.
+
+describe("buildQuoteHeaderTitleSlot: lossless header split (Phase 5D-1A)", () => {
+  it("splits a header WITH a title into beforeTitle (prefix + [!type] + fold marker + separator) and title, round-tripping byte-for-byte", () => {
+    const header = "> [!note] My Title";
+    const slot = buildQuoteHeaderTitleSlot(header);
+    expect(slot).not.toBeNull();
+    if (!slot) return;
+    expect(slot.beforeTitle).toBe("> [!note] ");
+    expect(slot.title).toBe("My Title");
+    expect(slot.beforeTitle + slot.title).toBe(header);
+  });
+
+  it("splits a header with NO title into beforeTitle === the whole line and title === ''", () => {
+    const header = "> [!warning]";
+    const slot = buildQuoteHeaderTitleSlot(header);
+    expect(slot).not.toBeNull();
+    if (!slot) return;
+    expect(slot.beforeTitle).toBe(header);
+    expect(slot.title).toBe("");
+    expect(slot.beforeTitle + slot.title).toBe(header);
+  });
+
+  it("keeps the fold marker (+/-) inside beforeTitle, never inside title", () => {
+    for (const fold of ["+", "-"]) {
+      const header = `> [!tip]${fold} Folded Title`;
+      const slot = buildQuoteHeaderTitleSlot(header);
+      expect(slot).not.toBeNull();
+      if (!slot) continue;
+      expect(slot.beforeTitle).toBe(`> [!tip]${fold} `);
+      expect(slot.title).toBe("Folded Title");
+      expect(slot.beforeTitle + slot.title).toBe(header);
+    }
+  });
+
+  it("preserves list-item-owned indentation before the `>` marker inside beforeTitle", () => {
+    const header = "  > [!ocr] Scan";
+    const slot = buildQuoteHeaderTitleSlot(header);
+    expect(slot).not.toBeNull();
+    if (!slot) return;
+    expect(slot.beforeTitle).toBe("  > [!ocr] ");
+    expect(slot.title).toBe("Scan");
+    expect(slot.beforeTitle + slot.title).toBe(header);
+  });
+
+  it("round-trips byte-for-byte across title-present / title-absent / fold-marker / indented header shapes", () => {
+    const headers = [
+      "> [!note] Title",
+      "> [!warning]",
+      "> [!tip]+ Folded",
+      "> [!tip]- Folded",
+      "  > [!ocr] Indented Title",
+      "    > [!ocr]",
+    ];
+    for (const header of headers) {
+      const slot = buildQuoteHeaderTitleSlot(header);
+      expect(slot).not.toBeNull();
+      if (!slot) continue;
+      expect(slot.beforeTitle + slot.title).toBe(header);
+    }
+  });
+});
+
+describe("reconstructQuoteHeader: title-slot round-trip and the 3 fixed whitespace rules (Phase 5D-1A)", () => {
+  it("rule 3 (unedited): the same non-empty title reconstructs the header byte-identical to the original", () => {
+    const slot = buildQuoteHeaderTitleSlot("> [!note] My Title")!;
+    const result = reconstructQuoteHeader(slot, "My Title");
+    expect(result).toEqual({ ok: true, header: "> [!note] My Title" });
+  });
+
+  it("rule 1: a non-empty title emptied reuses beforeTitle completely unmodified, including its trailing separator space", () => {
+    const slot = buildQuoteHeaderTitleSlot("> [!note] My Title")!;
+    const result = reconstructQuoteHeader(slot, "");
+    expect(result).toEqual({ ok: true, header: "> [!note] " });
+  });
+
+  it("rule 1: an already-empty title left empty (unedited) also reconstructs byte-identical to the original", () => {
+    const slot = buildQuoteHeaderTitleSlot("> [!warning]")!;
+    const result = reconstructQuoteHeader(slot, "");
+    expect(result).toEqual({ ok: true, header: "> [!warning]" });
+  });
+
+  it("rule 2: an empty title made non-empty, with NO existing separator in beforeTitle, inserts exactly one space", () => {
+    const slot = buildQuoteHeaderTitleSlot("> [!warning]")!;
+    const result = reconstructQuoteHeader(slot, "New Title");
+    expect(result).toEqual({ ok: true, header: "> [!warning] New Title" });
+  });
+
+  it("rule 2: an empty title made non-empty, with an EXISTING trailing separator already in beforeTitle, does not duplicate the space", () => {
+    // A stray trailing space after the marker even with no title present
+    // (e.g. left behind by an external editor) — the split regex still
+    // captures it as part of beforeTitle, since title itself is "".
+    const slot = buildQuoteHeaderTitleSlot("> [!warning] ")!;
+    expect(slot.title).toBe("");
+    expect(slot.beforeTitle).toBe("> [!warning] ");
+    const result = reconstructQuoteHeader(slot, "New Title");
+    expect(result).toEqual({ ok: true, header: "> [!warning] New Title" });
+  });
+
+  it("rule 3: a non-empty title changed to a different non-empty title preserves beforeTitle byte-for-byte, including its original (non-single-space) separator convention", () => {
+    const slot = buildQuoteHeaderTitleSlot("> [!tip]+  Old Title")!; // two spaces before the title
+    expect(slot.beforeTitle).toBe("> [!tip]+  ");
+    const result = reconstructQuoteHeader(slot, "New Title");
+    expect(result).toEqual({ ok: true, header: "> [!tip]+  New Title" });
+  });
+
+  it("passes through wiki links, URLs, emoji, Japanese, inline Markdown, and an embedded `>` in the title completely untouched", () => {
+    const titles = [
+      "[[Some Note]] reference",
+      "see https://example.com/path?q=1",
+      "important 🔥 emoji",
+      "日本語のタイトル",
+      "**bold** and *italic* and `code`",
+      "> looks like another quote marker",
+    ];
+    for (const title of titles) {
+      const slot = buildQuoteHeaderTitleSlot("> [!note] placeholder")!;
+      const result = reconstructQuoteHeader(slot, title);
+      expect(result).toEqual({ ok: true, header: `> [!note] ${title}` });
+    }
+  });
+
+  it("rejects a title containing a newline with reason 'newline'", () => {
+    const slot = buildQuoteHeaderTitleSlot("> [!note] Title")!;
+    const result = reconstructQuoteHeader(slot, "line one\nline two");
+    expect(result).toEqual({ ok: false, reason: "newline" });
+  });
+});
+
+describe("buildQuotePrefixProjection: titleSlot field (Phase 5D-1A)", () => {
+  it("a callout WITH a title gets a non-null titleSlot matching buildQuoteHeaderTitleSlot's own split of the same header", () => {
+    const raw = ["> [!note] My Title", "> body"].join("\n");
+    const built = buildQuotePrefixProjection(raw, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    expect(built.projection.titleSlot).toEqual({ beforeTitle: "> [!note] ", title: "My Title" });
+  });
+
+  it("a callout with NO title still gets a non-null titleSlot, with title === ''", () => {
+    const raw = ["> [!warning]", "> body"].join("\n");
+    const built = buildQuotePrefixProjection(raw, "callout");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    expect(built.projection.titleSlot).toEqual({ beforeTitle: "> [!warning]", title: "" });
+  });
+
+  it("a blockquote always has titleSlot === null — no header line, no title concept", () => {
+    const raw = ["> line one", "> line two"].join("\n");
+    const built = buildQuotePrefixProjection(raw, "blockquote");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    expect(built.projection.titleSlot).toBeNull();
   });
 });

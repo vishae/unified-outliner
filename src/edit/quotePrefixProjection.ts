@@ -90,15 +90,42 @@ export interface QuotePrefixLineMapping {
 }
 
 /**
+ * Phase 5D-1A ("Callout Header Title Editing"): the callout header line
+ * split into a READ-ONLY portion (`beforeTitle` — quote prefix, `[!type]`,
+ * fold marker, and whatever separator whitespace originally followed it)
+ * and the EDITABLE `title` itself. Exactly the same lossless-split
+ * discipline as QuotePrefixLineMapping above: `beforeTitle + title` always
+ * reconstructs the original header line byte-for-byte — see
+ * buildQuoteHeaderTitleSlot's own doc comment. Only ever built for kind
+ * "callout"; a blockquote has no header/title concept at all.
+ */
+export interface QuoteHeaderTitleSlot {
+  beforeTitle: string;
+  title: string;
+}
+
+/**
  * `header` is the callout's own header line (`> [!type]+ title`),
  * verbatim, shown read-only OUTSIDE the textarea by the caller — never
  * null for kind "callout", always null for kind "blockquote" (a
  * blockquote has no header concept; every one of its lines is body
  * content). `lines` never includes the header line for a callout.
+ *
+ * Phase 5D-1A: `titleSlot` is the header's title split out for editing —
+ * always null for kind "blockquote", and for kind "callout" null only in
+ * the defensive case where the header line unexpectedly doesn't match
+ * HEADER_TITLE_SPLIT_RE (should not happen for a header that already
+ * matched parser/complexBlocks.ts's own CALLOUT_START_RE at scan time;
+ * see buildQuoteHeaderTitleSlot's doc comment). `header` and `titleSlot`
+ * are two independent views of the SAME header line — `header` for
+ * read-only display when title editing isn't offered, `titleSlot` for
+ * the editable case — never out of sync with each other, since both are
+ * derived from the identical `rawLines[0]` in buildQuotePrefixProjection.
  */
 export interface QuotePrefixProjection {
   kind: QuotePrefixProjectionKind;
   header: string | null;
+  titleSlot: QuoteHeaderTitleSlot | null;
   lines: QuotePrefixLineMapping[];
 }
 
@@ -126,6 +153,37 @@ const LINE_PREFIX_RE = /^([ \t]*>[ \t]?)(.*)$/;
 const NESTED_QUOTE_CONTENT_RE = /^[ \t]*>/;
 
 /**
+ * Phase 5D-1A: splits a callout HEADER line into (beforeTitle, title),
+ * covering the whole line — mirrors LINE_PREFIX_RE's split discipline
+ * exactly, just anchored to the header's own shape (quote prefix,
+ * `[!type]`, optional fold marker, then whatever run of spaces/tabs
+ * follows) instead of a body line's bare `>` prefix. Structurally the
+ * same anchor as parser/complexBlocks.ts's CALLOUT_START_RE, but with the
+ * ENTIRE "everything before the title" span captured as ONE group
+ * (rather than separate type/fold groups) — this module only ever needs
+ * to treat that whole span as an opaque, read-only, reused-verbatim unit,
+ * never to inspect type or fold marker individually (both stay
+ * unconditionally read-only per this ticket's approved scope).
+ */
+const HEADER_TITLE_SPLIT_RE = /^([ \t]*>[ \t]?\[![^\]]+\][+-]?[ \t]*)(.*)$/;
+
+/**
+ * Build a QuoteHeaderTitleSlot from a raw callout header line. Returns
+ * null only defensively — a header line that already matched
+ * CALLOUT_START_RE at scan time (the only way a block is ever classified
+ * "callout" in the first place) is structurally guaranteed to also match
+ * HEADER_TITLE_SPLIT_RE above, since the latter is anchored identically.
+ * A caller seeing null here should treat it exactly like a callout with
+ * no title slot at all — fall back to read-only header display, offer no
+ * title input — never throw or guess.
+ */
+export function buildQuoteHeaderTitleSlot(headerLine: string): QuoteHeaderTitleSlot | null {
+  const m = headerLine.match(HEADER_TITLE_SPLIT_RE);
+  if (!m) return null;
+  return { beforeTitle: m[1], title: m[2] };
+}
+
+/**
  * Build a QuotePrefixProjection from `rawText` — the EXACT string
  * extractSubtreeText returned for a "supported" callout/blockquote (the
  * whole block's range, `\n`-joined, header line included for a callout).
@@ -138,9 +196,11 @@ export function buildQuotePrefixProjection(
 ): QuotePrefixProjectionBuildResult {
   const rawLines = rawText.split("\n");
   let header: string | null = null;
+  let titleSlot: QuoteHeaderTitleSlot | null = null;
   let bodyLines = rawLines;
   if (kind === "callout") {
     header = rawLines[0] ?? "";
+    titleSlot = buildQuoteHeaderTitleSlot(header);
     bodyLines = rawLines.slice(1);
   }
   if (bodyLines.length === 0) {
@@ -171,7 +231,7 @@ export function buildQuotePrefixProjection(
     }
     lines.push({ prefix, content });
   }
-  return { ok: true, projection: { kind, header, lines } };
+  return { ok: true, projection: { kind, header, titleSlot, lines } };
 }
 
 /** The textarea's display value for a built projection — each body line's `content`, joined with "\n". Never includes the header (callers render that separately, read-only). */
@@ -208,4 +268,65 @@ export function invertQuotePrefixProjection(
   const rawLines =
     projection.kind === "callout" ? [projection.header ?? "", ...rawBodyLines] : rawBodyLines;
   return { ok: true, rawText: rawLines.join("\n") };
+}
+
+export type QuoteHeaderTitleReconstructReason = "newline";
+
+export type QuoteHeaderTitleReconstructResult =
+  | { ok: true; header: string }
+  | { ok: false; reason: QuoteHeaderTitleReconstructReason };
+
+/**
+ * Phase 5D-1A: reconstruct a full callout header line from `slot` (the
+ * ORIGINAL, load-time split — never mutated) and `newTitle` (the title
+ * input's CURRENT value, edited or not). `slot.beforeTitle` — quote
+ * prefix, `[!type]`, fold marker, original separator whitespace — is
+ * NEVER altered by this function; only the title portion changes.
+ *
+ * Refuses with reason "newline" whenever `newTitle` contains one — a
+ * callout header is exactly one raw Markdown line, so a title spanning
+ * multiple lines has no well-formed reconstruction. Callers must treat
+ * this exactly like invertQuotePrefixProjection's own
+ * "line-count-changed": reject the WHOLE Apply (title edit AND any body
+ * edit together), zero-byte-change, never a partial write.
+ *
+ * The three formatting rules below are this ticket's own approved,
+ * fixed specification — not a heuristic this function invents:
+ *
+ *   1. newTitle === "" (title emptied, or was already empty and stays
+ *      empty/unedited): `slot.beforeTitle` is reused completely
+ *      unmodified, including any trailing separator whitespace it may
+ *      already contain. Nothing is trimmed.
+ *   2. `slot.title === ""` (the ORIGINAL title was empty) and newTitle
+ *      is non-empty: if `slot.beforeTitle` already ends in a space or
+ *      tab, `beforeTitle + newTitle`; otherwise exactly one space is
+ *      inserted (`beforeTitle + " " + newTitle`) — the minimum
+ *      readability correction needed for a brand-new title to not glue
+ *      onto `]`/the fold marker. This is a pure insertion; it never
+ *      touches `beforeTitle` itself.
+ *   3. `slot.title !== ""` and newTitle is non-empty (non-empty to a
+ *      different non-empty value): `beforeTitle + newTitle`, no space
+ *      logic — `beforeTitle` already carries whatever separator
+ *      convention the ORIGINAL non-empty title used, and rule 3
+ *      deliberately preserves that as-is rather than reformatting it.
+ *
+ * An unedited title (newTitle === slot.title, non-empty) also falls
+ * under rule 3 and reconstructs the header byte-identical to the
+ * original — the same "unedited Apply changes nothing" guarantee
+ * QuotePrefixProjection's body-line split already provides.
+ */
+export function reconstructQuoteHeader(
+  slot: QuoteHeaderTitleSlot,
+  newTitle: string
+): QuoteHeaderTitleReconstructResult {
+  if (newTitle.includes("\n")) {
+    return { ok: false, reason: "newline" };
+  }
+  if (newTitle === "") {
+    return { ok: true, header: slot.beforeTitle };
+  }
+  if (slot.title === "" && !/[ \t]$/.test(slot.beforeTitle)) {
+    return { ok: true, header: slot.beforeTitle + " " + newTitle };
+  }
+  return { ok: true, header: slot.beforeTitle + newTitle };
 }

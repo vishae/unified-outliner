@@ -605,19 +605,60 @@ settings:
  * a projecting callout (PartialEditView.ts's renderQuoteHeader). Hidden
  * (display: none, via toggleVisibility) whenever there is no header to
  * show — every non-callout kind, a projecting blockquote (no header
- * concept), and a callout that fell back to raw editing. */
+ * concept), and a callout that fell back to raw editing.
+ *
+ * Phase 5D-1A: now a flex row hosting two children — the read-only
+ * quote-prefix/[!type]/fold-marker label (quoteHeaderLabelEl) and, when
+ * the callout's title was successfully split out, an editable title
+ * input (quoteTitleInputEl) that flexes to fill the remaining width. */
 .unified-outliner-partial-edit-quote-header {
+  display: flex;
+  align-items: center;
   flex-shrink: 0;
   margin-bottom: 8px;
   padding: 6px 8px;
   border-radius: 4px;
   background-color: rgba(128, 128, 128, 0.08);
-  color: var(--uo-text-color);
-  opacity: 0.75;
   font-size: calc(var(--uo-font-size, 14px) - 1px);
   font-family: var(--font-monospace, monospace);
-  white-space: pre-wrap;
-  word-break: break-word;
+}
+
+/* Phase 5D-1A: the read-only portion of the header row (quote prefix,
+ * `[!type]`, fold marker, original separator whitespace) — never
+ * editable, styled to read as inert/label-like next to the title input
+ * beside it. `pre` preserves the original separator whitespace exactly
+ * as reconstructQuoteHeader relies on (no collapsing/trimming display). */
+.unified-outliner-partial-edit-quote-header-label {
+  flex-shrink: 0;
+  color: var(--uo-text-color);
+  opacity: 0.75;
+  white-space: pre;
+}
+
+/* Phase 5D-1A: the callout title's own editable input — this plugin's
+ * first <input> element (see quoteTitleInputEl's doc comment in
+ * PartialEditView.ts). Matches the textarea's own color/font variables
+ * so the title reads as part of the same edited document rather than as
+ * unrelated UI chrome, but stripped of a full input's default chrome
+ * (border/background) so it sits flush inside the shared header row. */
+.unified-outliner-partial-edit-quote-title-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--uo-text-color);
+  font-size: inherit;
+  font-family: inherit;
+  padding: 0 0 0 4px;
+}
+
+.unified-outliner-partial-edit-quote-title-input:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.unified-outliner-partial-edit-quote-title-input:disabled {
+  opacity: 0.6;
 }
 
 .unified-outliner-partial-edit-textarea {

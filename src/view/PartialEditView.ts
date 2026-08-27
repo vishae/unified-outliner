@@ -151,6 +151,7 @@ import {
   invertQuotePrefixProjection,
   projectedDisplayText,
   QuotePrefixProjection,
+  reconstructQuoteHeader,
 } from "../edit/quotePrefixProjection";
 
 export const PARTIAL_EDIT_VIEW_TYPE = "unified-outliner-partial-edit";
@@ -236,8 +237,35 @@ export class PartialEditView extends ItemView {
   private siblingNextEl!: HTMLButtonElement;
   private siblingNextTargetEl!: HTMLElement;
   private subtreeNavEl!: HTMLElement;
-  /** Phase 5D-0.5: read-only display of a projecting callout's own header line (`> [!type]+ title`), shown ABOVE the textarea — see renderQuoteHeader's doc comment. Stays hidden for every other case (blockquote has no header; a raw-loaded node has nothing to separate out). */
+  /**
+   * Phase 5D-0.5: container row shown ABOVE the textarea for a projecting
+   * callout/blockquote — see renderQuoteHeader's doc comment. Stays
+   * hidden for every other case (blockquote has no header; a raw-loaded
+   * node has nothing to separate out).
+   *
+   * Phase 5D-1A: this container now holds TWO children —
+   * `quoteHeaderLabelEl` (read-only: quote prefix, `[!type]`, fold
+   * marker, original separator whitespace) and `quoteTitleInputEl` (the
+   * editable title). Never call `.setText()` on `quoteHeaderEl` itself
+   * any more — that would wipe out `quoteTitleInputEl` as a side effect,
+   * since `setText` replaces the element's entire text content including
+   * child elements. Always target `quoteHeaderLabelEl` for the read-only
+   * text instead.
+   */
   private quoteHeaderEl!: HTMLElement;
+  /** Phase 5D-1A: the read-only label child of quoteHeaderEl — see that field's own doc comment for why this exists as a separate child rather than text directly on quoteHeaderEl. */
+  private quoteHeaderLabelEl!: HTMLElement;
+  /**
+   * Phase 5D-1A: single-line, editable title input — the first
+   * `<input type="text">` this view (or this plugin's view layer at all)
+   * has ever needed; every other editable surface here is the one big
+   * `<textarea>` below. Shown only when the loaded callout's title was
+   * successfully split out (`this.quoteProjection?.titleSlot != null`) —
+   * hidden and cleared for blockquote, non-projecting nodes, and a
+   * header-only callout's raw fallback (title editing is explicitly out
+   * of scope there — see renderQuoteHeader's doc comment).
+   */
+  private quoteTitleInputEl!: HTMLInputElement;
   private textareaEl!: HTMLTextAreaElement;
   private applyButtonEl!: HTMLButtonElement;
   private cancelButtonEl!: HTMLButtonElement;
@@ -409,9 +437,27 @@ export class PartialEditView extends ItemView {
     // method), visibility/content toggled per-load by renderQuoteHeader —
     // same "create once in onOpen, mutate on each render" policy as
     // breadcrumbEl/siblingNavEl/subtreeNavEl above.
+    //
+    // Phase 5D-1A: now a two-child row — quoteHeaderLabelEl (read-only)
+    // and quoteTitleInputEl (editable) — see both fields' own doc
+    // comments for why `.setText()` must never be called on
+    // quoteHeaderEl itself any more.
     this.quoteHeaderEl = this.contentEl.createDiv({
       cls: "unified-outliner-partial-edit-quote-header",
     });
+    this.quoteHeaderLabelEl = this.quoteHeaderEl.createSpan({
+      cls: "unified-outliner-partial-edit-quote-header-label",
+    });
+    this.quoteTitleInputEl = this.quoteHeaderEl.createEl("input", {
+      type: "text",
+      cls: "unified-outliner-partial-edit-quote-title-input",
+    });
+    this.quoteTitleInputEl.setAttribute("placeholder", this.plugin.t("partialEdit.quoteTitleLabel"));
+    setTooltip(this.quoteTitleInputEl, this.plugin.t("partialEdit.quoteTitleLabel"));
+    // Same dirty-tracking policy as textareaEl's own input listener right
+    // below — every keystroke in the title input must also re-check
+    // isDirty(), since isDirty() now considers the title input too.
+    this.quoteTitleInputEl.addEventListener("input", () => this.updateDirtyState());
 
     this.textareaEl = this.contentEl.createEl("textarea", {
       cls: "unified-outliner-partial-edit-textarea",
@@ -775,29 +821,52 @@ export class PartialEditView extends ItemView {
   }
 
   /**
-   * Phase 5D-0.5: draw (or hide) the read-only callout-header row above
-   * the textarea. Only ever visible for a projecting CALLOUT — a
-   * projecting blockquote has no header concept at all
-   * (`quoteProjection.header` is always null for kind "blockquote"; see
-   * QuotePrefixProjection's own doc comment), and a non-projecting node of
-   * any kind has nothing to separate out. Deliberately NOT editable here
-   * — this initial version's approved scope explicitly excludes header
-   * editing ("callout header は読み取り専用"); the header is carried
-   * through Apply unedited, verbatim, by invertQuotePrefixProjection.
-   * Re-run only from loadNodeInternal's render call and renderEmptyState,
-   * i.e. exactly when the loaded node itself changes — never on every
-   * keystroke, matching renderBreadcrumb's own "static until the next
-   * load" policy immediately below.
+   * Phase 5D-0.5: draw (or hide) the callout-header row above the
+   * textarea. Only ever visible for a projecting CALLOUT — a projecting
+   * blockquote has no header concept at all (`quoteProjection.header` is
+   * always null for kind "blockquote"; see QuotePrefixProjection's own
+   * doc comment), and a non-projecting node of any kind has nothing to
+   * separate out. Re-run only from loadNodeInternal's render call,
+   * renderEmptyState, and applyEdit's post-apply rebuild — i.e. exactly
+   * when the loaded node itself (or its just-applied raw text) changes —
+   * never on every keystroke, matching renderBreadcrumb's own "static
+   * until the next load" policy immediately below.
+   *
+   * Phase 5D-1A: the row is no longer uniformly read-only. When
+   * `quoteProjection.titleSlot` is set (a callout whose title was
+   * successfully split out — see buildQuoteHeaderTitleSlot), this shows
+   * `beforeTitle` (quote prefix, `[!type]`, fold marker, original
+   * separator whitespace) in the READ-ONLY `quoteHeaderLabelEl`, and
+   * reveals `quoteTitleInputEl` pre-filled with the loaded `title` —
+   * type/fold marker/prefix stay exactly as read-only as they were
+   * before this ticket, only the title itself becomes editable. Every
+   * other case (blockquote, non-projecting, or a callout whose title
+   * slot failed to build — see QuotePrefixProjection's own doc comment
+   * on `titleSlot`) hides `quoteTitleInputEl` and falls back to the
+   * pre-5D-1A behavior: the full raw header line shown read-only in
+   * `quoteHeaderLabelEl`, or nothing at all.
    */
   private renderQuoteHeader(): void {
+    const titleSlot = this.quoteProjection?.titleSlot ?? null;
+    if (titleSlot) {
+      this.quoteHeaderEl.toggleVisibility(true);
+      this.quoteHeaderLabelEl.setText(titleSlot.beforeTitle);
+      this.quoteTitleInputEl.toggleVisibility(true);
+      this.quoteTitleInputEl.disabled = false;
+      this.quoteTitleInputEl.value = titleSlot.title;
+      return;
+    }
+    this.quoteTitleInputEl.toggleVisibility(false);
+    this.quoteTitleInputEl.value = "";
+
     const header = this.quoteProjection?.header ?? null;
     if (header === null) {
       this.quoteHeaderEl.toggleVisibility(false);
-      this.quoteHeaderEl.setText("");
+      this.quoteHeaderLabelEl.setText("");
       return;
     }
     this.quoteHeaderEl.toggleVisibility(true);
-    this.quoteHeaderEl.setText(header);
+    this.quoteHeaderLabelEl.setText(header);
   }
 
   /**
@@ -1061,7 +1130,7 @@ export class PartialEditView extends ItemView {
     });
   }
 
-  /** Revert unsaved edits in the textarea — does not close the pane or change which node is loaded. */
+  /** Revert unsaved edits in the textarea (and, Phase 5D-1A, the title input) — does not close the pane or change which node is loaded. */
   private cancelEdit(): void {
     if (!this.nodeId && !this.paragraphAnchor) return;
     // Phase 5D-0.5: reverts to the projected displayText (not the raw
@@ -1070,6 +1139,13 @@ export class PartialEditView extends ItemView {
     // unaffected, since currentDisplayText falls through to originalText
     // verbatim whenever quoteProjection is null.
     this.textareaEl.value = this.currentDisplayText();
+    // Phase 5D-1A: revert the title input to its loaded value too, when a
+    // title slot is active — a no-op (value already unchanged) otherwise,
+    // since quoteTitleInputEl is empty/hidden whenever titleSlot is null.
+    const titleSlot = this.quoteProjection?.titleSlot ?? null;
+    if (titleSlot) {
+      this.quoteTitleInputEl.value = titleSlot.title;
+    }
     this.updateDirtyState();
   }
 
@@ -1210,6 +1286,30 @@ export class PartialEditView extends ItemView {
         return false;
       }
       newRawText = inverted.rawText;
+
+      // Phase 5D-1A: when this callout's title was successfully split out
+      // (titleSlot non-null), reconstruct its header from the title
+      // input's CURRENT value and splice it in as the new first line —
+      // `inverted.rawText` above already reattached the OLD, unedited
+      // header verbatim (invertQuotePrefixProjection itself is untouched
+      // by this ticket), so this replaces exactly that one line. A
+      // newline in the title input refuses the WHOLE Apply here, before
+      // the raw-text splice call below is ever reached — any body edit
+      // already computed above is discarded along with it, matching the
+      // quoteLineCountChanged refusal's own "reject the whole thing,
+      // zero-byte-change" contract. Blockquote/non-title-editable callouts
+      // (titleSlot null) leave newRawText exactly as invertQuotePrefixProjection
+      // produced it, unchanged from pre-5D-1A behavior.
+      const titleSlot = this.quoteProjection.titleSlot;
+      if (titleSlot) {
+        const reconstructed = reconstructQuoteHeader(titleSlot, this.quoteTitleInputEl.value);
+        if (!reconstructed.ok) {
+          new Notice(this.plugin.t("partialEdit.quoteTitleNewlineUnsupported"));
+          return false;
+        }
+        const bodyOnlyLines = newRawText.split("\n").slice(1);
+        newRawText = [reconstructed.header, ...bodyOnlyLines].join("\n");
+      }
     }
 
     const outcome = applySubtreeEdit(doc, this.nodeId!, this.originalText, newRawText);
@@ -1254,6 +1354,12 @@ export class PartialEditView extends ItemView {
       // holds newRawText); this pane simply, safely degrades to showing
       // that node raw from here on, exactly like the "no-body" fallback
       // already does for a header-only callout.
+      // Phase 5D-1A: the freshly rebuilt projection's own `titleSlot` is
+      // recomputed from `newRawText`'s new header line (which already
+      // reflects any title edit just applied above), so calling
+      // renderQuoteHeader() right below also re-syncs quoteTitleInputEl
+      // to the just-applied title — no separate title re-sync needed
+      // here.
       const kind = this.quoteProjection.kind;
       const rebuilt = buildQuotePrefixProjection(newRawText, kind);
       this.quoteProjection = rebuilt.ok ? rebuilt.projection : null;
@@ -1321,9 +1427,17 @@ export class PartialEditView extends ItemView {
     // projecting node, or every keystroke in the prefix-stripped textarea
     // would spuriously read as dirty relative to the still-`>`-prefixed
     // raw snapshot. See currentDisplayText's own doc comment.
+    //
+    // Phase 5D-1A: ALSO dirty when the title input differs from its
+    // loaded titleSlot.title — titleSlot is null (titleDirty forced
+    // false) for every case except a callout whose title was
+    // successfully split out, so this is a no-op addition for
+    // blockquote/section/list/paragraph/non-title-editable callouts.
+    const titleSlot = this.quoteProjection?.titleSlot ?? null;
+    const titleDirty = titleSlot !== null && this.quoteTitleInputEl.value !== titleSlot.title;
     return (
       (this.nodeId !== null || this.paragraphAnchor !== null) &&
-      this.textareaEl.value !== this.currentDisplayText()
+      (this.textareaEl.value !== this.currentDisplayText() || titleDirty)
     );
   }
 

@@ -145,11 +145,68 @@ describe("view/PartialEditView.ts quote-prefix-projection wiring (static source 
     expect(reanchorIndex).toBeLessThan(rebuildIndex);
   });
 
-  it("renderQuoteHeader hides the header row when quoteProjection has no header (blockquote / non-projecting) and shows it verbatim for a projecting callout", () => {
+  it("renderQuoteHeader hides the header row when quoteProjection has no header (blockquote / non-projecting) and shows it verbatim for a projecting callout with no titleSlot", () => {
     const body = bodyOf(viewTs, "private renderQuoteHeader(): void {", "renderQuoteHeader()");
     expect(body).toContain("this.quoteHeaderEl.toggleVisibility(false);");
     expect(body).toContain("this.quoteHeaderEl.toggleVisibility(true);");
-    expect(body).toContain("this.quoteHeaderEl.setText(header);");
+    // Phase 5D-1A: renderQuoteHeader now targets quoteHeaderLabelEl (the
+    // read-only child), never quoteHeaderEl itself — see
+    // quoteHeaderLabelEl's own doc comment for why. This is an
+    // intentional 5D-1A call-site change, not a regression: the OLD
+    // `this.quoteHeaderEl.setText(header)` call site is gone.
+    expect(body).toContain("this.quoteHeaderLabelEl.setText(header);");
+  });
+
+  it("renderQuoteHeader (Phase 5D-1A): when quoteProjection.titleSlot is non-null, it shows the row, sets the label to beforeTitle, reveals+enables the title input, and pre-fills it with the loaded title", () => {
+    const body = bodyOf(viewTs, "private renderQuoteHeader(): void {", "renderQuoteHeader()");
+    expect(body).toContain("this.quoteHeaderLabelEl.setText(titleSlot.beforeTitle);");
+    expect(body).toContain("this.quoteTitleInputEl.toggleVisibility(true);");
+    expect(body).toContain("this.quoteTitleInputEl.disabled = false;");
+    expect(body).toContain("this.quoteTitleInputEl.value = titleSlot.title;");
+  });
+
+  it("renderQuoteHeader (Phase 5D-1A): hides and clears the title input whenever titleSlot is null (blockquote, non-projecting, or a callout header with no title slot)", () => {
+    const body = bodyOf(viewTs, "private renderQuoteHeader(): void {", "renderQuoteHeader()");
+    expect(body).toContain("this.quoteTitleInputEl.toggleVisibility(false);");
+    expect(body).toContain('this.quoteTitleInputEl.value = "";');
+  });
+
+  it("onOpen (Phase 5D-1A): creates quoteHeaderLabelEl and quoteTitleInputEl as children of quoteHeaderEl, and wires the title input's own 'input' listener to updateDirtyState", () => {
+    const body = bodyOf(viewTs, "async onOpen(): Promise<void> {", "onOpen()");
+    expect(body).toContain("this.quoteHeaderLabelEl = this.quoteHeaderEl.createSpan(");
+    expect(body).toContain('this.quoteTitleInputEl = this.quoteHeaderEl.createEl("input"');
+    expect(body).toContain(
+      'this.quoteTitleInputEl.addEventListener("input", () => this.updateDirtyState());'
+    );
+  });
+
+  it("cancelEdit (Phase 5D-1A): reverts the title input back to the loaded titleSlot's own title whenever a titleSlot is active", () => {
+    const body = bodyOf(viewTs, "private cancelEdit(): void {", "cancelEdit()");
+    expect(body).toContain("this.quoteTitleInputEl.value = titleSlot.title;");
+  });
+
+  it("isDirty (Phase 5D-1A): considers the title input dirty too — the pane is dirty if EITHER the textarea OR the title input differs from its own loaded value", () => {
+    const body = bodyOf(viewTs, "private isDirty(): boolean {", "isDirty()");
+    expect(body).toContain("this.quoteTitleInputEl.value !== titleSlot.title");
+    expect(body).toMatch(/this\.textareaEl\.value !== this\.currentDisplayText\(\)\s*\|\|\s*titleDirty/);
+  });
+
+  it("applyEdit (Phase 5D-1A): when titleSlot is active, reconstructs the header from the title input's CURRENT value via reconstructQuoteHeader, refuses (returns false) on failure BEFORE ever calling applySubtreeEdit, and otherwise splices the reconstructed header in as newRawText's first line", () => {
+    const body = bodyOf(viewTs, "private applyEdit(): boolean {", "applyEdit()");
+    const reconstructIndex = body.indexOf(
+      "reconstructQuoteHeader(titleSlot, this.quoteTitleInputEl.value)"
+    );
+    const noticeIndex = body.indexOf('this.plugin.t("partialEdit.quoteTitleNewlineUnsupported")');
+    const applySubtreeEditIndex = body.indexOf(
+      "applySubtreeEdit(doc, this.nodeId!, this.originalText, newRawText)"
+    );
+    expect(reconstructIndex).toBeGreaterThan(-1);
+    expect(noticeIndex).toBeGreaterThan(-1);
+    expect(applySubtreeEditIndex).toBeGreaterThan(-1);
+    expect(reconstructIndex).toBeLessThan(noticeIndex);
+    expect(noticeIndex).toBeLessThan(applySubtreeEditIndex);
+    expect(body).toContain("const bodyOnlyLines = newRawText.split(\"\\n\").slice(1);");
+    expect(body).toContain("newRawText = [reconstructed.header, ...bodyOnlyLines].join(\"\\n\");");
   });
 
   it("the i18n keys this ticket introduces (quoteNestedUnsupported / quoteLineCountChanged) exist with non-empty en/ja text", () => {
