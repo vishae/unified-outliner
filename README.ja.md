@@ -130,7 +130,7 @@ Apply は、ペインを開いた時点の元の対象範囲が変更されて�
 | **Delete block** | 現在の見出しセクションまたはリスト部分木を削除します。 |
 | **Insert sibling after current block** | 現在の見出しセクションまたはリスト項目の後に、新しい空の要素を挿入します。 |
 | **Insert child list item** | 現在のリスト項目の子として、新しい空のリスト項目を挿入します。 |
-| **Move extended block up / down** | カーソルが内部にある場合に、画像のリスト項目とそのOCR転記／キャプションをまとめた拡張ブロック（設定 → 拡張ブロック を参照）を1つの単位として移動します。 |
+| **Move extended block up / down** | カーソルが内部にある場合に、**List + Callout** または **List + Quote** としてまとめられた拡張ブロック（設定 → 拡張ブロック を参照）を1つの単位として移動します。 |
 
 同じ操作は Outline Tree View のノードを右クリックしても実行できます。実行できない操作はノートを変更しません。理由を表示したい場合は、プラグイン設定で **Show no-op notices** を有効にしてください。Move block / Move section が実際に移動した対象は、ツリー内で一瞬フラッシュ表示され、設定を有効にすると移動内容を示す通知も表示されます。
 
@@ -154,7 +154,40 @@ Apply は、ペインを開いた時点の元の対象範囲が変更されて�
 
 下記の拡張ブロックにまとめられていない単体の callout・blockquote は、ツリー上でそれぞれ独立したノードとして表示され、コンテキストメニューには **Move up/down** と、セクションやリストサブツリーと同じ集中編集が行える **Open in Partial Edit**（ポップアウトも可能）が用意されています。fenced code block（Mermaidを含む）と table は、現時点ではツリー上で読み取り専用のままです — 本文エディタ内でカーソルがその内部にある状態であれば、**Move block** を使ってブロック全体を移動することは引き続き可能です。
 
-画像のリスト項目の直後に、その OCR転記または引用キャプション（callout または blockquote）が続く場合、Unified Outliner に組み込まれた **拡張ブロック**（設定を参照）の規則により、この2つがツリー上で1つの折りたたみ可能な単位としてまとめられます。**Move extended block up/down**（コマンドパレットまたはツリーのコンテキストメニュー）はこのグループ全体を一緒に移動し、**Delete extended block** は単位としてまとめて削除します — グループとしてまとめて編集することはまだできないため、リスト項目と callout/blockquote はそれぞれ本文エディタ側で個別に編集してください。
+**List + Callout** と **List + Quote** は、Outline Tree の2つのグループ化規則です（設定 → 拡張ブロック を参照）。空行を挟まず1行で完結する list item の直後に callout または blockquote が続く場合、その2つを1つの折りたたみ可能な単位としてツリー上にまとめます。これらの規則は構造的なものであり、画像の埋め込み、OCRの内容、特定の callout type を必要としません。**Move extended block up/down**（コマンドパレットまたはツリーのコンテキストメニュー）はこのグループ全体を一緒に移動し、**Delete extended block** は単位としてまとめて削除します — グループとしてまとめて編集することはまだできないため、リスト項目と callout/blockquote はそれぞれ本文エディタ側で個別に編集してください。規則を無効にしても Markdown 本文は変更されません。対象の list item、callout、blockquote は、それぞれ通常の Outline Tree 表示規則に従って個別に表示されます。
+
+例えば、次の Markdown:
+
+```markdown
+- 史料画像への注記
+> [!note] 転記上の注意
+> 表記ゆれを原文どおり保持する。
+```
+
+は、ツリー上で次のように表示されます:
+
+```text
+◉ List + Callout
+  - 史料画像への注記
+  ▣ 転記上の注意
+```
+
+また、次の Markdown:
+
+```markdown
+- 史料本文の引用
+> 村境は古来よりこの地点にある。
+```
+
+は、ツリー上で次のように表示されます:
+
+```text
+❖ List + Quote
+  - 史料本文の引用
+  村境は古来よりこの地点にある。
+```
+
+callout member には、単体の callout と同じ **▣** prefix が付きますが、blockquote member には付きません。
 
 ### 選択したブロックに焦点を当てて編集する
 
@@ -186,7 +219,7 @@ Apply は、ペインを開いた時点の元の対象範囲が変更されて�
 - **Sync Outline Tree folding to editor**: ツリーでノードを折りたたむ／展開すると、本文エディタ側の該当箇所も連動して折りたたみ／展開します。
 - **Show no-op notices**: 実行できない操作が変更を行わなかった理由を表示します。
 
-設定は **General**（上記のとおりカテゴリごとに区切り線で分類）と **Extended blocks** の2タブに分かれています。**Extended blocks** タブは、隣接するリスト項目と callout/blockquote を1つの単位としてまとめる、プラグイン組み込みの規則（**Image + OCR**、**Image + Quote**）を個別に有効・無効化するものです。規則を無効にしてもグループ表示が止まるだけで、Markdown本体や、まとめられているリスト項目・callout/blockquote自体は変更されません。
+設定は **General**（上記のとおりカテゴリごとに区切り線で分類）と **Extended blocks** の2タブに分かれています。**Extended blocks** タブは、プラグイン組み込みの **List + Callout** と **List + Quote** のグループ化規則（詳しくは上記「callout・blockquote・拡張ブロックを編集する」を参照）を個別に有効・無効化するものです。規則を無効にしてもグループ表示が止まるだけで、Markdown本体や、まとめられているリスト項目・callout/blockquote自体は変更されません。
 
 ### Style Settings で見た目をカスタマイズする
 
@@ -206,7 +239,7 @@ Apply は、ペインを開いた時点の元の対象範囲が変更されて�
 - Unified Outliner はアクティブなノート内だけで動作し、ノート間で内容を移動しません。
 - frontmatterはすべての構造操作の対象外です。
 - 単体の callout・blockquote は、Outline Tree View から直接move・Partial Edit Paneでの編集ができます（上記の視覚ガイドを参照）。fenced code block（Mermaidを含む）と table は、引き続き読み取り専用ノードとして表示されます。本文エディタ側でカーソルがこれら4種のいずれかの内部にある場合は、Move blockでブロック全体を移動できます。
-- 画像のリスト項目とそのOCR転記・キャプションをまとめた拡張ブロック（設定 → 拡張ブロック を参照）は、Outline Tree View からまとめて move・delete できますが、グループとしてまとめて編集することはまだできません。リスト項目と callout/blockquote はそれぞれ本文エディタ側で個別に編集してください。
+- リスト項目と callout/blockquote をまとめた **List + Callout** または **List + Quote** の拡張ブロック（設定 → 拡張ブロック を参照）は、Outline Tree View からまとめて move・delete できますが、グループとしてまとめて編集することはまだできません。リスト項目と callout/blockquote はそれぞれ本文エディタ側で個別に編集してください。
 - Partial Edit Pane は、読み込み後に元の対象領域が変更されていない場合にだけ適用されます。
 
 ## ロードマップ

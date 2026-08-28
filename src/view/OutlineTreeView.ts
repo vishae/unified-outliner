@@ -1512,10 +1512,14 @@ export class OutlineTreeView extends ItemView {
     } else if (isComplexMember) {
       // Phase 5C-2: same "prefix as its own semantic <span>, skipped
       // entirely when absent" pattern as the composite branch above —
-      // node.prefix is undefined for a composite-member row (unchanged
-      // look) and already includes its own trailing separator space
-      // (STANDALONE_CALLOUT_PREFIX/STANDALONE_BLOCKQUOTE_PREFIX) for a
-      // standalone row, so no extra space is added here either.
+      // node.prefix already includes its own trailing separator space
+      // (STANDALONE_CALLOUT_PREFIX/STANDALONE_BLOCKQUOTE_PREFIX) whenever
+      // set, so no extra space is added here either. This branch itself
+      // needs no per-kind logic of its own: tree/buildOutlineTree.ts's
+      // buildMemberNode (Phase 5D-1L) already decides node.prefix is set
+      // for a composite-member "callout" row (same STANDALONE_CALLOUT_PREFIX
+      // a standalone callout gets) and left undefined for "blockquote" —
+      // this rendering code is unchanged and shared by both.
       const innerEl = selfEl.createDiv({
         cls: "tree-item-inner unified-outliner-complex-member-text",
       });

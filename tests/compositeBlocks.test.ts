@@ -219,8 +219,12 @@ describe("getEnabledCompositeBlockRules", () => {
 describe("compositeBlockDisplayLabel / getCompositeBlockRuleById", () => {
   it("resolves a built-in rule's display label via i18n, in both English and Japanese", () => {
     const rule = getCompositeBlockRuleById(DEFAULT_COMPOSITE_BLOCK_RULES, "image-ocr")!;
-    expect(compositeBlockDisplayLabel(rule, createTranslator("en"))).toBe("Image + OCR");
-    expect(compositeBlockDisplayLabel(rule, createTranslator("ja"))).toBe("画像+OCR");
+    // Phase 5D-1L: generalized from "Image + OCR"/"画像+OCR" to the
+    // structural label "List + Callout" — deliberately the SAME English
+    // string in both locales (no Japanese translation), per this ticket's
+    // explicit approval.
+    expect(compositeBlockDisplayLabel(rule, createTranslator("en"))).toBe("List + Callout");
+    expect(compositeBlockDisplayLabel(rule, createTranslator("ja"))).toBe("List + Callout");
   });
 
   it("a customLabel always wins over the built-in i18n lookup, in every locale", () => {

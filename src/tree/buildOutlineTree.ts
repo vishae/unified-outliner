@@ -158,11 +158,20 @@ export interface OutlineTreeComplexMemberNode {
    * OutlineTreeCompositeNode.prefix — rendered as its own <span> (see
    * OutlineTreeView.ts's renderNode isComplexMember branch) so it stays
    * part of the row's semantic textContent, exactly like the composite
-   * prefix already does. Undefined for a composite member (buildMemberNode
-   * never sets this — composite-member rows keep their pre-5C-2 look,
-   * unchanged); set for a standalone row (buildStandaloneComplexNode,
+   * prefix already does. Set for a standalone row (buildStandaloneComplexNode,
    * always paired with isStandalone: true) via STANDALONE_CALLOUT_PREFIX /
    * STANDALONE_BLOCKQUOTE_PREFIX below.
+   *
+   * Phase 5D-1L: ALSO set for a composite-member row (buildMemberNode)
+   * whose `complexKind` is "callout" — the exact same STANDALONE_CALLOUT_PREFIX
+   * constant, so a callout reads as the same kind of thing whether it's
+   * standalone or grouped inside a CompositeBlock (this ticket's own
+   * approved "callout member prefix parity" scope). Still undefined for a
+   * composite-member "blockquote" row — STANDALONE_BLOCKQUOTE_PREFIX is
+   * deliberately NOT applied to blockquote members (out of this ticket's
+   * scope; a blockquote member's look is otherwise untouched) — and for
+   * any composite-member kind besides callout/blockquote, none of which
+   * exist today.
    */
   prefix?: string;
   /**
@@ -1164,11 +1173,24 @@ function buildMemberNode(
   // defense-in-depth against a future refactor that calls buildCompositeNode/
   // buildMemberNode from somewhere else without going through that gate.
   const label = info ? complexMemberDisplayLabel(doc, info, ctx.t) : member.id;
+  // Phase 5D-1L: a callout member gets the exact same decorative prefix a
+  // STANDALONE callout row gets (STANDALONE_CALLOUT_PREFIX, "▣ ") — reused
+  // verbatim, not a new icon — so the same callout block reads as the same
+  // kind of thing whether it's shown on its own or grouped inside a
+  // CompositeBlock (see this ticket's own approved scope). A blockquote
+  // member is deliberately left at `undefined` (unchanged from before this
+  // ticket): STANDALONE_BLOCKQUOTE_PREFIX is NOT applied here, since this
+  // ticket's scope is callout-only parity and blockquote members must not
+  // start getting a prefix they never had. `member.kind` (not `info.kind`)
+  // drives this check for the same reason `complexKind` right below already
+  // does — see this function's own existing cast.
+  const prefix = member.kind === "callout" ? STANDALONE_CALLOUT_PREFIX : undefined;
   return {
     kind: "complex-member",
     id: member.id,
     complexKind: member.kind as ComplexBlockKind,
     label,
+    prefix,
     isStandalone: false,
     line: member.range.startLine,
     children: [],

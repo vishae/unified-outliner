@@ -128,7 +128,7 @@ Place the cursor on a heading or list item, then use the Command Palette or assi
 | **Delete block** | Deletes the current heading section or list subtree. |
 | **Insert sibling after current block** | Inserts a new, empty heading section or list item after the current one. |
 | **Insert child list item** | Inserts a new, empty list item as a child of the current one. |
-| **Move extended block up / down** | Moves an image list item grouped with its OCR transcript or caption (see Settings → Extended blocks) as one unit, when the cursor is inside it. |
+| **Move extended block up / down** | Moves a **List + Callout** or **List + Quote** group (see Settings → Extended blocks) as one unit, when the cursor is inside it. |
 
 The same actions are available from a node's context menu in Outline Tree View. Unavailable operations make no change. Enable **Show no-op notices** in the plugin settings to see the reason. A block that Move block / Move section just moved is briefly flash-highlighted in the tree, and, if enabled, a short notice names what moved.
 
@@ -152,7 +152,40 @@ Enable **Show body paragraphs in Outline Tree View** in the plugin settings to d
 
 A standalone callout or blockquote — one not grouped into an extended block below — appears in the tree as its own node, with a context menu offering **Move up/down** and **Open in Partial Edit** (including a popout option), the same focused-editing experience available for sections and list subtrees. Fenced code blocks (including Mermaid) and tables remain read-only in the tree for now; **Move block** can still move one of these as a whole when the cursor is inside it in the body editor.
 
-When an image list item is immediately followed by its OCR transcript or a quoted caption (a callout or blockquote), Unified Outliner's built-in **Extended blocks** rules (see Settings) group the two into one collapsible unit in the tree. **Move extended block up/down** (Command Palette or the tree's context menu) moves the whole group together, and **Delete extended block** removes it as a unit — the grouped list item and callout/blockquote are not yet editable together as a group; edit either one individually in the body editor.
+**List + Callout** and **List + Quote** are two Outline Tree grouping rules (see Settings → Extended blocks). They group a single-line list item that is immediately followed, with no blank line, by a callout or blockquote, into one collapsible unit in the tree. These rules are structural — they do not require an image embed, OCR content, or any particular callout type. **Move extended block up/down** (Command Palette or the tree's context menu) moves the whole group together, and **Delete extended block** removes it as a unit — the grouped list item and callout/blockquote are not yet editable together as a group; edit either one individually in the body editor. Disabling a rule does not change the Markdown; the affected list item, callout, and blockquote are simply shown individually again, following their own normal Outline Tree display rules.
+
+For example, this Markdown:
+
+```markdown
+- Note on the source image
+> [!note] Transcription note
+> Preserve the original spelling exactly.
+```
+
+is shown in the tree as:
+
+```text
+◉ List + Callout
+  - Note on the source image
+  ▣ Transcription note
+```
+
+And this Markdown:
+
+```markdown
+- Quotation from the source text
+> The boundary has stood at this point since ancient times.
+```
+
+is shown in the tree as:
+
+```text
+❖ List + Quote
+  - Quotation from the source text
+  The boundary has stood at this point since ancient times.
+```
+
+The callout member gets the same **▣** prefix used for standalone callouts; the blockquote member does not.
 
 ### Edit a focused subtree
 
@@ -186,7 +219,7 @@ Open **Settings → Community plugins → Unified Outliner** to configure, group
 - **Sync Outline Tree folding to editor**: folding or unfolding a node in the tree also folds or unfolds the matching content in the active Markdown editor.
 - **Show no-op notices**: explains why an unavailable operation made no change.
 
-Settings are organized into two tabs, **General** (grouped above by category, with dividers between each group) and **Extended blocks** — the latter enables or disables the plugin's built-in rules for grouping an adjacent list item with its callout/blockquote (**Image + OCR**, **Image + Quote**) into one collapsible unit in the tree. Turning a rule off only stops that grouping display; the underlying Markdown, and the list item and callout/blockquote it contains, are never changed.
+Settings are organized into two tabs, **General** (grouped above by category, with dividers between each group) and **Extended blocks** — the latter enables or disables the plugin's built-in **List + Callout** and **List + Quote** grouping rules (see "Work with callouts, blockquotes, and extended blocks" above). Turning a rule off only stops that grouping display; the underlying Markdown, and the list item and callout/blockquote it contains, are never changed.
 
 ### Customizing appearance with Style Settings
 
@@ -206,7 +239,7 @@ Structural changes alter Markdown text. Keep normal vault backups and review an 
 - Unified Outliner works within the active note only. It does not move content between notes.
 - Frontmatter is excluded from all structural operations.
 - A standalone callout or blockquote can be moved and opened in the Partial Edit Pane directly from the Outline Tree View (see Visual guide above). Fenced code blocks (including Mermaid) and tables are still shown there as read-only nodes. Move block can still move any of these four kinds as a whole when the cursor is inside it in the body editor.
-- An image list item grouped with its OCR transcript or caption into an extended block (see Settings → Extended blocks) moves and deletes as one unit from the Outline Tree View, but is not yet editable as a group — edit the list item or the callout/blockquote individually in the body editor.
+- A list item grouped with its callout or blockquote into a **List + Callout** or **List + Quote** extended block (see Settings → Extended blocks) moves and deletes as one unit from the Outline Tree View, but is not yet editable as a group — edit the list item or the callout/blockquote individually in the body editor.
 - A focused edit is applied only when the original target has not changed since it was loaded.
 
 ## Roadmap

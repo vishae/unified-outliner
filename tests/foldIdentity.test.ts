@@ -154,7 +154,15 @@ describe("buildNodeIdentityMap (Phase 5D-0.3: composite / complex-member)", () =
     const t = treeWithComposites(text);
     const map = buildNodeIdentityMap(t);
     const composite = t[0];
-    expect(map.get(composite.id)).toBe("composite:Image + OCR");
+    // Phase 5D-1L: the identity segment is still label-derived exactly as
+    // before (this ticket does not touch buildNodeIdentityMap/nodeLabel at
+    // all) — only the label TEXT itself changed, from "Image + OCR" to
+    // "List + Callout" (compositeBlock.imageOcr.displayName). A composite
+    // parent row that a user had collapsed before this change will show
+    // expanded again after it, a known/accepted consequence of this
+    // mechanism being label-based — see this ticket's own known-limitations
+    // note.
+    expect(map.get(composite.id)).toBe("composite:List + Callout");
   });
 
   it("a list item's identity is IDENTICAL whether or not it currently happens to be grouped into a composite (member membership must not affect identity — see this file's class doc comment §Phase 5D-0.3)", () => {
@@ -210,7 +218,11 @@ describe("buildNodeIdentityMap (Phase 5D-0.3: composite / complex-member)", () =
   it("2026-08-12 amendment §B: a list item and a CompositeBlock that happen to produce the SAME label text, in the same section, never collide — the kind-prefixed segment (`list:X` vs `composite:X`) already disambiguates them without needing an occurrence suffix", () => {
     const text = [
       "# H",
-      "- Image + OCR", // a plain list item whose text happens to equal the built-in rule's own display label
+      // Phase 5D-1L: updated to the built-in rule's own NEW display label
+      // ("List + Callout", generalized from "Image + OCR") — the test's
+      // premise (a plain list item whose text happens to equal the
+      // composite's own label) is otherwise unchanged.
+      "- List + Callout", // a plain list item whose text happens to equal the built-in rule's own display label
       "- ![[scan.png]]",
       "> [!ocr]",
       "> body",
@@ -222,8 +234,8 @@ describe("buildNodeIdentityMap (Phase 5D-0.3: composite / complex-member)", () =
     const [plainList, composite] = section.children;
     const plainListId = map.get(plainList.id);
     const compositeId = map.get(composite.id);
-    expect(plainListId).toBe("section:H/list:Image + OCR");
-    expect(compositeId).toBe("section:H/composite:Image + OCR");
+    expect(plainListId).toBe("section:H/list:List + Callout");
+    expect(compositeId).toBe("section:H/composite:List + Callout");
     expect(plainListId).not.toBe(compositeId);
     // Neither carries a spurious occurrence suffix — each is the only node
     // of ITS OWN kind with this label under this section; the list/composite
@@ -231,6 +243,33 @@ describe("buildNodeIdentityMap (Phase 5D-0.3: composite / complex-member)", () =
     // OccurrencePools), so one kind's count never influences the other's.
     expect(plainListId).not.toMatch(/#\d+$/);
     expect(compositeId).not.toMatch(/#\d+$/);
+  });
+
+  it("Phase 5D-1L: the CompositeBlock display label generalization (compositeBlock.imageOcr/imageQuote.displayName) affects ONLY the composite parent's own `composite:<label>` identity segment — member list/callout/blockquote and section identities are computed from THEIR OWN label (list text / member body text / heading text), never from the composite's, so none of them shift", () => {
+    const calloutText = ["# H", "- ![[scan.png]]", "> [!ocr]", "> body line"].join("\n");
+    const t1 = treeWithComposites(calloutText);
+    const map1 = buildNodeIdentityMap(t1);
+    const section1 = t1[0];
+    const composite1 = section1.children[0];
+    const [listMember1, calloutMember1] = composite1.children;
+    expect(map1.get(section1.id)).toBe("section:H");
+    expect(map1.get(listMember1.id)).toBe("section:H/list:![[scan.png]]");
+    expect(map1.get(calloutMember1.id)).toBe("section:H/complex-member:body line");
+    // The composite's own segment IS label-derived (already covered by the
+    // two tests above) — repeated here only to show it sits in the SAME
+    // map, at the SAME time, as the three unaffected segments just checked.
+    expect(map1.get(composite1.id)).toBe("section:H/composite:List + Callout");
+
+    const quoteText = ["# H", "- source", "> quoted line"].join("\n");
+    const t2 = treeWithComposites(quoteText);
+    const map2 = buildNodeIdentityMap(t2);
+    const section2 = t2[0];
+    const composite2 = section2.children[0];
+    const [listMember2, blockquoteMember2] = composite2.children;
+    expect(map2.get(section2.id)).toBe("section:H");
+    expect(map2.get(listMember2.id)).toBe("section:H/list:source");
+    expect(map2.get(blockquoteMember2.id)).toBe("section:H/complex-member:quoted line");
+    expect(map2.get(composite2.id)).toBe("section:H/composite:List + Quote");
   });
 
   it("2026-08-12 amendment §B/§D: when body edits break a composite's match conditions (a blank line inserted between the list item and the callout), the member list item's fold identity is UNCHANGED across the before/after re-parse — the CompositeBlock's own identity simply stops being produced, but the underlying list item's identity was never derived from it in the first place", () => {

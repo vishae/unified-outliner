@@ -429,7 +429,9 @@ describe("buildOutlineTree (Phase 5D-0.3: CompositeBlock projection)", () => {
     const composite = tree[0];
     if (!isOutlineCompositeNode(composite)) throw new Error("expected composite node");
     expect(composite.ruleId).toBe("image-ocr");
-    expect(composite.label).toBe("Image + OCR");
+    // Phase 5D-1L: generalized from "Image + OCR" — the label now names
+    // the structure the rule matches, not one illustrative use case.
+    expect(composite.label).toBe("List + Callout");
     expect(composite.prefix).toBe("◉");
     expect(composite.line).toBe(0);
     expect(composite.children).toHaveLength(2);
@@ -439,6 +441,11 @@ describe("buildOutlineTree (Phase 5D-0.3: CompositeBlock projection)", () => {
     expect(listMember.text).toBe("![[scan-001.png]]");
     if (!isOutlineComplexMemberNode(calloutMember)) throw new Error("expected complex-member");
     expect(calloutMember.complexKind).toBe("callout");
+    // Phase 5D-1L: callout members now get the same decorative prefix a
+    // standalone callout row gets — see the dedicated
+    // "callout member prefix parity" describe block below for the full
+    // coverage (standalone-unchanged, blockquote-member-excluded, etc.).
+    expect(calloutMember.prefix).toBe(STANDALONE_CALLOUT_PREFIX);
   });
 
   it("projects composite members regardless of includeLists (approval §4 — composite projection is independent of showListItemsInOutline)", () => {
@@ -551,6 +558,87 @@ describe("buildOutlineTree (Phase 5D-0.3: CompositeBlock projection)", () => {
     const composite = tree[0];
     if (!isOutlineCompositeNode(composite)) throw new Error("expected composite");
     expect(composite.prefix).toBe("");
+  });
+
+  describe("Phase 5D-1L: callout member prefix parity", () => {
+    it("an image-ocr composite's callout member gets the exact same prefix a standalone callout row gets", () => {
+      const text = ["- ![[scan.png]]", "> [!ocr]", "> body"].join("\n");
+      const tree = treeWithComposites(text);
+      const composite = tree[0];
+      if (!isOutlineCompositeNode(composite)) throw new Error("expected composite");
+      const [, calloutMember] = composite.children;
+      if (!isOutlineComplexMemberNode(calloutMember)) throw new Error("expected complex-member");
+      expect(calloutMember.complexKind).toBe("callout");
+      expect(calloutMember.prefix).toBe(STANDALONE_CALLOUT_PREFIX);
+      expect(calloutMember.prefix).toBe("▣ ");
+    });
+
+    it("an image-quote composite's blockquote member is NOT given the callout prefix (or any prefix) — parity is callout-only, by design", () => {
+      const text = ["- source", "> quoted line"].join("\n");
+      const tree = treeWithComposites(text);
+      const composite = tree[0];
+      if (!isOutlineCompositeNode(composite)) throw new Error("expected composite");
+      expect(composite.ruleId).toBe("image-quote");
+      const [, blockquoteMember] = composite.children;
+      if (!isOutlineComplexMemberNode(blockquoteMember)) throw new Error("expected complex-member");
+      expect(blockquoteMember.complexKind).toBe("blockquote");
+      expect(blockquoteMember.prefix).toBeUndefined();
+    });
+
+    it("a standalone callout's own prefix is completely unaffected by this change (still STANDALONE_CALLOUT_PREFIX, computed by the same buildStandaloneComplexNode path as before)", () => {
+      const text = ["> [!note] My Note", "> body"].join("\n");
+      const doc = parseDocument(text);
+      const complexScan = scanComplexBlocks(doc);
+      const tree = buildOutlineTree(doc, {
+        includeLists: false,
+        standaloneComplexBlocks: { blocks: complexScan.blocks },
+        t: createTranslator("en"),
+      });
+      const [row] = tree;
+      if (!isOutlineComplexMemberNode(row)) throw new Error("expected complex-member");
+      expect(row.isStandalone).toBe(true);
+      expect(row.prefix).toBe(STANDALONE_CALLOUT_PREFIX);
+    });
+
+    it("the list member of an image-ocr composite is completely unaffected — no prefix field of the STANDALONE_CALLOUT_PREFIX kind is ever added to a list node (list prefix remains listPrefixStyle-driven, per its own unrelated mechanism)", () => {
+      const text = ["- ![[scan.png]]", "> [!ocr]", "> body"].join("\n");
+      const tree = treeWithComposites(text, true);
+      const composite = tree[0];
+      if (!isOutlineCompositeNode(composite)) throw new Error("expected composite");
+      const [listMember] = composite.children;
+      if (!isOutlineListNode(listMember)) throw new Error("expected list member");
+      expect(listMember.text).toBe("![[scan.png]]");
+      expect(listMember.prefix).toBeNull();
+    });
+
+    it("the CompositeBlock parent's own decorative prefix (◉ / ❖) is completely unchanged by callout member prefix parity", () => {
+      const calloutText = ["- ![[scan.png]]", "> [!ocr]", "> body"].join("\n");
+      const calloutComposite = treeWithComposites(calloutText)[0];
+      if (!isOutlineCompositeNode(calloutComposite)) throw new Error("expected composite");
+      expect(calloutComposite.prefix).toBe("◉");
+
+      const quoteText = ["- source", "> quoted line"].join("\n");
+      const quoteComposite = treeWithComposites(quoteText)[0];
+      if (!isOutlineCompositeNode(quoteComposite)) throw new Error("expected composite");
+      expect(quoteComposite.prefix).toBe("❖");
+    });
+
+    it("a callout member's LABEL algorithm is completely unchanged — still complexMemberDisplayLabel's own title -> body -> fallback order, with no type-name tier added (that tier stays standalone-only, per standaloneComplexBlockLabel)", () => {
+      // No title on the callout header, and an unknown/custom type ("ai")
+      // that WOULD produce a type-name tier result ("Ai") if the member
+      // used standaloneComplexBlockLabel's algorithm instead of its own —
+      // it must not, so the label falls straight through to the first
+      // non-empty body line, exactly as complexMemberDisplayLabel's
+      // existing (pre-5D-1L) behavior already does.
+      const text = ["- ![[scan.png]]", "> [!ai]", "> transcript line"].join("\n");
+      const tree = treeWithComposites(text);
+      const composite = tree[0];
+      if (!isOutlineCompositeNode(composite)) throw new Error("expected composite");
+      const [, calloutMember] = composite.children;
+      if (!isOutlineComplexMemberNode(calloutMember)) throw new Error("expected complex-member");
+      expect(calloutMember.label).toBe("transcript line");
+      expect(calloutMember.label).not.toBe("Ai");
+    });
   });
 
   describe("2026-08-12 amendment §A: safe fallback when a composite's members can't share one Tree projection position", () => {

@@ -146,16 +146,40 @@ const en = {
 
   // ---- Phase 5D-0 / 5D-0.3: CompositeBlock rules -------------------------
   "settings.compositeBlocksHeading": "Extended blocks",
+  // Phase 5D-1L: rewritten to drop the "e.g. an image + its OCR
+  // transcript" example — CompositeBlock matching has always been purely
+  // structural (single-line list item + callout/blockquote, no blank line
+  // between them; see model/compositeBlock.ts's DEFAULT_COMPOSITE_BLOCK_RULES
+  // and parser/compositeBlocks.ts), never image-specific, and that example
+  // read as a required condition or the primary use case rather than one
+  // illustrative case among many (a to-do item + its own note, a heading-
+  // less quote source + its citation, etc.).
   "settings.compositeBlocksIntro":
-    "Built-in rules that group an immediately-adjacent list item + callout/blockquote (e.g. an image + its OCR transcript) into one collapsible unit in the Outline Tree. Disabling a rule here stops it from being recognized and shown as a group — your Markdown is never changed, and its member list item / callout / blockquote simply appear ungrouped again, following their own normal display settings.",
-  "settings.compositeBlockImageOcr.name": "Image + OCR",
+    "Built-in rules that group an immediately-adjacent, single-line list item and a callout or blockquote — with no blank line between them — into one collapsible unit in the Outline Tree. Disabling a rule here stops it from being recognized and shown as a group; your Markdown is never changed, and its member list item / callout / blockquote simply appear ungrouped again, following their own normal display settings.",
+  // Phase 5D-1L: generalized from "Image + OCR" / "Image + Quote" — the
+  // rule has never actually required an image (see this key's own doc
+  // comment above); the label now names the STRUCTURE it matches
+  // (list + callout / list + blockquote) instead of one example use case.
+  // en/ja deliberately share the identical English string — see
+  // compositeBlock.imageOcr.displayName's own doc comment below for why.
+  "settings.compositeBlockImageOcr.name": "List + Callout",
   "settings.compositeBlockImageOcr.desc":
     "Group a one-line list item immediately followed by a callout, with no blank line between them.",
-  "settings.compositeBlockImageQuote.name": "Image + Quote",
+  "settings.compositeBlockImageQuote.name": "List + Quote",
   "settings.compositeBlockImageQuote.desc":
     "Group a one-line list item immediately followed by a blockquote, with no blank line between them.",
-  "compositeBlock.imageOcr.displayName": "Image + OCR",
-  "compositeBlock.imageQuote.displayName": "Image + Quote",
+  // Phase 5D-1L: generalized display label for the Outline Tree's
+  // CompositeBlock parent row (see model/compositeBlock.ts's
+  // compositeBlockDisplayLabel) and ConfirmCompositeDeleteModal — was
+  // "Image + OCR"/"Image + Quote" (and "画像+OCR"/"画像+引用" in ja),
+  // which named one illustrative use case rather than the actual
+  // structural match (single-line list item + callout, or + blockquote;
+  // rule id/matching/settings key "image-ocr"/"image-quote" are UNCHANGED
+  // internal identifiers, not renamed by this ticket). The ja dictionary
+  // deliberately keeps the same English string here (not a Japanese
+  // translation) per this ticket's explicit approval.
+  "compositeBlock.imageOcr.displayName": "List + Callout",
+  "compositeBlock.imageQuote.displayName": "List + Quote",
 
   // ---- Commands (Command Palette names) ---------------------------------
   "command.moveBlockUp": "Move block up (minimal safe unit at cursor)",
@@ -757,16 +781,22 @@ const ja: Record<TranslationKey, string> = {
 
   // ---- Phase 5D-0 / 5D-0.3: CompositeBlock 規則 --------------------------
   "settings.compositeBlocksHeading": "拡張ブロック",
+  // Phase 5D-1L: 「（例: 画像 + その OCR 転記）」という代表例表現を除去し、
+  // 構造条件（空行なしで隣接する1行完結の list item と callout/blockquote）
+  // のみを説明する文言へ変更。ユーザー承認済みの指定文言をそのまま採用。
   "settings.compositeBlocksIntro":
-    "空行を挟まず隣接する list項目 + callout/blockquote（例: 画像 + その OCR 転記）を、アウトラインツリー上で1つの折りたたみ可能な単位としてまとめる組み込み規則。ここで無効化すると、まとめて表示するのをやめるだけで、Markdown 自体は一切変更されない — 対象だった list項目・callout・blockquote は、それぞれ通常の表示設定に従って個別に表示される。",
-  "settings.compositeBlockImageOcr.name": "画像+OCR",
+    "空行を挟まず隣接する1行で完結する list item と callout または blockquote を、Outline Tree上で1つの折りたたみ可能な単位としてまとめる規則です。この設定を無効にしてもMarkdown本文は変更されません。対象となるlist item、callout、blockquoteは、それぞれ通常の表示規則に従って個別に表示されます。",
+  // Phase 5D-1L: 「画像+OCR」/「画像+引用」から汎用化。日本語訳ではなく
+  // en辞書と同一の英語文字列 "List + Callout" / "List + Quote" を採用
+  // （ユーザー承認済み）。
+  "settings.compositeBlockImageOcr.name": "List + Callout",
   "settings.compositeBlockImageOcr.desc":
     "1行で完結する list項目の直後に、空行を挟まず callout が続く場合にまとめて表示する。",
-  "settings.compositeBlockImageQuote.name": "画像+引用",
+  "settings.compositeBlockImageQuote.name": "List + Quote",
   "settings.compositeBlockImageQuote.desc":
     "1行で完結する list項目の直後に、空行を挟まず blockquote が続く場合にまとめて表示する。",
-  "compositeBlock.imageOcr.displayName": "画像+OCR",
-  "compositeBlock.imageQuote.displayName": "画像+引用",
+  "compositeBlock.imageOcr.displayName": "List + Callout",
+  "compositeBlock.imageQuote.displayName": "List + Quote",
 
   // ---- コマンド（コマンドパレットの表示名） ------------------------------
   "command.moveBlockUp": "ブロックを上へ移動（カーソル位置の最小安全単位）",
