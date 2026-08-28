@@ -10,6 +10,7 @@ import {
 } from "../src/model/compositeBlock";
 import { ComplexBlockInfo } from "../src/model/complexBlock";
 import { createTranslator } from "../src/i18n";
+import { buildNodeIdentityMap } from "../src/tree/foldIdentity";
 import {
   buildOutlineTree,
   collectReadOnlyOutlineNodeIds,
@@ -573,7 +574,7 @@ describe("buildOutlineTree (Phase 5D-0.3: CompositeBlock projection)", () => {
       expect(calloutMember.prefix).toBe("▣ ");
     });
 
-    it("an image-quote composite's blockquote member is NOT given the callout prefix (or any prefix) — parity is callout-only, by design", () => {
+    it("Phase 5D-2B: an image-quote composite's blockquote member gets the exact same prefix a standalone blockquote row gets", () => {
       const text = ["- source", "> quoted line"].join("\n");
       const tree = treeWithComposites(text);
       const composite = tree[0];
@@ -582,7 +583,8 @@ describe("buildOutlineTree (Phase 5D-0.3: CompositeBlock projection)", () => {
       const [, blockquoteMember] = composite.children;
       if (!isOutlineComplexMemberNode(blockquoteMember)) throw new Error("expected complex-member");
       expect(blockquoteMember.complexKind).toBe("blockquote");
-      expect(blockquoteMember.prefix).toBeUndefined();
+      expect(blockquoteMember.prefix).toBe(STANDALONE_BLOCKQUOTE_PREFIX);
+      expect(blockquoteMember.prefix).toBe("❝ ");
     });
 
     it("a standalone callout's own prefix is completely unaffected by this change (still STANDALONE_CALLOUT_PREFIX, computed by the same buildStandaloneComplexNode path as before)", () => {
@@ -638,6 +640,105 @@ describe("buildOutlineTree (Phase 5D-0.3: CompositeBlock projection)", () => {
       if (!isOutlineComplexMemberNode(calloutMember)) throw new Error("expected complex-member");
       expect(calloutMember.label).toBe("transcript line");
       expect(calloutMember.label).not.toBe("Ai");
+    });
+  });
+
+  describe("Phase 5D-2B: blockquote member prefix parity", () => {
+    it("a standalone blockquote's own prefix is completely unaffected by this change (still STANDALONE_BLOCKQUOTE_PREFIX, computed by the same buildStandaloneComplexNode path as before)", () => {
+      const text = ["> quoted body"].join("\n");
+      const doc = parseDocument(text);
+      const complexScan = scanComplexBlocks(doc);
+      const tree = buildOutlineTree(doc, {
+        includeLists: false,
+        standaloneComplexBlocks: { blocks: complexScan.blocks },
+        t: createTranslator("en"),
+      });
+      const [row] = tree;
+      if (!isOutlineComplexMemberNode(row)) throw new Error("expected complex-member");
+      expect(row.isStandalone).toBe(true);
+      expect(row.complexKind).toBe("blockquote");
+      expect(row.prefix).toBe(STANDALONE_BLOCKQUOTE_PREFIX);
+    });
+
+    it("an image-ocr composite's callout member prefix (STANDALONE_CALLOUT_PREFIX / ▣ ) is completely unaffected by adding blockquote member prefix parity", () => {
+      const text = ["- ![[scan.png]]", "> [!ocr]", "> body"].join("\n");
+      const tree = treeWithComposites(text);
+      const composite = tree[0];
+      if (!isOutlineCompositeNode(composite)) throw new Error("expected composite");
+      const [, calloutMember] = composite.children;
+      if (!isOutlineComplexMemberNode(calloutMember)) throw new Error("expected complex-member");
+      expect(calloutMember.complexKind).toBe("callout");
+      expect(calloutMember.prefix).toBe(STANDALONE_CALLOUT_PREFIX);
+    });
+
+    it("the list member of an image-quote composite is completely unaffected — no STANDALONE_BLOCKQUOTE_PREFIX-kind prefix field is ever added to a list node", () => {
+      const text = ["- source", "> quoted line"].join("\n");
+      const tree = treeWithComposites(text, true);
+      const composite = tree[0];
+      if (!isOutlineCompositeNode(composite)) throw new Error("expected composite");
+      const [listMember] = composite.children;
+      if (!isOutlineListNode(listMember)) throw new Error("expected list member");
+      expect(listMember.text).toBe("source");
+      expect(listMember.prefix).toBeNull();
+    });
+
+    it("the CompositeBlock parent's own decorative prefix (◉ / ❖) is completely unchanged by blockquote member prefix parity", () => {
+      const calloutText = ["- ![[scan.png]]", "> [!ocr]", "> body"].join("\n");
+      const calloutComposite = treeWithComposites(calloutText)[0];
+      if (!isOutlineCompositeNode(calloutComposite)) throw new Error("expected composite");
+      expect(calloutComposite.prefix).toBe("◉");
+
+      const quoteText = ["- source", "> quoted line"].join("\n");
+      const quoteComposite = treeWithComposites(quoteText)[0];
+      if (!isOutlineCompositeNode(quoteComposite)) throw new Error("expected composite");
+      expect(quoteComposite.prefix).toBe("❖");
+    });
+
+    it("a blockquote member's LABEL algorithm is completely unchanged — still complexMemberDisplayLabel's own title -> body -> fallback order, independent of the new prefix field", () => {
+      const text = ["- source", "> quoted line"].join("\n");
+      const tree = treeWithComposites(text);
+      const composite = tree[0];
+      if (!isOutlineCompositeNode(composite)) throw new Error("expected composite");
+      const [, blockquoteMember] = composite.children;
+      if (!isOutlineComplexMemberNode(blockquoteMember)) throw new Error("expected complex-member");
+      expect(blockquoteMember.label).toBe("quoted line");
+      expect(blockquoteMember.prefix).toBe(STANDALONE_BLOCKQUOTE_PREFIX);
+    });
+
+    it("within the same List+Quote composite, the parent's ❖ prefix and the blockquote member's ❝ prefix coexist as separate nodes, each with its own correct prefix value", () => {
+      const text = ["- source", "> quoted line"].join("\n");
+      const tree = treeWithComposites(text);
+      const composite = tree[0];
+      if (!isOutlineCompositeNode(composite)) throw new Error("expected composite");
+      expect(composite.prefix).toBe("❖");
+      const [listMember, blockquoteMember] = composite.children;
+      if (!isOutlineListNode(listMember)) throw new Error("expected list member");
+      if (!isOutlineComplexMemberNode(blockquoteMember)) throw new Error("expected complex-member");
+      expect(blockquoteMember.prefix).toBe(STANDALONE_BLOCKQUOTE_PREFIX);
+      // Parent and member are distinct nodes in the tree — no double-display,
+      // no shared field being overwritten.
+      expect(composite).not.toBe(blockquoteMember);
+    });
+
+    it("the blockquote member's fold identity segment is derived only from `label` (kind:label), never from the new `prefix` field — adding the ❝ prefix does not perturb fold identity", () => {
+      const text = ["- source", "> quoted line"].join("\n");
+      const tree = treeWithComposites(text);
+      const composite = tree[0];
+      if (!isOutlineCompositeNode(composite)) throw new Error("expected composite");
+      const [, blockquoteMember] = composite.children;
+      if (!isOutlineComplexMemberNode(blockquoteMember)) throw new Error("expected complex-member");
+      expect(blockquoteMember.prefix).toBe(STANDALONE_BLOCKQUOTE_PREFIX);
+
+      const identityMap = buildNodeIdentityMap(tree);
+      const identity = identityMap.get(blockquoteMember.id);
+      expect(identity).toBeDefined();
+      // The identity segment is exactly `complex-member:<label>` — the
+      // decorative prefix ("❝ ") never appears in it, confirming
+      // foldIdentity.ts's nodeLabel() (which switches on node.label only)
+      // is unaffected by this change.
+      expect(identity).toBe(`complex-member:${blockquoteMember.label}`);
+      expect(identity).not.toContain("❝");
+      expect(identity).not.toContain(STANDALONE_BLOCKQUOTE_PREFIX);
     });
   });
 

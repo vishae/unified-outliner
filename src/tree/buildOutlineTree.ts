@@ -166,12 +166,18 @@ export interface OutlineTreeComplexMemberNode {
    * whose `complexKind` is "callout" — the exact same STANDALONE_CALLOUT_PREFIX
    * constant, so a callout reads as the same kind of thing whether it's
    * standalone or grouped inside a CompositeBlock (this ticket's own
-   * approved "callout member prefix parity" scope). Still undefined for a
-   * composite-member "blockquote" row — STANDALONE_BLOCKQUOTE_PREFIX is
-   * deliberately NOT applied to blockquote members (out of this ticket's
-   * scope; a blockquote member's look is otherwise untouched) — and for
-   * any composite-member kind besides callout/blockquote, none of which
-   * exist today.
+   * approved "callout member prefix parity" scope).
+   *
+   * Phase 5D-2B: ALSO set for a composite-member row whose `complexKind`
+   * is "blockquote" — the exact same STANDALONE_BLOCKQUOTE_PREFIX constant
+   * ("❝ "), for the same reason: a blockquote reads as the same kind of
+   * thing whether it's standalone or grouped inside a CompositeBlock (e.g.
+   * a "List + Quote" composite). This coexists with the composite parent's
+   * own OutlineTreeCompositeNode.prefix (e.g. "❖") without conflict, since
+   * the two prefixes render on separate Tree nodes/rows — the parent row
+   * signals the composite unit, this row signals the member's own kind.
+   * Still undefined for any composite-member kind besides callout/
+   * blockquote, none of which exist today.
    */
   prefix?: string;
   /**
@@ -1177,14 +1183,25 @@ function buildMemberNode(
   // STANDALONE callout row gets (STANDALONE_CALLOUT_PREFIX, "▣ ") — reused
   // verbatim, not a new icon — so the same callout block reads as the same
   // kind of thing whether it's shown on its own or grouped inside a
-  // CompositeBlock (see this ticket's own approved scope). A blockquote
-  // member is deliberately left at `undefined` (unchanged from before this
-  // ticket): STANDALONE_BLOCKQUOTE_PREFIX is NOT applied here, since this
-  // ticket's scope is callout-only parity and blockquote members must not
-  // start getting a prefix they never had. `member.kind` (not `info.kind`)
+  // CompositeBlock (see this ticket's own approved scope).
+  //
+  // Phase 5D-2B: a blockquote member gets the same treatment, reusing the
+  // exact same STANDALONE_BLOCKQUOTE_PREFIX constant ("❝ ") a STANDALONE
+  // blockquote row gets. This is the same existing OutlineTreeComplexMemberNode
+  // .prefix field / OutlineTreeView.ts isComplexMember render branch /
+  // unified-outliner-complex-member-prefix CSS class already used for the
+  // callout case above — no new constant, node type, render branch, or CSS
+  // was introduced. It coexists with the CompositeBlock parent's own "❖"
+  // prefix without collision, since the two render on separate Tree nodes
+  // (parent row vs. this member row). `member.kind` (not `info.kind`)
   // drives this check for the same reason `complexKind` right below already
   // does — see this function's own existing cast.
-  const prefix = member.kind === "callout" ? STANDALONE_CALLOUT_PREFIX : undefined;
+  const prefix =
+    member.kind === "callout"
+      ? STANDALONE_CALLOUT_PREFIX
+      : member.kind === "blockquote"
+        ? STANDALONE_BLOCKQUOTE_PREFIX
+        : undefined;
   return {
     kind: "complex-member",
     id: member.id,
