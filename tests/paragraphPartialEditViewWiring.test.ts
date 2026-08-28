@@ -128,10 +128,16 @@ describe("main.ts + PartialEditView.ts paragraph wiring (static source check, Ph
     const body = bodyOf(viewTs, "private applyEdit(): boolean {", "applyEdit");
     const paragraphBranchStart = body.indexOf("if (this.paragraphAnchor) {");
     expect(paragraphBranchStart).toBeGreaterThan(-1);
-    const paragraphBranchEnd = body.indexOf(
-      "const outcome = applySubtreeEdit(",
-      paragraphBranchStart
-    );
+    // Phase 5D-2A inserted a THIRD branch (if (this.compositeAnchor) {...})
+    // between the paragraph branch and the node branch's own
+    // `applySubtreeEdit` call — bounding on that call directly would now
+    // swallow the whole composite branch into this slice (its own doc
+    // comment mentions "applySubtreeEdit" in prose, which would then
+    // spuriously fail the `not.toContain` assertion below even though the
+    // executable paragraph-branch code itself never changed). Bounding on
+    // the compositeAnchor branch's own start instead isolates exactly the
+    // paragraph branch's own code, exactly like before Phase 5D-2A.
+    const paragraphBranchEnd = body.indexOf("if (this.compositeAnchor) {", paragraphBranchStart);
     expect(paragraphBranchEnd).toBeGreaterThan(paragraphBranchStart);
     const paragraphBranch = body.slice(paragraphBranchStart, paragraphBranchEnd);
     expect(paragraphBranch).toContain("applyParagraphEdit(doc, this.paragraphAnchor");

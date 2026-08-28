@@ -7,6 +7,14 @@
  * showListCommandMenu / showCompositeCommandMenu) were not touched by this
  * ticket.
  *
+ * Phase 5D-2A ("Atomic CompositeBlock Partial Edit", later) DID
+ * legitimately touch showCompositeCommandMenu — it added the composite
+ * PARENT node's own new "Open extended block in partial edit" entry point
+ * (activatePartialEditViewForComposite). The regression pin below is
+ * updated in place to assert the new, correct boundary (that addition
+ * happened, but with no openInNewWindow popout variant) rather than
+ * reverted — see this file's own updated doc comment on that test.
+ *
  * ---- Scope / what this file deliberately does NOT test -----------------
  *
  * Same testing-boundary rationale as every other *UiWiring.test.ts file in
@@ -94,10 +102,23 @@ describe("showStandaloneComplexBlockMenu: 'Open in new window' item (Phase 5C-4)
 });
 
 describe("regression: the other three per-kind menu builders are unaffected by this ticket", () => {
-  it("showCompositeCommandMenu (composite-member rows) does not gain any openInNewWindow / Partial Edit wiring", () => {
+  // Phase 5D-2A ("Atomic CompositeBlock Partial Edit") later gave
+  // showCompositeCommandMenu its OWN new, single entry point —
+  // activatePartialEditViewForComposite, via the "Open extended block in
+  // partial edit" item — deliberately WITHOUT an "open in new window"
+  // popout counterpart (the ticket added exactly one new entry point, not
+  // two). This pin is updated in place (not reverted) to reflect that
+  // intentional, later, explicitly-approved addition — see
+  // tests/compositeBlockPartialEditUiWiring.test.ts for that ticket's own
+  // full wiring coverage. What this test still pins down is the original
+  // Phase 5C-4 scope boundary: no openInNewWindow popout variant, and no
+  // reuse of the BARE activatePartialEditView(nodeId) entry point that
+  // section/list/standalone rows use.
+  it("showCompositeCommandMenu (composite rows) gained activatePartialEditViewForComposite (Phase 5D-2A) but still has no openInNewWindow popout variant and never reuses the bare activatePartialEditView(id) entry point", () => {
     const body = methodBody("composite");
     expect(body).not.toContain("openInNewWindow");
-    expect(body).not.toContain("activatePartialEditView");
+    expect(body).toContain("activatePartialEditViewForComposite");
+    expect(body).not.toMatch(/activatePartialEditView\(\s*(compositeId|nodeId|snapshot)\s*\)/);
   });
 
   it("showStructureCommandMenu (section rows) still has its own pre-existing popout item, unchanged", () => {

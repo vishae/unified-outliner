@@ -274,6 +274,13 @@ const en = {
   "tree.menu.deleteCompositeBlock": "Delete extended block",
   "tree.menu.compositeMoveUp": "Move extended block up",
   "tree.menu.compositeMoveDown": "Move extended block down",
+  // Phase 5D-2A: the CompositeBlock parent's own, whole-block Partial Edit
+  // entry point — deliberately a distinct key from tree.menu.
+  // openPartialEditPane (used by section/list/standalone/member rows),
+  // even though the wording is similar, since this ONE opens the entire
+  // CompositeBlock (list item + callout/blockquote) as one atomic editing
+  // unit rather than a single node.
+  "tree.menu.openCompositeInPartialEdit": "Open extended block in partial edit",
   // Phase 5C-3: standalone (non-composite-member) callout/blockquote move
   // menu items — deliberately NEW, dedicated keys rather than reusing
   // tree.menu.compositeMoveUp/Down above, since that pair's wording
@@ -342,6 +349,12 @@ const en = {
   // requestLoadParagraphAtCursor — see view/PartialEditView.ts's
   // renderLoadedState.
   "partialEdit.kindParagraph": "Paragraph",
+  // Phase 5D-2A: label for the whole-CompositeBlock Partial Edit pane
+  // (nodeKind === "composite") — "Extended block" matches this codebase's
+  // existing user-facing CompositeBlock terminology (see tree.menu.
+  // deleteCompositeBlock / reason.nested-in-list etc.), not "List + Callout"
+  // (that's a specific rule's own display name, not the generic kind noun).
+  "partialEdit.kindComposite": "Extended block",
   "partialEdit.close": "Close",
   "partialEdit.emptyPlaceholder":
     "Right-click a node in the Outline Tree View and choose “Open partial edit pane” / “Edit list subtree in pane” to load something here.",
@@ -356,6 +369,19 @@ const en = {
   // Phase 5P-2: Apply-success notice for a paragraph loaded via
   // requestLoadParagraphAtCursor — see view/PartialEditView.ts's applyEdit.
   "partialEdit.paragraphUpdated": "Unified Outliner: paragraph updated.",
+  // Phase 5D-2A: Apply-success notice for the whole-CompositeBlock pane
+  // (compositeAnchor) — shown when the edit still matches its original
+  // rule (ruleStillMatches !== false); see
+  // partialEdit.compositeRuleNoLongerMatches below for the other case.
+  "partialEdit.compositeUpdated": "Unified Outliner: extended block updated.",
+  // Phase 5D-2A (方針A): shown INSTEAD of partialEdit.compositeUpdated
+  // above, only when Apply succeeded but the just-written content no
+  // longer matches the CompositeBlock rule it was loaded from (e.g. a
+  // blank line was inserted, or a member was deleted) — purely
+  // informational, never a reason Apply itself was refused. Exact wording
+  // fixed by this ticket's own approval; do not reword.
+  "partialEdit.compositeRuleNoLongerMatches":
+    "Unified Outliner: this edit no longer matches the CompositeBlock rule. The blocks are now shown separately.",
   // Phase 5D-0.5: loadNodeInternal's quote-prefix-projection gate refuses
   // to open the Pane at all for a nested quote/nested callout (see
   // edit/quotePrefixProjection.ts's "nested" reason) — no raw fallback.
@@ -527,6 +553,25 @@ const en = {
     "Unified Outliner: the note changed since this extended block was selected — the move was cancelled to avoid affecting the wrong content.",
   "reason.compositeMoveRangeInvalid":
     "Unified Outliner: could not confirm this extended block's boundary — the move was skipped for safety.",
+
+  // ---- CompositeBlock Partial Edit reasons (Phase 5D-2A,
+  // edit/compositeBlockPartialEdit.ts's NoCompositePartialEditReason).
+  // "resolve-failed" reuses the existing generic reason.resolve-failed key
+  // above (operation-neutral wording, safe to share). "range-invalid" and
+  // "snapshot-mismatch" are DELIBERATELY separate from delete's/move's own
+  // reason.range-invalid / reason.compositeMoveRangeInvalid / reason.
+  // composite-boundary-changed / reason.compositeMoveBoundaryChanged keys
+  // — those say "deletion"/"the move" explicitly, which would misdescribe
+  // an edit rejection here (same reasoning moveCompositeBlock.ts's own top
+  // doc comment gives for why its own keys don't reuse delete's). There is
+  // no pre-existing generic "reason.conflict" key this ticket could reuse
+  // for compositePartialEditConflict either, so a dedicated key is added.
+  "reason.compositePartialEditRangeInvalid":
+    "Unified Outliner: could not confirm this extended block's boundary — the edit was skipped for safety.",
+  "reason.compositePartialEditSnapshotMismatch":
+    "Unified Outliner: the note changed since this extended block was selected — the edit was cancelled to avoid affecting the wrong content.",
+  "reason.compositePartialEditConflict":
+    "Unified Outliner: this extended block changed since the edit was loaded — apply was cancelled to avoid discarding that change.",
 
   // ---- CompositeBlock cursor/selection-driven move reasons
   // (move/resolveCompositeSelectionTarget.ts's CompositeSelectionRejectionReason,
@@ -882,6 +927,8 @@ const ja: Record<TranslationKey, string> = {
   "tree.menu.deleteCompositeBlock": "拡張ブロックを削除",
   "tree.menu.compositeMoveUp": "拡張ブロックを上へ移動",
   "tree.menu.compositeMoveDown": "拡張ブロックを下へ移動",
+  // Phase 5D-2A
+  "tree.menu.openCompositeInPartialEdit": "拡張ブロックを部分編集ペインで開く",
   "tree.menu.standaloneMoveUp": "上へ移動",
   "tree.menu.standaloneMoveDown": "下へ移動",
   "tree.menu.paragraphMoveUp": "上へ移動",
@@ -912,6 +959,8 @@ const ja: Record<TranslationKey, string> = {
   "partialEdit.kindCallout": "コールアウト",
   "partialEdit.kindBlockquote": "引用",
   "partialEdit.kindParagraph": "段落",
+  // Phase 5D-2A
+  "partialEdit.kindComposite": "拡張ブロック",
   "partialEdit.close": "閉じる",
   "partialEdit.emptyPlaceholder":
     "アウトラインツリービューでノードを右クリックし、「部分編集ペインを開く」／「リストサブツリーをペインで編集」を選ぶとここに読み込まれる。",
@@ -924,6 +973,15 @@ const ja: Record<TranslationKey, string> = {
   "partialEdit.listSubtreeUpdated": "Unified Outliner: リストサブツリーを更新した。",
   "partialEdit.sectionUpdated": "Unified Outliner: セクションを更新した。",
   "partialEdit.paragraphUpdated": "Unified Outliner: 段落を更新した。",
+  // Phase 5D-2A: 拡張ブロック全体編集Paneの Apply成功通知（元の rule に
+  // 一致し続けている場合）。一致しなくなった場合は下記
+  // partialEdit.compositeRuleNoLongerMatches を代わりに表示する。
+  "partialEdit.compositeUpdated": "Unified Outliner: 拡張ブロックを更新した。",
+  // Phase 5D-2A（方針A）: Apply自体は成功したが、書き戻した内容が元の
+  // CompositeBlock規則に一致しなくなった場合にのみ、上記の代わりに表示する。
+  // 文言はチケット承認時の指定どおり変更しない。
+  "partialEdit.compositeRuleNoLongerMatches":
+    "Unified Outliner: この編集後の内容は CompositeBlock の規則に一致しません。各 block は個別に表示されます。",
   // Phase 5D-0.5: ユーザー指定の文言をそのまま使用する。
   "partialEdit.quoteNestedUnsupported":
     "Unified Outliner: ネストした引用は現在の引用本文編集に未対応である。",
@@ -1065,6 +1123,14 @@ const ja: Record<TranslationKey, string> = {
     "Unified Outliner: この拡張ブロックを選択した後にノートが変更されたため、誤った内容に影響しないよう移動をキャンセルした。",
   "reason.compositeMoveRangeInvalid":
     "Unified Outliner: この拡張ブロックの範囲を確認できなかったため、安全のため移動をスキップした。",
+
+  // ---- CompositeBlock Partial Edit reasons (Phase 5D-2A) ----
+  "reason.compositePartialEditRangeInvalid":
+    "Unified Outliner: この拡張ブロックの範囲を確認できなかったため、安全のため編集をスキップした。",
+  "reason.compositePartialEditSnapshotMismatch":
+    "Unified Outliner: この拡張ブロックを選択した後にノートが変更されたため、誤った内容に影響しないよう編集をキャンセルした。",
+  "reason.compositePartialEditConflict":
+    "Unified Outliner: この編集を読み込んだ後に拡張ブロックの内容が変更されたため、その変更を破棄しないようApplyを中止した。",
 
   // ---- カーソル／選択範囲起点の拡張ブロックmove理由
   // (move/resolveCompositeSelectionTarget.ts の CompositeSelectionRejectionReason、

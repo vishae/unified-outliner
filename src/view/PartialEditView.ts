@@ -154,6 +154,14 @@ import {
   QuotePrefixProjection,
   reconstructQuoteHeader,
 } from "../edit/quotePrefixProjection";
+import {
+  applyCompositeBlockEdit,
+  compositePartialEditReasonText,
+  extractCompositeBlockText,
+} from "../edit/compositeBlockPartialEdit";
+import { CompositeBlockSnapshot } from "../edit/deleteCompositeBlock";
+import { compositeBlockDisplayLabel, getCompositeBlockRuleById } from "../model/compositeBlock";
+import { getEnabledCompositeBlockRules } from "../settingsDefaults";
 
 export const PARTIAL_EDIT_VIEW_TYPE = "unified-outliner-partial-edit";
 
@@ -172,7 +180,7 @@ export class PartialEditView extends ItemView {
   }
 
   private nodeId: string | null = null;
-  private nodeKind: SubtreeKind | "paragraph" | null = null;
+  private nodeKind: SubtreeKind | "paragraph" | "composite" | null = null;
   /**
    * Phase 5P-2: set instead of (never alongside) `nodeId` when the pane is
    * currently showing a paragraph loaded via requestLoadParagraphAtCursor —
@@ -180,6 +188,18 @@ export class PartialEditView extends ItemView {
    * rather than an extension of nodeId's own contract.
    */
   private paragraphAnchor: ParagraphEditAnchor | null = null;
+  /**
+   * Phase 5D-2A: set instead of (never alongside) `nodeId`/`paragraphAnchor`
+   * when the pane is currently showing an ENTIRE CompositeBlock (list item
+   * + callout/blockquote, loaded via requestLoadComposite) as one atomic
+   * editing unit. Exactly one of nodeId/paragraphAnchor/compositeAnchor is
+   * ever non-null at a time — see this class's own doc comment. Never
+   * re-identified by any id (composite-N, or any member's own id) across a
+   * re-parse — see edit/compositeBlockPartialEdit.ts's own top doc comment
+   * for why a CompositeBlockSnapshot's CONTENT (ruleId/sectionId/range/
+   * members) is the only safe re-identification basis.
+   */
+  private compositeAnchor: CompositeBlockSnapshot | null = null;
   private label = "";
   /** The pane's "before editing" snapshot — see edit/partialEdit.ts's applySubtreeEdit doc comment. */
   private originalText = "";
@@ -717,6 +737,33 @@ export class PartialEditView extends ItemView {
   }
 
   /**
+   * Phase 5D-2A: the CompositeBlock counterpart to requestLoadNode/
+   * requestLoadParagraphAtCursor above — the sole external entry point for
+   * loading an ENTIRE CompositeBlock (main.ts's
+   * activatePartialEditViewForComposite, itself called from the CompositeBlock
+   * parent's "Open extended block in partial edit" context-menu item).
+   * Same unsaved-edit guard (Apply/Discard/Cancel), reusing the exact same
+   * DiscardChangesModal — deliberately not a third modal/flow.
+   */
+  requestLoadComposite(snapshot: CompositeBlockSnapshot): void {
+    if (!this.isDirty()) {
+      this.loadCompositeInternal(snapshot);
+      return;
+    }
+    new DiscardChangesModal(this.app, this.plugin, (choice) => {
+      if (choice === "cancel") return;
+      if (choice === "discard") {
+        this.loadCompositeInternal(snapshot);
+        return;
+      }
+      // choice === "apply"
+      if (this.applyEdit()) {
+        this.loadCompositeInternal(snapshot);
+      }
+    }).open();
+  }
+
+  /**
    * Load `nodeId` (a section OR a list item id) from the currently active
    * note into this pane, replacing whatever was loaded before (the pane
    * always holds at most one node — see the "reuse, don't multiply" leaf
@@ -799,10 +846,11 @@ export class PartialEditView extends ItemView {
 
     this.nodeId = nodeId;
     this.nodeKind = extracted.kind;
-    // Phase 5P-2: clear any previously-loaded paragraph identity — exactly
-    // one of nodeId/paragraphAnchor is ever active at a time (see this
-    // class's own doc comment).
+    // Phase 5P-2/5D-2A: clear any previously-loaded paragraph/composite
+    // identity — exactly one of nodeId/paragraphAnchor/compositeAnchor is
+    // ever active at a time (see this class's own doc comment).
     this.paragraphAnchor = null;
+    this.compositeAnchor = null;
     this.originalText = extracted.text;
     this.quoteProjection = quoteProjection;
     this.label = label;
@@ -859,6 +907,9 @@ export class PartialEditView extends ItemView {
 
     this.nodeId = null;
     this.paragraphAnchor = buildParagraphEditAnchor(doc, paragraph);
+    // Phase 5D-2A: clear any previously-loaded composite identity — see
+    // this class's own doc comment on the three-way exclusivity.
+    this.compositeAnchor = null;
     this.nodeKind = "paragraph";
     this.originalText = paragraph.text;
     // Phase 5D-0.5: a paragraph never projects — see this class field's own
@@ -883,6 +934,69 @@ export class PartialEditView extends ItemView {
     this.renderLoadedState();
   }
 
+  /**
+   * Phase 5D-2A: CompositeBlock counterpart to loadNodeInternal/
+   * loadParagraphInternal above — loads the ENTIRE CompositeBlock (list
+   * item + callout/blockquote) described by `snapshot` as ONE raw-Markdown
+   * range. Never trusts `snapshot`'s own id/member ids as current truth —
+   * extractCompositeBlockText re-parses/re-scans/re-matches fresh and
+   * re-identifies the target purely by content (see that module's own top
+   * doc comment). Deliberately NOT a branch inside loadNodeInternal: a
+   * CompositeBlock has no BlockNode/ComplexBlockInfo id of its own (it is
+   * a read-only VIEW over two other models — model/compositeBlock.ts's own
+   * top doc comment), so its Apply-time re-resolution needs the whole
+   * CompositeBlockSnapshot, not a single id — same reasoning
+   * loadParagraphInternal's own doc comment gives for why IT can't reuse
+   * extractSubtreeText/applySubtreeEdit's id-only contract either.
+   *
+   * Per this ticket's approved scope: no quote-prefix-projection, no
+   * callout header title input/fold-marker select/type combobox, no
+   * breadcrumb/sibling-nav/Subtree Navigator — the pane shows the whole
+   * range as plain raw Markdown, at the same safety level as the existing
+   * section/list raw Partial Edit, and nothing more.
+   */
+  private loadCompositeInternal(snapshot: CompositeBlockSnapshot): void {
+    const view = this.activeMarkdownView.get();
+    if (!view) {
+      new Notice(this.plugin.t("partialEdit.noActiveNote"));
+      return;
+    }
+
+    const doc = parseDocument(view.editor.getValue());
+    const rules = getEnabledCompositeBlockRules(this.plugin.settings.compositeBlocks);
+    const extracted = extractCompositeBlockText(doc, snapshot, rules);
+    if (!extracted.ok || !extracted.resolvedSnapshot) {
+      // Phase 5D-2A: see the Apply-time branch's identical use of
+      // compositePartialEditReasonText below for why this is not a plain
+      // "reason." + extracted.reason concatenation.
+      new Notice(compositePartialEditReasonText(this.plugin.t.bind(this.plugin), extracted.reason));
+      return;
+    }
+
+    const t = this.plugin.t.bind(this.plugin);
+    const rule = getCompositeBlockRuleById(rules, extracted.resolvedSnapshot.ruleId);
+    const label = rule ? compositeBlockDisplayLabel(rule, t) : extracted.resolvedSnapshot.ruleId;
+
+    this.nodeId = null;
+    this.paragraphAnchor = null;
+    this.compositeAnchor = extracted.resolvedSnapshot;
+    this.nodeKind = "composite";
+    this.originalText = extracted.text;
+    // Phase 5D-2A explicit scope: no projection for the whole-CompositeBlock
+    // pane — see this method's own doc comment and currentDisplayText's
+    // doc comment (quoteProjection === null shows originalText verbatim).
+    this.quoteProjection = null;
+    this.label = label;
+    this.sourcePath = view.file?.path ?? null;
+    // Phase 5D-2A explicit scope: no breadcrumb / sibling nav / Subtree
+    // Navigator for a CompositeBlock — mirrors loadParagraphInternal's own
+    // identical choice above.
+    this.ancestors = [];
+    this.directChildren = [];
+    this.siblingState = { previous: null, next: null };
+    this.renderLoadedState();
+  }
+
   private renderEmptyState(): void {
     this.titleEl.setText(this.plugin.t("partialEdit.viewName"));
     this.textareaEl.value = "";
@@ -900,6 +1014,9 @@ export class PartialEditView extends ItemView {
     // implicitly leaves nodeId/nodeKind at their initial null values (never
     // set here), so paragraphAnchor is cleared explicitly to match.
     this.paragraphAnchor = null;
+    // Phase 5D-2A: reset alongside paragraphAnchor above — see the class
+    // field's own doc comment on the three-way exclusivity.
+    this.compositeAnchor = null;
     // Phase 5D-0.5: reset alongside paragraphAnchor above — see the class
     // field's own doc comment.
     this.quoteProjection = null;
@@ -930,6 +1047,8 @@ export class PartialEditView extends ItemView {
           return this.plugin.t("partialEdit.kindBlockquote");
         case "paragraph":
           return this.plugin.t("partialEdit.kindParagraph");
+        case "composite":
+          return this.plugin.t("partialEdit.kindComposite");
         case "section":
         default:
           return this.plugin.t("partialEdit.kindSection");
@@ -1381,7 +1500,7 @@ export class PartialEditView extends ItemView {
    * save.
    */
   private applyEdit(): boolean {
-    if (!this.nodeId && !this.paragraphAnchor) {
+    if (!this.nodeId && !this.paragraphAnchor && !this.compositeAnchor) {
       new Notice(this.plugin.t("partialEdit.noNodeLoaded"));
       return false;
     }
@@ -1479,6 +1598,86 @@ export class PartialEditView extends ItemView {
       this.plugin.queueOutlineTreeSelectionFollow(outcome.newStartLine);
 
       new Notice(this.plugin.t("partialEdit.paragraphUpdated"));
+      return true;
+    }
+
+    // Phase 5D-2A: a loaded CompositeBlock is a third, fully separate
+    // re-resolution path — see edit/compositeBlockPartialEdit.ts's own top
+    // doc comment for why it cannot reuse the node branch's nodeId-only
+    // contract below (a CompositeBlockSnapshot re-identifies by ruleId/
+    // sectionId/range/member kind-id-range, never by any scan-local id
+    // alone). This branch never touches this.nodeId/this.paragraphAnchor,
+    // or the node/paragraph branches' own apply calls, and the reverse is
+    // equally true — exactly one of nodeId/paragraphAnchor/compositeAnchor
+    // is ever set (see this class's own doc comment), so the three paths
+    // cannot interfere with each other. Explicit scope reminder (Phase
+    // 5D-2A ticket): this pane
+    // is raw-Markdown-only for a CompositeBlock — this.quoteProjection is
+    // always null here (loadCompositeInternal never sets it), so
+    // this.textareaEl.value is already the raw text to splice, exactly
+    // like the non-projecting node branch below.
+    if (this.compositeAnchor) {
+      const rules = getEnabledCompositeBlockRules(this.plugin.settings.compositeBlocks);
+      const outcome = applyCompositeBlockEdit(
+        doc,
+        this.compositeAnchor,
+        this.originalText,
+        this.textareaEl.value,
+        rules
+      );
+      if (!outcome.changed) {
+        // Phase 5D-2A: mapped via compositePartialEditReasonText, not a
+        // plain "reason." + outcome.reason concatenation — see that
+        // function's own doc comment (edit/compositeBlockPartialEdit.ts)
+        // for why "range-invalid"/"snapshot-mismatch"/"conflict" each need
+        // this module's own dedicated, non-reused i18n key.
+        new Notice(compositePartialEditReasonText(this.plugin.t.bind(this.plugin), outcome.reason));
+        return false;
+      }
+
+      applyLineEditOutcome(
+        editor,
+        { line: outcome.newStartLine, ch: 0 },
+        outcome.newStartLine,
+        doc.lines,
+        outcome,
+        () => {}
+      );
+
+      // Phase 5D-2A: re-anchor from outcome.resolvedSnapshot — present
+      // only when the just-applied text still forms a CompositeBlock
+      // matching the ORIGINAL ruleId at the same position (see that
+      // field's own doc comment on ApplyCompositeBlockEditOutcome). When
+      // it does not (方針A: a structure-breaking edit was permitted
+      // through), compositeAnchor becomes null and any FURTHER Apply from
+      // this same pane session correctly falls through to the top guard's
+      // "no node loaded" refusal, rather than silently operating against a
+      // CompositeBlock that no longer exists.
+      this.originalText = this.textareaEl.value;
+      this.compositeAnchor = outcome.resolvedSnapshot ?? null;
+      this.updateDirtyState();
+
+      const lineLen = editor.getLine(outcome.newStartLine)?.length ?? 0;
+      editor.scrollIntoView(
+        { from: { line: outcome.newStartLine, ch: 0 }, to: { line: outcome.newStartLine, ch: lineLen } },
+        true
+      );
+
+      // Phase 5T-5A: same selection-follow as the paragraph/node branches.
+      this.plugin.queueOutlineTreeSelectionFollow(outcome.newStartLine);
+
+      // Phase 5D-2A: the exact, user-required Notice text fires only when
+      // ruleStillMatches is explicitly false — never on double-Apply,
+      // Markdown auto-correction, or any automatic blank-line/member
+      // repositioning (applyCompositeBlockEdit never performs any of
+      // those; ruleStillMatches is a pure, non-gating re-derivation of
+      // what the user's OWN edit produced — see that field's own doc
+      // comment).
+      new Notice(
+        outcome.ruleStillMatches === false
+          ? this.plugin.t("partialEdit.compositeRuleNoLongerMatches")
+          : this.plugin.t("partialEdit.compositeUpdated")
+      );
       return true;
     }
 
@@ -1686,8 +1885,13 @@ export class PartialEditView extends ItemView {
     const titleDirty = titleSlot !== null && this.quoteTitleInputEl.value !== titleSlot.title;
     const markerDirty = titleSlot !== null && this.quoteMarkerSelectEl.value !== titleSlot.marker;
     const typeDirty = titleSlot !== null && this.quoteTypeInputEl.value !== titleSlot.type;
+    // Phase 5D-2A: ALSO counts a loaded CompositeBlock (compositeAnchor)
+    // as "something is loaded" here — otherwise a composite-wide edit
+    // would never register as dirty, silently defeating the unsaved-edit
+    // guard every requestLoadNode/requestLoadParagraphAtCursor/
+    // requestLoadComposite call already relies on via `if (!this.isDirty())`.
     return (
-      (this.nodeId !== null || this.paragraphAnchor !== null) &&
+      (this.nodeId !== null || this.paragraphAnchor !== null || this.compositeAnchor !== null) &&
       (this.textareaEl.value !== this.currentDisplayText() || titleDirty || markerDirty || typeDirty)
     );
   }

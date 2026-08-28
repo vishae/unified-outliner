@@ -1628,11 +1628,13 @@ export class OutlineTreeView extends ItemView {
       // Phase 5C-1 ticket 3b: a NEW, separate menu path for composite rows
       // — deliberately NOT gated by `!readOnly` (composite rows are always
       // in readOnlyNodeIds, which is what correctly keeps rename/drag/the
-      // structure+list menus above off of them). This is a delete-only
-      // menu, and showCompositeCommandMenu itself decides — by re-checking
-      // evaluateCompositeBlockDeletability against this refresh's
-      // currentComposites/currentComplexScan — whether to show anything at
-      // all; it shows NO menu (not even an empty one) when not deletable.
+      // structure+list menus above off of them). Originally a delete-only
+      // menu that showed nothing at all when not deletable; Phase 5D-2A
+      // adds an always-shown "Open extended block in partial edit" item
+      // (see showCompositeCommandMenu's own doc comment), so this menu is
+      // no longer ever empty — move up/down/delete are still each
+      // independently re-checked at menu-build time against this
+      // refresh's currentComposites/currentComplexScan.
       selfEl.addEventListener("contextmenu", (evt) => {
         evt.preventDefault();
         this.showCompositeCommandMenu(evt, node.id);
@@ -2812,17 +2814,23 @@ export class OutlineTreeView extends ItemView {
    * editor's content at the moment "Delete" is actually clicked. See this
    * class's own doc comment on currentComposites/currentComplexScan.
    *
-   * If the composite cannot currently be resolved, or NONE of delete/move-
-   * up/move-down apply to it (evaluateCompositeBlockDeletability says it
-   * isn't deletable AND evaluateCompositeBlockMovability says it isn't
-   * eligible in either direction), NO menu is shown at all (not even an
-   * empty one or a disabled item) — per approval §3, MVP omits each item
-   * entirely rather than showing a disabled one. Each of the three
-   * possible items (move up / move down / delete, Phase 5C-1 ticket 4-4)
-   * is gated INDEPENDENTLY — a composite can be movable in one or both
-   * directions while not deletable, or vice versa, since
-   * evaluateCompositeBlockMovability and evaluateCompositeBlockDeletability
-   * are deliberately separate, independently-re-derived judgments (see
+   * If the composite cannot currently be resolved, this method returns
+   * without opening any menu (an unresolvable composite has no snapshot to
+   * act on at all). Otherwise the menu is NEVER empty: Phase 5D-2A adds a
+   * brand-new, always-shown "Open extended block in partial edit" item
+   * (this composite PARENT node's own new entry point — see
+   * activatePartialEditViewForComposite's doc comment in main.ts; NOT
+   * added to any other row's menu), mirroring
+   * showStandaloneComplexBlockMenu's own "Partial Edit has no eligibility
+   * concept of its own, so this menu is never empty" policy — the old
+   * MVP-era "no menu at all when nothing is available" guard (§3) is
+   * retired along with it, since there is now always at least this one
+   * item. Move up / move down / delete remain gated exactly as before,
+   * each INDEPENDENTLY (Phase 5C-1 ticket 4-4) — a composite can be
+   * movable in one or both directions while not deletable, or vice versa,
+   * since evaluateCompositeBlockMovability and
+   * evaluateCompositeBlockDeletability are deliberately separate,
+   * independently-re-derived judgments (see
    * evaluateCompositeBlockMovability's own doc comment).
    */
   private showCompositeCommandMenu(evt: MouseEvent, compositeId: string): void {
@@ -2849,13 +2857,25 @@ export class OutlineTreeView extends ItemView {
       "down",
       this.currentComposites
     );
-    if (!deletability.deletable && !movabilityUp.eligible && !movabilityDown.eligible) return;
 
     const snapshot = buildCompositeBlockSnapshot(composite);
     const rules = getEnabledCompositeBlockRules(this.plugin.settings.compositeBlocks);
     const label = node.label;
 
     const menu = new Menu();
+
+    // Phase 5D-2A: always shown, no eligibility concept of its own — see
+    // this method's own doc comment above. PartialEditView re-resolves
+    // `snapshot` independently against current ground truth
+    // (extractCompositeBlockText) at load time, so no extra re-check is
+    // needed here, exactly like showStandaloneComplexBlockMenu's identical
+    // "Open in Partial Edit" item above.
+    menu.addItem((item) =>
+      item
+        .setTitle(this.plugin.t("tree.menu.openCompositeInPartialEdit"))
+        .setIcon("edit-3")
+        .onClick(() => void this.plugin.activatePartialEditViewForComposite(snapshot))
+    );
 
     if (movabilityUp.eligible) {
       menu.addItem((item) =>

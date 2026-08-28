@@ -9,7 +9,7 @@ import { moveNodeOnly } from "./move/moveNodeOnly";
 import { indentBlock } from "./move/indentBlock";
 import { scanComplexBlocks } from "./parser/complexBlocks";
 import { matchCompositeBlocks } from "./parser/compositeBlocks";
-import { buildCompositeBlockSnapshot } from "./edit/deleteCompositeBlock";
+import { buildCompositeBlockSnapshot, CompositeBlockSnapshot } from "./edit/deleteCompositeBlock";
 import { compositeMoveReasonText, moveCompositeBlock } from "./edit/moveCompositeBlock";
 import { CompositeMoveDirection } from "./move/findCompositeMoveTarget";
 import { resolveCompositeSelectionTarget } from "./move/resolveCompositeSelectionTarget";
@@ -919,6 +919,99 @@ export default class UnifiedOutlinerPlugin extends Plugin {
     }
     if (leaf.view instanceof PartialEditView) {
       leaf.view.requestLoadParagraphAtCursor(cursorLine);
+    }
+  }
+
+  /**
+   * Phase 5D-2A: Outline-Tree-side entry point for "Open extended block in
+   * partial edit" (CompositeBlock parent context-menu item only — see
+   * view/OutlineTreeView.ts's showCompositeCommandMenu). A full, independent
+   * duplicate of activatePartialEditViewForParagraph's own leaf-open/
+   * reveal/popout body, per this codebase's established "duplicate, don't
+   * extract" convention for Partial-Edit-Pane activation entry points (see
+   * activatePartialEditView's own doc comment, and
+   * tests/partialEditPanePlacementUiWiring.test.ts's static-source-text
+   * check on activatePartialEditView's literal body — a shared helper
+   * would defeat that check for every caller at once). The only
+   * substantive difference from activatePartialEditViewForParagraph is the
+   * final call: requestLoadComposite(snapshot) instead of
+   * requestLoadParagraphAtCursor(cursorLine) — PartialEditView does its
+   * own independent re-resolution of `snapshot` from current ground truth
+   * (edit/compositeBlockPartialEdit.ts's extractCompositeBlockText), never
+   * trusting the snapshot the Tree click captured as still current.
+   */
+  async activatePartialEditViewForComposite(
+    snapshot: CompositeBlockSnapshot,
+    options?: { openInNewWindow?: boolean }
+  ): Promise<void> {
+    const { workspace } = this.app;
+
+    this.activeMarkdownView.get();
+
+    const existing = workspace.getLeavesOfType(PARTIAL_EDIT_VIEW_TYPE);
+    let leaf: WorkspaceLeaf;
+
+    if (options?.openInNewWindow) {
+      try {
+        if (existing.length > 0) {
+          leaf = existing[0];
+          workspace.moveLeafToPopout(leaf);
+        } else {
+          leaf = workspace.openPopoutLeaf();
+          await leaf.setViewState({ type: PARTIAL_EDIT_VIEW_TYPE, active: true });
+        }
+      } catch (error) {
+        console.error(
+          "Unified Outliner: failed to open the partial edit pane in a new window.",
+          error
+        );
+        new Notice(this.t("notice.couldNotOpenPartialEditPaneNewWindow"));
+        return;
+      }
+    } else if (
+      existing.length > 0 &&
+      !partialEditLeafSharesTabGroupWithOutlineTree(
+        existing[0],
+        workspace.getLeavesOfType(OUTLINE_TREE_VIEW_TYPE)
+      )
+    ) {
+      leaf = existing[0];
+    } else {
+      // UXP-03c: see activatePartialEditView's identical comment above —
+      // duplicated here rather than shared, per this method's own doc
+      // comment on why it owns a fully independent copy of the
+      // leaf-open/reveal logic.
+      if (existing.length > 0) {
+        existing[0].detach();
+      }
+      const openWithoutSplit = hasOutlineTreeLeafInLeftSidebar(
+        workspace.getLeavesOfType(OUTLINE_TREE_VIEW_TYPE),
+        workspace.leftSplit
+      );
+      const newLeaf = openWithoutSplit ? workspace.getRightLeaf(false) : workspace.getRightLeaf(true);
+      if (!newLeaf) {
+        new Notice(this.t("notice.couldNotOpenRightSidebar"));
+        return;
+      }
+      leaf = newLeaf;
+      try {
+        await leaf.setViewState({ type: PARTIAL_EDIT_VIEW_TYPE, active: true });
+      } catch (error) {
+        console.error("Unified Outliner: failed to open the partial edit pane.", error);
+        new Notice(this.t("notice.couldNotOpenPartialEditPane"));
+        return;
+      }
+    }
+
+    try {
+      await workspace.revealLeaf(leaf);
+    } catch (error) {
+      console.error("Unified Outliner: failed to open the partial edit pane.", error);
+      new Notice(this.t("notice.couldNotOpenPartialEditPane"));
+      return;
+    }
+    if (leaf.view instanceof PartialEditView) {
+      leaf.view.requestLoadComposite(snapshot);
     }
   }
 
