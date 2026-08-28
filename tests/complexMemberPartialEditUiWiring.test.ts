@@ -1,22 +1,30 @@
 /**
  * Phase 5D-0.4 ("Enable Partial Edit for supported composite-member
  * callouts and blockquotes"): tests for the OutlineTreeView.ts UI wiring
- * this ticket added — showComplexMemberPartialEditMenu and the new
- * renderNode context-menu branch condition that attaches it:
+ * this ticket added — showComplexMemberMenu (renamed by Phase 5D-3B from
+ * showComplexMemberPartialEditMenu, see below) and the new renderNode
+ * context-menu branch condition that attaches it:
  *   isComplexMember && !node.isStandalone &&
  *   (node.complexKind === "callout" || node.complexKind === "blockquote")
  *
  * Same testing-boundary rationale as
  * tests/standaloneComplexBlockUiWiring.test.ts (see that file's own top doc
  * comment): "obsidian" is a types-only package here, so no ItemView/Menu is
- * ever instantiated. showComplexMemberPartialEditMenu itself has no
- * conditional logic (always exactly two items whenever reached at all), so
- * what matters is the ONE real decision point upstream of it: the branch
- * condition reproduced here directly against real OutlineTreeNode values
- * from the real buildOutlineTree pipeline.
+ * ever instantiated. The branch condition tested here is unaffected by
+ * Phase 5D-3B's changes to the menu itself, so it remains the ONE real
+ * decision point exercised in this file, reproduced directly against real
+ * OutlineTreeNode values from the real buildOutlineTree pipeline.
+ *
+ * Phase 5D-3B ("Composite Member Move Menu Parity") renamed
+ * showComplexMemberPartialEditMenu to showComplexMemberMenu and added
+ * Move up/down items to it (conditional on
+ * evaluateStandaloneComplexBlockMovability with allowComposedMember: true)
+ * — see tests/complexMemberMoveUiWiring.test.ts for that new eligibility
+ * logic. This file's own scope (the attach/no-attach branch condition) did
+ * not change and needed no logic updates, only this naming correction.
  *
  * Real menu-item appearance and DOM contextmenu dispatch are NOT exercised
- * here and require manual desktop verification instead (see this ticket's
+ * here and require manual desktop verification instead (see each ticket's
  * own report for the real-device pass on iPad).
  */
 import { describe, expect, it } from "vitest";

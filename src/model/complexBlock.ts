@@ -231,8 +231,22 @@ export type ComplexBlockRejection =
  *     re-verifies its own input rather than trusting it.
  *   - "composite-member": the target IS currently a matched CompositeBlock's
  *     own member (re-checked fresh against `allComposites`, never trusted
- *     from Tree-render time) — Phase 5C-3 approval §1 explicitly excludes
- *     composite members from this feature entirely.
+ *     from Tree-render time) — Phase 5C-3 approval §1 originally excluded
+ *     composite members from this feature entirely. Phase 5D-3B
+ *     ("Composite Member Move Menu Parity") added an explicit, opt-in
+ *     `allowComposedMember` parameter to
+ *     parser/compositeBlocks.ts#evaluateStandaloneComplexBlockMovability
+ *     that a caller may set to bypass ONLY this one check for the MOVING
+ *     target — default `false`, so every pre-5D-3B caller (the standalone
+ *     Tree menu, the cursor-based body-editor path) is byte-for-byte
+ *     unchanged and this reason remains fully reachable there. It also
+ *     still serves as this feature's own race-condition safety net: a
+ *     block that was standalone when a Tree menu snapshot was captured but
+ *     became a composite member by the time the move actually runs is
+ *     still correctly rejected via this same reason on that (non-opted-in)
+ *     path. The adjacent CANDIDATE side (whatever the target would swap
+ *     with) is never affected by this parameter — a composite member is
+ *     never an eligible swap partner, opted in or not.
  *   - "nested-in-list": the target's own `parentId` resolves to a
  *     list-typed node — i.e. it sits inside a list item's continuation
  *     rather than directly under its enclosing section (or under no

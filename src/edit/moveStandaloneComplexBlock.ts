@@ -124,6 +124,21 @@ export function buildStandaloneComplexBlockSnapshot(info: ComplexBlockInfo): Sta
 export interface StandaloneComplexBlockMoveRequest {
   snapshot: StandaloneComplexBlockSnapshot;
   direction: StandaloneMoveDirection;
+  /**
+   * Phase 5D-3B ("Composite Member Move Menu Parity"), default `false`:
+   * passed straight through to evaluateStandaloneComplexBlockMovability's
+   * own same-named parameter on every re-verification this function does
+   * (see moveStandaloneComplexBlock's own doc comment below). `false` (or
+   * omitted) reproduces this function's exact pre-5D-3B behavior — the
+   * snapshot's block must still be standalone at Apply time, or the move is
+   * safely refused with reason "composite-member". Set to `true` only by
+   * the NEW composite-member Tree menu dispatch, to allow moving a block
+   * that IS currently a matched CompositeBlock's own member. Never affects
+   * which adjacent block is an eligible swap PARTNER — that stays
+   * standalone-only regardless (see findStandaloneComplexBlockMoveTarget's
+   * own doc comment).
+   */
+  allowComposedMember?: boolean;
 }
 
 /**
@@ -214,6 +229,17 @@ function snapshotMatches(snapshot: StandaloneComplexBlockSnapshot, info: Complex
  * `text` — or returns `changed: false` (original `lines` byte-for-byte
  * unchanged) with a stable `reason` when it cannot safely do so.
  *
+ * `request.allowComposedMember` (Phase 5D-3B, default `false`, threaded
+ * unchanged into both the judge and resolver calls below): the ONLY thing
+ * this whole function does differently when it is `true` is that the
+ * `snapshot`'s block is allowed to currently be a matched CompositeBlock's
+ * own member. Every other step below — parse/scan/match, snapshotMatches,
+ * the adjacency scan, `swapBlocks` itself — is completely unaffected; the
+ * function's title ("swaps the standalone complex block... with the
+ * adjacent standalone callout/blockquote") still accurately describes the
+ * adjacent CANDIDATE side even when `allowComposedMember` is `true`, since
+ * that side is never widened.
+ *
  * Steps (fixed order per Phase 5C-3 approval):
  *   1. `findRangeInvalidReason` on the snapshot alone — "range-invalid" on
  *      failure.
@@ -222,12 +248,13 @@ function snapshotMatches(snapshot: StandaloneComplexBlockSnapshot, info: Complex
  *      then find the ComplexBlockInfo matching `snapshot` via
  *      `snapshotMatches`. "standalone-boundary-changed" if none matches.
  *   3. `evaluateStandaloneComplexBlockMovability(doc, complexScan, resolved,
- *      direction, composites)` (the judge). `eligible: false` -> that exact
- *      `reason`.
+ *      direction, composites, allowComposedMember)` (the judge). `eligible:
+ *      false` -> that exact `reason`.
  *   4. `findStandaloneComplexBlockMoveTarget(doc, complexScan, resolved,
- *      direction, composites)` (the resolver), re-run against the SAME
- *      doc/complexScan/composites step 3 just used. `null` -> "no-target"
- *      (defensive; see NoStandaloneComplexBlockMoveReason's own doc comment
+ *      direction, composites, allowComposedMember)` (the resolver), re-run
+ *      against the SAME doc/complexScan/composites step 3 just used. `null`
+ *      -> "no-target" (defensive; see NoStandaloneComplexBlockMoveReason's
+ *      own doc comment
  *      for why this should be unreachable in practice).
  *   5. `move/moveBlock.ts#swapBlocks(lines, resolved.range, target.range)`
  *      — UNCHANGED, existing primitive. Returns `changed: true` with the
@@ -240,7 +267,7 @@ export function moveStandaloneComplexBlock(
 ): StandaloneComplexBlockMoveOutcome {
   const doc: ParsedDocument = parseDocument(text);
   const lines = doc.lines;
-  const { snapshot, direction } = request;
+  const { snapshot, direction, allowComposedMember = false } = request;
 
   const rangeInvalidReason = findRangeInvalidReason(snapshot, lines.length);
   if (rangeInvalidReason) {
@@ -255,12 +282,26 @@ export function moveStandaloneComplexBlock(
     return rejected(lines, "standalone-boundary-changed");
   }
 
-  const movability = evaluateStandaloneComplexBlockMovability(doc, complexScan, resolved, direction, composites);
+  const movability = evaluateStandaloneComplexBlockMovability(
+    doc,
+    complexScan,
+    resolved,
+    direction,
+    composites,
+    allowComposedMember
+  );
   if (!movability.eligible) {
     return rejected(lines, movability.reason);
   }
 
-  const target = findStandaloneComplexBlockMoveTarget(doc, complexScan, resolved, direction, composites);
+  const target = findStandaloneComplexBlockMoveTarget(
+    doc,
+    complexScan,
+    resolved,
+    direction,
+    composites,
+    allowComposedMember
+  );
   if (!target) {
     return rejected(lines, "no-target");
   }

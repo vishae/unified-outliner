@@ -126,3 +126,45 @@ describe("findStandaloneComplexBlockMoveTarget: propagates judge rejection as nu
     expect(findStandaloneComplexBlockMoveTarget(doc, complexScan, one, "down", composites)).toBeNull();
   });
 });
+
+describe("findStandaloneComplexBlockMoveTarget: allowComposedMember opt-in (Phase 5D-3B)", () => {
+  it("with allowComposedMember: true, a composite member resolves ('down') to its genuine standalone sibling's range — the same resolution the judge's own positive test proved eligible", () => {
+    const text = ["- ![[scan.png]]", "> [!ocr]", "> body", "", "> [!tip] standalone"].join("\n");
+    const { doc, complexScan, composites } = pipeline(text);
+    expect(composites).toHaveLength(1);
+    const memberInfo = complexScan.blocks.find((b) => b.id === composites[0].members[1].id)!;
+    const standalone = calloutOrBlockquoteOf(complexScan, "standalone", doc);
+
+    const target = findStandaloneComplexBlockMoveTarget(
+      doc,
+      complexScan,
+      memberInfo,
+      "down",
+      composites,
+      true
+    );
+    expect(target).toEqual({
+      range: { startLine: standalone.range.startLine, endLine: standalone.range.endLine },
+      targetId: standalone.id,
+    });
+  });
+
+  it("without the opt-in (omitted, or explicit false), the same member/direction still returns null (composite-member rejection unchanged)", () => {
+    const text = ["- ![[scan.png]]", "> [!ocr]", "> body", "", "> [!tip] standalone"].join("\n");
+    const { doc, complexScan, composites } = pipeline(text);
+    const memberInfo = complexScan.blocks.find((b) => b.id === composites[0].members[1].id)!;
+    expect(findStandaloneComplexBlockMoveTarget(doc, complexScan, memberInfo, "down", composites)).toBeNull();
+    expect(
+      findStandaloneComplexBlockMoveTarget(doc, complexScan, memberInfo, "down", composites, false)
+    ).toBeNull();
+  });
+
+  it("with allowComposedMember: true, direction 'up' still returns null (the member's own anchor list item is never a candidate)", () => {
+    const text = ["- ![[scan.png]]", "> [!ocr]", "> body", "", "> [!tip] standalone"].join("\n");
+    const { doc, complexScan, composites } = pipeline(text);
+    const memberInfo = complexScan.blocks.find((b) => b.id === composites[0].members[1].id)!;
+    expect(
+      findStandaloneComplexBlockMoveTarget(doc, complexScan, memberInfo, "up", composites, true)
+    ).toBeNull();
+  });
+});

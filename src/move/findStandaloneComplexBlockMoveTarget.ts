@@ -79,15 +79,31 @@ export interface StandaloneComplexBlockMoveTarget {
  *      the result is still defensively null-checked rather than assumed.
  *   3. `range` = the resolved adjacent block's own range, `targetId` = its
  *      own id.
+ *
+ * `allowComposedMember` (Phase 5D-3B, default `false`): passed straight
+ * through to evaluateStandaloneComplexBlockMovability, unchanged — see that
+ * function's own doc comment. This resolver adds no logic of its own around
+ * it: the adjacency scan in step 2 is exactly the same standalone-only scan
+ * regardless of this flag's value, since findAdjacentStandaloneComplexBlock
+ * itself has no `allowComposedMember` concept — only the MOVING target's
+ * own composite-membership check (inside the judge) is affected.
  */
 export function findStandaloneComplexBlockMoveTarget(
   doc: ParsedDocument,
   complexScan: ComplexBlockScanResult,
   target: ComplexBlockInfo,
   direction: StandaloneMoveDirection,
-  allComposites: CompositeBlockInfo[]
+  allComposites: CompositeBlockInfo[],
+  allowComposedMember = false
 ): StandaloneComplexBlockMoveTarget | null {
-  const movability = evaluateStandaloneComplexBlockMovability(doc, complexScan, target, direction, allComposites);
+  const movability = evaluateStandaloneComplexBlockMovability(
+    doc,
+    complexScan,
+    target,
+    direction,
+    allComposites,
+    allowComposedMember
+  );
   if (!movability.eligible) {
     return null;
   }

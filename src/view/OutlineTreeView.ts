@@ -1674,24 +1674,31 @@ export class OutlineTreeView extends ItemView {
       // second member (defensive, matches this ticket's own scope: only
       // callout/blockquote members get an editing entry point).
       //
-      // Deliberately a NEW, narrower menu (showComplexMemberPartialEditMenu)
-      // rather than reusing showStandaloneComplexBlockMenu as-is: that
-      // method also offers "Move standalone block up/down"
-      // (evaluateStandaloneComplexBlockMovability), which assumes the
-      // target is NOT a composite member (its own move-target search
-      // walks complexScan.blocks directly, with no composite-membership
-      // awareness) and which this ticket explicitly does not extend to
-      // composite members (no move/drag & drop for members — unchanged
-      // from Phase 5D-0.3 approval §1). The two Partial Edit items
-      // themselves call the exact same activatePartialEditView(nodeId)
-      // entry point as the standalone row, which re-resolves the target
-      // fresh via extractSubtreeText at click/Apply time regardless of
-      // whether nodeId happens to belong to a standalone or a
-      // composite-member block — no member-specific loader or Apply path
-      // exists or is needed.
+      // Phase 5D-3B ("Composite Member Move Menu Parity") ADDED Move up/
+      // down to this menu, reusing showStandaloneComplexBlockMenu's own
+      // evaluateStandaloneComplexBlockMovability/
+      // dispatchAndApplyStandaloneComplexBlockMove pipeline via the new,
+      // opt-in `allowComposedMember: true` argument — see
+      // parser/compositeBlocks.ts#evaluateStandaloneComplexBlockMovability's
+      // doc comment for the full design. This menu (renamed
+      // showComplexMemberMenu, since it is no longer Partial-Edit-only) is
+      // still deliberately NOT a bare call to showStandaloneComplexBlockMenu:
+      // that method always passes allowComposedMember's implicit default
+      // (false), so it would keep rejecting a composite member with reason
+      // "composite-member" — this menu instead computes movability itself,
+      // passing true, so member Move can succeed when a genuine standalone
+      // sibling exists while the moving-target-only, opt-in nature of the
+      // parameter leaves the adjacent-candidate side (still standalone-
+      // only) and every other standalone Tree Move call site completely
+      // unaffected. The two Partial Edit items themselves call the exact
+      // same activatePartialEditView(nodeId) entry point as the standalone
+      // row, which re-resolves the target fresh via extractSubtreeText at
+      // click/Apply time regardless of whether nodeId happens to belong to
+      // a standalone or a composite-member block — no member-specific
+      // loader or Apply path exists or is needed.
       selfEl.addEventListener("contextmenu", (evt) => {
         evt.preventDefault();
-        this.showComplexMemberPartialEditMenu(evt, node.id);
+        this.showComplexMemberMenu(evt, node.id);
       });
     } else if (isParagraph) {
       // Phase 5T-1 ("Outline Tree の paragraph context menu からの安全な上下
@@ -3039,7 +3046,7 @@ export class OutlineTreeView extends ItemView {
    * Phase 5D-0.4: the composite-member counterpart of
    * showStandaloneComplexBlockMenu above — for a callout/blockquote row
    * that IS a CompositeBlock member (node.isStandalone === false). Offers
-   * ONLY the two Partial Edit items, both reusing the exact same
+   * the two Partial Edit items, both reusing the exact same
    * activatePartialEditView(nodeId[, opts]) entry point and
    * tree.menu.openPartialEditPane(NewWindow) i18n keys as every other
    * "Open in Partial Edit" item in this file (section/list/standalone
@@ -3050,17 +3057,37 @@ export class OutlineTreeView extends ItemView {
    * exactly like the standalone menu's own doc comment already explains —
    * so no eligibility re-check is needed here either.
    *
-   * Deliberately NOT a superset/reuse of showStandaloneComplexBlockMenu:
-   * that method also unconditionally computes and offers "Move up"/"Move
-   * down" via evaluateStandaloneComplexBlockMovability/
-   * buildStandaloneComplexBlockSnapshot, both of which assume their target
-   * is a standalone (non-member) block and have no composite-membership
-   * awareness at all. Composite-member move/drag & drop remains explicitly
-   * out of scope (Phase 5D-0.3 approval §1, unchanged by this ticket), so
-   * this menu never offers it — a member row's menu is always exactly
-   * these two items, never conditionally fewer or more.
+   * Phase 5D-3B ("Composite Member Move Menu Parity") RENAMED this method
+   * from showComplexMemberPartialEditMenu (it is no longer Partial-Edit-
+   * only) and ADDED Move up/down items, mirroring
+   * showStandaloneComplexBlockMenu's own Move-item block above almost
+   * verbatim — same buildStandaloneComplexBlockSnapshot/
+   * evaluateStandaloneComplexBlockMovability/
+   * dispatchAndApplyStandaloneComplexBlockMove calls, same
+   * tree.menu.standaloneMoveUp/standaloneMoveDown i18n keys (deliberately
+   * reused, not duplicated — the wording ("Move up"/"Move down") carries no
+   * "standalone"-specific phrasing and applies equally well here), same
+   * "arrow-up"/"arrow-down" icons. The one difference: both
+   * evaluateStandaloneComplexBlockMovability and
+   * dispatchAndApplyStandaloneComplexBlockMove are called with
+   * `allowComposedMember: true`, the new Phase 5D-3B opt-in that bypasses
+   * ONLY the "composite-member" rejection for the MOVING target — every
+   * other check (kind/editability, nested-in-list, the adjacency scan for
+   * a genuine standalone sibling, different-section) is unchanged from the
+   * standalone menu's own gate, and the adjacent-CANDIDATE side stays
+   * standalone-only regardless. In the common 2-member composite-rule case
+   * (image-ocr/image-quote) this naturally — never via a hardcoded
+   * rejection — leaves Move up ineligible (the member's own anchor list
+   * item is not a complex-block candidate) while Move down becomes
+   * eligible exactly when a real standalone callout/blockquote member
+   * follows in the same parent. A successful move reuses
+   * moveStandaloneComplexBlock/swapBlocks unchanged: the member is moved
+   * as one raw-range unit, with no correction to its `>` prefix, header,
+   * fold marker, title, body, or blank-line gaps, and CompositeBlock
+   * matching is allowed to dissolve — the Tree simply reprojects the moved
+   * row to a standalone node on next refresh, per 案A (Phase 5D-3A).
    */
-  private showComplexMemberPartialEditMenu(evt: MouseEvent, nodeId: string): void {
+  private showComplexMemberMenu(evt: MouseEvent, nodeId: string): void {
     const menu = new Menu();
     menu.addItem((item) =>
       item
@@ -3076,6 +3103,53 @@ export class OutlineTreeView extends ItemView {
           void this.plugin.activatePartialEditView(nodeId, { openInNewWindow: true })
         )
     );
+
+    const doc = this.currentDoc;
+    const complexScan = this.currentComplexScan;
+    const target = complexScan?.blocks.find((b) => b.id === nodeId);
+    if (doc && complexScan && target) {
+      const snapshot = buildStandaloneComplexBlockSnapshot(target);
+      if (snapshot) {
+        const rules = getEnabledCompositeBlockRules(this.plugin.settings.compositeBlocks);
+        const movabilityUp = evaluateStandaloneComplexBlockMovability(
+          doc,
+          complexScan,
+          target,
+          "up",
+          this.currentComposites,
+          true
+        );
+        const movabilityDown = evaluateStandaloneComplexBlockMovability(
+          doc,
+          complexScan,
+          target,
+          "down",
+          this.currentComposites,
+          true
+        );
+        if (movabilityUp.eligible) {
+          menu.addItem((item) =>
+            item
+              .setTitle(this.plugin.t("tree.menu.standaloneMoveUp"))
+              .setIcon("arrow-up")
+              .onClick(() =>
+                this.dispatchAndApplyStandaloneComplexBlockMove(snapshot, "up", rules, true)
+              )
+          );
+        }
+        if (movabilityDown.eligible) {
+          menu.addItem((item) =>
+            item
+              .setTitle(this.plugin.t("tree.menu.standaloneMoveDown"))
+              .setIcon("arrow-down")
+              .onClick(() =>
+                this.dispatchAndApplyStandaloneComplexBlockMove(snapshot, "down", rules, true)
+              )
+          );
+        }
+      }
+    }
+
     this.showTrackedMenu(menu, evt);
   }
 
@@ -3108,11 +3182,20 @@ export class OutlineTreeView extends ItemView {
    * menu-build time (showStandaloneComplexBlockMenu → here) — never a bare
    * complex-block id, for the same reason dispatchAndApplyCompositeDelete's
    * own doc comment explains for composites.
+   *
+   * Phase 5D-3B added the optional `allowComposedMember` parameter (default
+   * `false`, so both existing call sites inside showStandaloneComplexBlockMenu
+   * are unchanged and keep passing `false` implicitly) purely to thread it
+   * through to moveStandaloneComplexBlock's own request object — see that
+   * function's doc comment (edit/moveStandaloneComplexBlock.ts) for what the
+   * flag does. Only showComplexMemberMenu's own Move up/down items pass
+   * `true` here.
    */
   private dispatchAndApplyStandaloneComplexBlockMove(
     snapshot: StandaloneComplexBlockSnapshot,
     direction: StandaloneMoveDirection,
-    rules: CompositeBlockRule[]
+    rules: CompositeBlockRule[],
+    allowComposedMember = false
   ): boolean {
     const view = this.activeMarkdownView.get();
     if (!view) return false;
@@ -3124,7 +3207,11 @@ export class OutlineTreeView extends ItemView {
     }
 
     const text = editor.getValue();
-    const outcome = moveStandaloneComplexBlock(text, { snapshot, direction }, rules);
+    const outcome = moveStandaloneComplexBlock(
+      text,
+      { snapshot, direction, allowComposedMember },
+      rules
+    );
 
     const cursor = { line: snapshot.range.startLine, ch: 0 };
     const changed = applyLineEditOutcome(

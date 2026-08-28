@@ -884,7 +884,13 @@ export function findAdjacentStandaloneComplexBlock(
  *      own anchor re-check above.
  *   2. `target.id` must NOT currently be some CompositeBlockInfo's own
  *      member (re-checked fresh against `allComposites`) — otherwise
- *      "composite-member".
+ *      "composite-member". Phase 5D-3B ("Composite Member Move Menu
+ *      Parity"): this ONE check is skipped when the caller passes
+ *      `allowComposedMember: true` (default `false`) — see this
+ *      function's own `allowComposedMember` parameter doc below. Every
+ *      other condition in this list (including the CANDIDATE side's own
+ *      standalone-only restriction in step 3) is completely unaffected by
+ *      this flag.
  *   3. A real adjacent boundary must be found in `direction`: scan from
  *      just outside `target.range` (skipBlankLines, reused unchanged from
  *      ticket 4-1/4-2), then resolve it
@@ -900,13 +906,29 @@ export function findAdjacentStandaloneComplexBlock(
  *      own `parentId` (both null — top-of-document — also counts as
  *      equal, mirroring matchCompositeBlocks's own resolveMemberSectionId
  *      convention). Otherwise: "different-section".
+ *
+ * `allowComposedMember` (Phase 5D-3B, default `false`): when `true`, step 2
+ * above is skipped, so `target` MAY currently be a matched CompositeBlock's
+ * own member. This is the ONLY behavioral difference the parameter makes —
+ * every other condition (kind/editability/nested-in-list eligibility on
+ * `target`, and the CANDIDATE side's own standalone-only restriction, which
+ * `findAdjacentStandaloneComplexBlock` always applies regardless of this
+ * flag) is identical either way. Every pre-5D-3B caller either omits this
+ * parameter or passes `false` explicitly, so this function's behavior for
+ * every existing caller (the standalone Tree menu, and
+ * edit/moveStandaloneComplexBlock.ts's own re-verification of a standalone
+ * move) is byte-for-byte unchanged. Only the NEW composite-member Tree menu
+ * (Phase 5D-3B) passes `true`, and only for the block being moved — it
+ * never widens the adjacent-candidate search to include other composite
+ * members (see step 3's own doc comment above).
  */
 export function evaluateStandaloneComplexBlockMovability(
   doc: ParsedDocument,
   complexScan: ComplexBlockScanResult,
   target: ComplexBlockInfo,
   direction: "up" | "down",
-  allComposites: CompositeBlockInfo[]
+  allComposites: CompositeBlockInfo[],
+  allowComposedMember = false
 ): StandaloneComplexBlockMovability {
   if (target.kind !== "callout" && target.kind !== "blockquote") {
     return { eligible: false, reason: "not-supported" };
@@ -920,7 +942,7 @@ export function evaluateStandaloneComplexBlockMovability(
       return { eligible: false, reason: "nested-in-list" };
     }
   }
-  if (isComposedMember(allComposites, target.id)) {
+  if (!allowComposedMember && isComposedMember(allComposites, target.id)) {
     return { eligible: false, reason: "composite-member" };
   }
 

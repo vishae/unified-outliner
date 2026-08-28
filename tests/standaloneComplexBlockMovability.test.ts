@@ -219,6 +219,83 @@ describe("evaluateStandaloneComplexBlockMovability: negative cases reachable via
   });
 });
 
+describe("evaluateStandaloneComplexBlockMovability: allowComposedMember opt-in (Phase 5D-3B)", () => {
+  it("a composite member becomes eligible ('down') with allowComposedMember: true when a genuine standalone sibling follows", () => {
+    const text = ["- ![[scan.png]]", "> [!ocr]", "> body", "", "> [!tip] standalone"].join("\n");
+    const { doc, complexScan, composites } = pipeline(text);
+    expect(composites).toHaveLength(1);
+    const memberInfo = complexScan.blocks.find((b) => b.id === composites[0].members[1].id)!;
+    expect(
+      evaluateStandaloneComplexBlockMovability(doc, complexScan, memberInfo, "down", composites, true)
+    ).toEqual({ eligible: true });
+  });
+
+  it("omitting the argument (or passing false) reproduces the existing 'rejects (composite-member)' behavior unchanged — proving the default is backward-compatible", () => {
+    const text = ["- ![[scan.png]]", "> [!ocr]", "> body", "", "> [!tip] standalone"].join("\n");
+    const { doc, complexScan, composites } = pipeline(text);
+    const memberInfo = complexScan.blocks.find((b) => b.id === composites[0].members[1].id)!;
+    const omitted = evaluateStandaloneComplexBlockMovability(doc, complexScan, memberInfo, "down", composites);
+    const explicitFalse = evaluateStandaloneComplexBlockMovability(
+      doc,
+      complexScan,
+      memberInfo,
+      "down",
+      composites,
+      false
+    );
+    expect(omitted).toEqual({ eligible: false, reason: "composite-member" });
+    expect(explicitFalse).toEqual(omitted);
+  });
+
+  it("a composite member with allowComposedMember: true still rejects (no-adjacent-compatible-unit) in direction 'up' — its own anchor list item is never itself a candidate, so this is never reachable via a hardcoded rejection", () => {
+    const text = ["- ![[scan.png]]", "> [!ocr]", "> body", "", "> [!tip] standalone"].join("\n");
+    const { doc, complexScan, composites } = pipeline(text);
+    const memberInfo = complexScan.blocks.find((b) => b.id === composites[0].members[1].id)!;
+    expect(
+      evaluateStandaloneComplexBlockMovability(doc, complexScan, memberInfo, "up", composites, true)
+    ).toEqual({ eligible: false, reason: "no-adjacent-compatible-unit" });
+  });
+
+  it("allowComposedMember: true does not bypass nested-in-list — this check runs strictly before the (bypassable) composite-member check, so a nested target rejects (nested-in-list) regardless of the flag", () => {
+    const text = ["# H", "- item", "  > [!note] nested", "  > body", "", "> [!tip] two", "> body b"].join(
+      "\n"
+    );
+    const { doc, complexScan, composites } = pipeline(text);
+    const nested = calloutOrBlockquoteOf(complexScan, "nested", doc);
+    expect(
+      evaluateStandaloneComplexBlockMovability(doc, complexScan, nested, "down", composites, true)
+    ).toEqual({ eligible: false, reason: "nested-in-list" });
+  });
+
+  it("allowComposedMember: true does not bypass not-supported — an unsupported-editability composite-shaped block still rejects (not-supported)", () => {
+    const text = ["- ![[scan.png]]", "> [!ocr]", "> > [!warning] nested", "", "> [!tip] two"].join("\n");
+    const { doc, complexScan, composites } = pipeline(text);
+    const unsupported = complexScan.blocks.find((b) => b.editability === "unsupported")!;
+    expect(unsupported).toBeDefined();
+    expect(
+      evaluateStandaloneComplexBlockMovability(doc, complexScan, unsupported, "down", composites, true)
+    ).toEqual({ eligible: false, reason: "not-supported" });
+  });
+
+  it("allowComposedMember: true does not widen the CANDIDATE side — a member whose only adjacent neighbor is another composite's member still rejects (no-adjacent-compatible-unit)", () => {
+    const text = [
+      "- ![[scan-1.png]]",
+      "> [!ocr]",
+      "> body one",
+      "",
+      "- ![[scan-2.png]]",
+      "> [!ocr]",
+      "> body two",
+    ].join("\n");
+    const { doc, complexScan, composites } = pipeline(text);
+    expect(composites).toHaveLength(2);
+    const firstMember = complexScan.blocks.find((b) => b.id === composites[0].members[1].id)!;
+    expect(
+      evaluateStandaloneComplexBlockMovability(doc, complexScan, firstMember, "down", composites, true)
+    ).toEqual({ eligible: false, reason: "no-adjacent-compatible-unit" });
+  });
+});
+
 describe("evaluateStandaloneComplexBlockMovability: negative cases requiring a hand-built ComplexBlockScanResult", () => {
   // "different-section" via the real top-to-bottom scan is structurally
   // unreachable: skipBlankLines only ever skips BLANK lines, so any content

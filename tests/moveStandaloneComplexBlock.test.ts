@@ -225,6 +225,91 @@ describe("moveStandaloneComplexBlock: rejections leave text byte-identical", () 
   });
 });
 
+describe("moveStandaloneComplexBlock: allowComposedMember opt-in (Phase 5D-3B)", () => {
+  it("with allowComposedMember: true, successfully swaps a composite member down with a genuine standalone sibling, preserving the '>' prefix/header/body/blank-line gap verbatim as one raw-range unit (no reconstruction)", () => {
+    const text = ["- ![[scan.png]]", "> [!ocr]", "> body", "", "> [!tip] standalone"].join("\n");
+    const { doc, complexScan, composites } = pipeline(text);
+    expect(composites).toHaveLength(1);
+    const memberInfo = complexScan.blocks.find((b) => b.id === composites[0].members[1].id)!;
+    // buildStandaloneComplexBlockSnapshot has no composite-membership
+    // assumption of its own (Phase 5D-3B pre-implementation confirmation
+    // item ②) — it snapshots a composite member exactly the same way it
+    // snapshots any other ComplexBlockInfo.
+    const snapshot = buildStandaloneComplexBlockSnapshot(memberInfo)!;
+    expect(snapshot).not.toBeNull();
+
+    const outcome = moveStandaloneComplexBlock(
+      text,
+      { snapshot, direction: "down", allowComposedMember: true },
+      DEFAULT_COMPOSITE_BLOCK_RULES
+    );
+    expect(outcome.changed).toBe(true);
+    expect(outcome.lines).toEqual([
+      "- ![[scan.png]]",
+      "> [!tip] standalone",
+      "",
+      "> [!ocr]",
+      "> body",
+    ]);
+    // The member's own new start line, per swapBlocks' contract (source
+    // relocates to old_source_start + target_length + gap_length = 1+1+1).
+    expect(outcome.lines[outcome.newStartLine]).toBe("> [!ocr]");
+
+    // CompositeBlock matching for the MOVED member specifically is allowed
+    // to dissolve as a result (案A) — confirmed here by re-scanning/
+    // re-matching the moved-into text and observing the moved "[!ocr]"
+    // callout (now sitting after a blank line, not immediately after any
+    // list item) is no longer any composite's member. Note this fixture
+    // happens to form a NEW, unrelated composite match at the anchor list
+    // item's own position, since "> [!tip] standalone" — a real callout —
+    // now coincidentally sits immediately after it; composite matching is
+    // purely structural (kindSequence), so that is expected and is not
+    // itself a regression — the point of 案A is specifically that the
+    // MOVED block's own prior membership is not preserved/re-corrected.
+    const movedDoc = parseDocument(outcome.lines.join("\n"));
+    const movedScan = scanComplexBlocks(movedDoc);
+    const movedOcr = movedScan.blocks.find((b) => movedDoc.lines[b.range.startLine].includes("[!ocr]"))!;
+    expect(movedOcr).toBeDefined();
+    const movedComposites = matchCompositeBlocks(movedDoc, movedScan, DEFAULT_COMPOSITE_BLOCK_RULES);
+    const movedOcrIsStillAMember = movedComposites.some((c) =>
+      c.members.some((m) => m.id === movedOcr.id)
+    );
+    expect(movedOcrIsStillAMember).toBe(false);
+  });
+
+  it("without the opt-in (omitted request field), the identical request/text still rejects (composite-member) and leaves text byte-identical — proving the default is unchanged", () => {
+    const text = ["- ![[scan.png]]", "> [!ocr]", "> body", "", "> [!tip] standalone"].join("\n");
+    const { complexScan, composites } = pipeline(text);
+    const memberInfo = complexScan.blocks.find((b) => b.id === composites[0].members[1].id)!;
+    const snapshot = buildStandaloneComplexBlockSnapshot(memberInfo)!;
+
+    const outcome = moveStandaloneComplexBlock(
+      text,
+      { snapshot, direction: "down" },
+      DEFAULT_COMPOSITE_BLOCK_RULES
+    );
+    expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("composite-member");
+    expect(outcome.lines).toEqual(text.split("\n"));
+  });
+
+  it("with allowComposedMember: true, direction 'up' is still safely rejected (no-adjacent-compatible-unit), never a hardcoded rejection reason", () => {
+    const text = ["- ![[scan.png]]", "> [!ocr]", "> body", "", "> [!tip] standalone"].join("\n");
+    const { complexScan, composites } = pipeline(text);
+    const memberInfo = complexScan.blocks.find((b) => b.id === composites[0].members[1].id)!;
+    const snapshot = buildStandaloneComplexBlockSnapshot(memberInfo)!;
+
+    const outcome = moveStandaloneComplexBlock(
+      text,
+      { snapshot, direction: "up", allowComposedMember: true },
+      DEFAULT_COMPOSITE_BLOCK_RULES
+    );
+    expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("no-adjacent-compatible-unit");
+    expect(outcome.lines).toEqual(text.split("\n"));
+  });
+});
+
 describe("standaloneComplexBlockMoveReasonText", () => {
   it("maps every NoStandaloneComplexBlockMoveReason to a non-empty, distinct-per-locale string", () => {
     const en = createTranslator("en");
