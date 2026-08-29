@@ -194,7 +194,7 @@ function rejected(lines: string[], reason: NoStandaloneComplexBlockMoveReason): 
  * defensively re-checked here (even though the type already narrows it) in
  * case a caller constructs a snapshot from untyped/deserialized data.
  */
-function findRangeInvalidReason(
+export function findRangeInvalidReason(
   snapshot: StandaloneComplexBlockSnapshot,
   lineCount: number
 ): "range-invalid" | null {
@@ -213,8 +213,17 @@ function findRangeInvalidReason(
  * and deliberately excludes any body-text comparison (see this module's top
  * doc comment for why a move is not content-sensitive the way Partial Edit
  * is).
+ *
+ * Exported (Phase 5D-3C, "Callout and Blockquote Drag and Drop") so
+ * edit/dropStandaloneComplexBlock.ts can reuse this EXACT same
+ * structural-match predicate for its own drop-time source re-resolution —
+ * D&D's snapshot re-verification contract is deliberately identical to
+ * Move's own (see this ticket's approval: "Drag and Drop の source
+ * snapshot は、既存 Move の StandaloneComplexBlockSnapshot を再利用するか、
+ * それと同じ契約を守る専用 snapshot とする"), so this predicate must never
+ * drift between the two features.
  */
-function snapshotMatches(snapshot: StandaloneComplexBlockSnapshot, info: ComplexBlockInfo): boolean {
+export function snapshotMatches(snapshot: StandaloneComplexBlockSnapshot, info: ComplexBlockInfo): boolean {
   if (info.kind !== snapshot.kind) return false;
   if (info.range.startLine !== snapshot.range.startLine || info.range.endLine !== snapshot.range.endLine) {
     return false;

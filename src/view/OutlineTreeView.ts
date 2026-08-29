@@ -208,9 +208,16 @@ import { StandaloneMoveDirection } from "../move/findStandaloneComplexBlockMoveT
 import {
   buildStandaloneComplexBlockSnapshot,
   moveStandaloneComplexBlock,
+  snapshotMatches,
   StandaloneComplexBlockSnapshot,
   standaloneComplexBlockMoveReasonText,
 } from "../edit/moveStandaloneComplexBlock";
+import { dropStandaloneComplexBlock } from "../edit/dropStandaloneComplexBlock";
+import {
+  resolveStandaloneComplexBlockDropTarget,
+  StandaloneComplexBlockDropTargetHint,
+  StandaloneComplexBlockDropZone,
+} from "../move/findStandaloneComplexBlockDropTarget";
 import {
   buildParagraphMoveAnchor,
   moveParagraphFromAnchor,
@@ -364,6 +371,30 @@ interface ParagraphDragSession {
   sourceParentId: string | null;
 }
 
+/**
+ * Phase 5D-3C ("Callout and Blockquote Drag and Drop", 案A approved):
+ * drag session state for a standalone OR CompositeBlock-member callout/
+ * blockquote row being dragged as a D&D SOURCE — the callout/blockquote
+ * counterpart to ParagraphDragSession above, deliberately just as thin:
+ * the ONLY safety-bearing field is `snapshot` (re-verified fresh, never
+ * trusted as-is, by resolveStandaloneComplexBlockDropTarget/
+ * dropStandaloneComplexBlock at every dragover and at drop — mirrors
+ * ParagraphDragSession.anchor's own role exactly). Deliberately NOT the
+ * SAME field as `paragraphDragSession`: a single native HTML5 drag
+ * operation can only have one source, but keeping the two session types as
+ * separate, independently-nullable fields (rather than a tagged union)
+ * lets every existing paragraphDragSession call site stay byte-for-byte
+ * unchanged — this ticket only ADDS a new field and new call sites that
+ * check it, mirroring how endDrag() already clears both unconditionally
+ * (see that method's own updated doc comment).
+ */
+interface StandaloneComplexBlockDragSession {
+  /** Captured once at dragstart via buildStandaloneComplexBlockSnapshot — see this module's moveStandaloneComplexBlock.ts import (the EXACT same snapshot type/builder Move already uses, reused unchanged per this ticket's own approval). */
+  snapshot: StandaloneComplexBlockSnapshot;
+  /** The dragged row's OWN Tree view id — DOM cleanup / row-highlight bookkeeping ONLY, never a comparison key for identity or safety (mirrors ParagraphDragSession.sourceTreeNodeId's own role). */
+  sourceTreeNodeId: string;
+}
+
 export class OutlineTreeView extends ItemView {
   private treeRootEl!: HTMLElement;
   // Keyed by the CURRENT parse's node.id, exactly as every prior phase —
@@ -490,6 +521,18 @@ export class OutlineTreeView extends ItemView {
    * kind, is ever active at a time — see this field's own doc comment).
    */
   private paragraphDragSession: ParagraphDragSession | null = null;
+
+  /**
+   * Phase 5D-3C: the in-progress standalone/CompositeBlock-member
+   * callout/blockquote drag, if any — see StandaloneComplexBlockDragSession's
+   * own doc comment above. A SEPARATE field from both dragSourceId and
+   * paragraphDragSession, for the same reason paragraphDragSession is its
+   * own field rather than reusing dragSourceId (see that field's own doc
+   * comment) — only one of the three is ever set at a time, and
+   * endDrag() clears all three unconditionally (see that method's own
+   * updated doc comment).
+   */
+  private calloutDragSession: StandaloneComplexBlockDragSession | null = null;
 
   /**
    * UXP-02 (2026-08-12, docs/uxp-02-long-press-menu-duplicate.md): the
@@ -741,6 +784,8 @@ export class OutlineTreeView extends ItemView {
     // call — a view close/unload must not leave a paragraph drag session
     // (and its DOM classes, on elements about to be emptied anyway) set.
     this.cancelParagraphDrag();
+    // Phase 5D-3C: same reasoning for a callout/blockquote drag session.
+    this.cancelCalloutDrag();
     this.contentEl.empty();
     // Phase 4E: flush any fold-state mutation still sitting inside the
     // debounce window rather than leaving it to onunload's synchronous,
@@ -771,6 +816,10 @@ export class OutlineTreeView extends ItemView {
     // specifically needs this even though moveParagraphFromAnchor's own
     // re-verification would still reject a stale drop safely on its own.
     this.cancelParagraphDrag();
+    // Phase 5D-3C: same unconditional, refresh()-cause-agnostic guard for
+    // an in-progress callout/blockquote drag session — see
+    // cancelCalloutDrag's own doc comment.
+    this.cancelCalloutDrag();
 
     // Inline rename in progress: never tear down the row's <input> out
     // from under the user for an unrelated refresh trigger (debounced
@@ -2006,15 +2055,15 @@ export class OutlineTreeView extends ItemView {
       // device pass first observed, root-caused here, and fixed by this
       // branch rather than merely documented as a known limitation.
       //
-      // This branch wires dragover/drop ONLY — never `draggable`, never
-      // `dragstart` — a standalone callout/blockquote row still never
-      // becomes a drag SOURCE (unchanged from before); it becomes a drop
-      // TARGET only, and only while a paragraph drag session
-      // (this.paragraphDragSession) is actually active — see
-      // handleParagraphDragOver/handleParagraphDrop's own generalized
-      // `paragraphDropTargetHint` resolution below, which now accepts
-      // either an OutlineTreeParagraphNode or an
-      // OutlineTreeComplexMemberNode.
+      // dragover/drop here handle BOTH an in-progress paragraph drag
+      // session (this.paragraphDragSession — unchanged, original 5T-2
+      // bridge behavior) AND, as of Phase 5D-3C, an in-progress callout/
+      // blockquote drag session (this.calloutDragSession) targeting this
+      // row — handleParagraphDragOver/handleParagraphDrop each check
+      // this.calloutDragSession FIRST and delegate to the shared
+      // handleCalloutDragOverNode/handleCalloutDropNode core when it is
+      // set, before falling through to their original paragraph-only
+      // logic (see either method's own updated doc comment).
       //
       // fenced-code/table/thematic-break are deliberately excluded here:
       // tree/buildOutlineTree.ts only ever computes `isStandalone: true`
@@ -2027,11 +2076,72 @@ export class OutlineTreeView extends ItemView {
       // Tree-view-model constraint (not a 5T-2 regression), recorded as
       // such in the 5T-2 completion report rather than silently
       // "verified" against a row that cannot exist.
+      //
+      // Phase 5D-3C ADDS `draggable`/`dragstart`/`dragend` here — a
+      // standalone callout/blockquote row now ALSO becomes a valid D&D
+      // SOURCE (not just a drop target), reusing handleCalloutDragStart
+      // (the same dragstart handler the new composite-member branch below
+      // uses too). This is purely additive: the row's pre-existing
+      // drop-target behavior (for a paragraph drag) is completely
+      // unchanged, and handleDragEnd's endDrag() already clears
+      // calloutDragSession unconditionally (see that method's own updated
+      // doc comment), so no new dragend logic was needed either.
+      selfEl.setAttribute("draggable", "true");
+      selfEl.addEventListener("dragstart", (evt) =>
+        this.handleCalloutDragStart(evt, node, itemEl)
+      );
       selfEl.addEventListener("dragover", (evt) =>
         this.handleParagraphDragOver(evt, node, selfEl)
       );
       selfEl.addEventListener("dragleave", () => this.handleDragLeave(selfEl));
       selfEl.addEventListener("drop", (evt) => this.handleParagraphDrop(evt, node, selfEl));
+      selfEl.addEventListener("dragend", () => this.handleDragEnd());
+    } else if (
+      isComplexMember &&
+      !node.isStandalone &&
+      (node.complexKind === "callout" || node.complexKind === "blockquote") &&
+      !Platform.isMobile
+    ) {
+      // Phase 5D-3C ("Callout and Blockquote Drag and Drop", 案A
+      // approved): a SEVENTH, entirely new drag-wiring branch — for a
+      // CompositeBlock-MEMBER callout/blockquote row (node.isStandalone
+      // === false). Before this ticket such a row had NO drag wiring of
+      // any kind (it fails every branch above: not `!readOnly`, not a
+      // paragraph node, and the standalone bridge branch immediately
+      // above requires `node.isStandalone`), matching the pre-5D-3C
+      // Phase 5D-0.3 approval §1 contract
+      // ("member child node...からの...drag & drop" intentionally
+      // unaddressed — see docs/phase5d0_3_final-review.md §7).
+      //
+      // This ticket's own approval (案A) makes a composite-member row a
+      // valid D&D SOURCE, on equal footing with a standalone row — reused
+      // via the EXACT SAME handleCalloutDragStart used by the standalone
+      // branch above. It deliberately does NOT join the standalone-only
+      // paragraph<->callout/blockquote bridge as a drop TARGET for an
+      // in-progress PARAGRAPH drag — that bridge's own `node.isStandalone`
+      // gate (immediately above) is left untouched, so this ticket does
+      // not widen paragraph D&D's own pre-existing target scope. This
+      // row's own dragover/drop instead check ONLY
+      // `this.calloutDragSession` directly (never paragraphDragSession),
+      // via the same shared handleCalloutDragOverNode/handleCalloutDropNode
+      // core every other eligible row kind uses.
+      selfEl.setAttribute("draggable", "true");
+      selfEl.addEventListener("dragstart", (evt) =>
+        this.handleCalloutDragStart(evt, node, itemEl)
+      );
+      selfEl.addEventListener("dragover", (evt) => {
+        if (this.calloutDragSession) this.handleCalloutDragOverNode(evt, node, selfEl);
+      });
+      selfEl.addEventListener("dragleave", () => this.handleDragLeave(selfEl));
+      selfEl.addEventListener("drop", (evt) => {
+        evt.preventDefault();
+        if (!this.calloutDragSession) return;
+        const session = this.calloutDragSession;
+        this.clearDropIndicator();
+        this.endDrag();
+        this.handleCalloutDropNode(session, evt, node, selfEl);
+      });
+      selfEl.addEventListener("dragend", () => this.handleDragEnd());
     }
 
     if (hasChildren && !isCollapsed) {
@@ -5260,6 +5370,23 @@ export class OutlineTreeView extends ItemView {
    * what makes a drop illegal per the HTML5 DnD spec).
    */
   private handleDragOver(evt: DragEvent, targetId: string, selfEl: HTMLElement): void {
+    // Phase 5D-3C: a callout/blockquote drag session hovering a section or
+    // list row is resolved through the SAME shared core every other row
+    // kind uses (handleCalloutDragOverNode) — an early, purely additive
+    // branch ahead of this method's own pre-existing section/list logic
+    // below, which never runs at all while a callout/blockquote drag is
+    // active (this.dragSourceId is never set at the same time
+    // this.calloutDragSession is — only one drag session of any kind is
+    // ever active at once).
+    if (this.calloutDragSession) {
+      const node = this.nodeById.get(targetId);
+      if (!node) {
+        if (this.dropIndicatorEl === selfEl) this.clearDropIndicator();
+        return;
+      }
+      this.handleCalloutDragOverNode(evt, node, selfEl);
+      return;
+    }
     if (!this.dragSourceId || !this.currentDoc) return;
     if (!this.canDropAny(this.currentDoc, this.dragSourceId, targetId)) {
       if (this.dropIndicatorEl === selfEl) this.clearDropIndicator();
@@ -5276,6 +5403,17 @@ export class OutlineTreeView extends ItemView {
 
   private handleDrop(evt: DragEvent, targetId: string, selfEl: HTMLElement): void {
     evt.preventDefault();
+    // Phase 5D-3C: same early, additive branch as handleDragOver above —
+    // a callout/blockquote drag session dropped onto a section or list row
+    // is resolved through the shared handleCalloutDropNode core.
+    if (this.calloutDragSession) {
+      const session = this.calloutDragSession;
+      this.clearDropIndicator();
+      this.endDrag();
+      const node = this.nodeById.get(targetId);
+      if (node) this.handleCalloutDropNode(session, evt, node, selfEl);
+      return;
+    }
     const sourceId = this.dragSourceId;
     const doc = this.currentDoc;
     this.clearDropIndicator();
@@ -5303,6 +5441,9 @@ export class OutlineTreeView extends ItemView {
     // reliably clean up a paragraph drag too without needing its own
     // parallel copy of this method.
     this.paragraphDragSession = null;
+    // Phase 5D-3C: same unconditional-clear treatment for a callout/
+    // blockquote drag session — see calloutDragSession's own doc comment.
+    this.calloutDragSession = null;
   }
 
   /**
@@ -5316,6 +5457,18 @@ export class OutlineTreeView extends ItemView {
    */
   private cancelParagraphDrag(): void {
     if (!this.paragraphDragSession) return;
+    this.endDrag();
+    this.clearDropIndicator();
+  }
+
+  /**
+   * Phase 5D-3C: cancels an in-progress callout/blockquote drag session
+   * specifically — mirrors cancelParagraphDrag's own doc comment/role
+   * exactly, called from the exact same two call sites (refresh(),
+   * onClose()), never from a native drag event.
+   */
+  private cancelCalloutDrag(): void {
+    if (!this.calloutDragSession) return;
     this.endDrag();
     this.clearDropIndicator();
   }
@@ -5411,6 +5564,17 @@ export class OutlineTreeView extends ItemView {
     node: OutlineTreeParagraphNode | OutlineTreeComplexMemberNode,
     selfEl: HTMLElement
   ): void {
+    // Phase 5D-3C: a callout/blockquote drag session hovering a paragraph
+    // or complex-member row is resolved through the shared
+    // handleCalloutDragOverNode core — an early, purely additive branch
+    // ahead of this method's own pre-existing paragraph-drag logic below,
+    // which never runs at all while a callout/blockquote drag is active
+    // (this.paragraphDragSession is never set at the same time
+    // this.calloutDragSession is).
+    if (this.calloutDragSession) {
+      this.handleCalloutDragOverNode(evt, node, selfEl);
+      return;
+    }
     const session = this.paragraphDragSession;
     const doc = this.currentDoc;
     if (!session || !doc) return;
@@ -5475,6 +5639,17 @@ export class OutlineTreeView extends ItemView {
     selfEl: HTMLElement
   ): void {
     evt.preventDefault();
+    // Phase 5D-3C: same early, additive branch as handleParagraphDragOver
+    // above — a callout/blockquote drag session dropped onto a paragraph
+    // or complex-member row is resolved through the shared
+    // handleCalloutDropNode core.
+    if (this.calloutDragSession) {
+      const calloutSession = this.calloutDragSession;
+      this.clearDropIndicator();
+      this.endDrag();
+      this.handleCalloutDropNode(calloutSession, evt, node, selfEl);
+      return;
+    }
     const session = this.paragraphDragSession;
     this.clearDropIndicator();
     this.endDrag();
@@ -5577,6 +5752,306 @@ export class OutlineTreeView extends ItemView {
       }
       return relocateSection(doc, sourceId, targetId, mode);
     });
+  }
+
+  // ---- Phase 5D-3C ("Callout and Blockquote Drag and Drop", 案A
+  // approved): standalone / CompositeBlock-member callout/blockquote D&D
+  // -------------------------------------------------------------------
+  //
+  // A SIXTH drag-wiring family, alongside section/list (Phase 3A/4A),
+  // paragraph (Phase 5T-2), and the standalone-callout/blockquote-as-
+  // paragraph-drop-target bridge (Phase 5T-2 fix) already defined above.
+  // Reuses move/moveBlock.ts#insertBlockAt (UNCHANGED, via
+  // edit/dropStandaloneComplexBlock.ts) rather than any new text-splice
+  // primitive, and reuses edit/moveStandaloneComplexBlock.ts's own
+  // StandaloneComplexBlockSnapshot/buildStandaloneComplexBlockSnapshot/
+  // snapshotMatches (also UNCHANGED) for source identity — see this
+  // ticket's own approval for why both reuses are required, not merely
+  // convenient.
+  //
+  // The two methods below (handleCalloutDragOverNode/handleCalloutDropNode)
+  // are the SHARED resolution core, called from FOUR places: this class's
+  // own handleDragOver/handleDrop (section/list rows) and
+  // handleParagraphDragOver/handleParagraphDrop (paragraph/complex-member
+  // rows) — each of those four methods checks `this.calloutDragSession`
+  // FIRST, as a new early branch, before falling through to its
+  // pre-existing (untouched) behavior. This lets a callout/blockquote be
+  // dropped relative to ANY of those row kinds via ONE single resolution
+  // path, without duplicating the resolve-source/resolve-target/zone/
+  // resolver sequence four times, and without ever letting two separate
+  // 'dragover'/'drop' listeners on the same row race each other (a real
+  // risk that was deliberately designed around — see this method's own
+  // git history / the ticket's pre-commit report for why a SECOND,
+  // independent listener pair was rejected in favor of this shared-branch
+  // approach).
+
+  /** Phase 5D-3C (v1 scope): upper half -> "before", lower half -> "after". Deliberately mirrors computeParagraphDropZone's own two-way split (own independent type — see StandaloneComplexBlockDropZone's own doc comment for why it is not shared with ParagraphDropZone). */
+  private computeCalloutDropZone(evt: DragEvent, el: HTMLElement): StandaloneComplexBlockDropZone {
+    const rect = el.getBoundingClientRect();
+    const ratio = rect.height > 0 ? (evt.clientY - rect.top) / rect.height : 0.5;
+    return ratio < 0.5 ? "before" : "after";
+  }
+
+  /**
+   * Phase 5D-3C: resolves the CURRENT source ComplexBlockInfo for the
+   * active callout/blockquote drag session, by re-finding a
+   * this.currentComplexScan block that structurally matches the session's
+   * own snapshot (snapshotMatches, reused unchanged from
+   * edit/moveStandaloneComplexBlock.ts). Uses the CACHED
+   * this.currentComplexScan, not a fresh re-parse — safe for the same
+   * reason handleParagraphDragOver's own doc comment gives for reusing
+   * this.currentDoc: any document change since drag-start would already
+   * have torn this session down via cancelCalloutDrag()/refresh(). Returns
+   * null when no session is active or it can no longer be resolved this
+   * way (dragover simply shows no indicator in that case — the actual
+   * DROP still re-verifies everything again from a fully fresh parse, via
+   * edit/dropStandaloneComplexBlock.ts).
+   */
+  private resolveCalloutDragSource(): ComplexBlockInfo | null {
+    const session = this.calloutDragSession;
+    const complexScan = this.currentComplexScan;
+    if (!session || !complexScan) return null;
+    return complexScan.blocks.find((b) => snapshotMatches(session.snapshot, b)) ?? null;
+  }
+
+  /**
+   * Phase 5D-3C: resolves a hovered/dropped-on Tree row of ANY kind into a
+   * StandaloneComplexBlockDropTargetHint, or null when that row's kind or
+   * current shape is not a valid v1 drop target. Mirrors
+   * move/findStandaloneComplexBlockDropTarget.ts's own top doc comment's
+   * v1 target scope exactly:
+   *
+   *   - a top-level-of-section list item (NOT nested inside another list
+   *     item's continuation) -> eligible.
+   *   - a paragraph or complex-member (callout/blockquote/fenced-code/
+   *     table/thematic-break, standalone OR CompositeBlock-member) Tree
+   *     row, resolved fresh against this.currentComplexScan (a paragraph
+   *     row's own id is a Tree-view-only identity — see
+   *     OutlineTreeParagraphNode's own doc comment — so its cached
+   *     rangeStart/rangeEnd/parentId fields are used directly instead, the
+   *     same fields paragraphDropTargetHint's own paragraph branch already
+   *     relies on) -> eligible only when NOT nested inside a list item's
+   *     continuation.
+   *   - a section, or a CompositeBlock's own aggregate row -> never
+   *     eligible in this v1 (see this ticket's own approval for why both
+   *     are explicitly out of scope).
+   */
+  private calloutDropTargetHint(node: OutlineTreeNode): StandaloneComplexBlockDropTargetHint | null {
+    const doc = this.currentDoc;
+    if (!doc) return null;
+
+    if (isOutlineListNode(node)) {
+      const listNode = doc.nodes.get(node.id);
+      if (!listNode || listNode.type !== "list") return null;
+      if (listNode.parentId) {
+        const owner = doc.nodes.get(listNode.parentId);
+        if (owner && owner.type === "list") return null;
+      }
+      return {
+        range: { startLine: listNode.range.startLine, endLine: listNode.range.endLine },
+        parentId: listNode.parentId,
+      };
+    }
+
+    if (node.kind === "paragraph") {
+      if (node.parentId) {
+        const owner = doc.nodes.get(node.parentId);
+        if (owner && owner.type === "list") return null;
+      }
+      return {
+        range: { startLine: node.rangeStart, endLine: node.rangeEnd },
+        parentId: node.parentId,
+      };
+    }
+
+    if (node.kind === "complex-member") {
+      const scan = this.currentComplexScan;
+      if (!scan) return null;
+      const block = scan.blocks.find((b) => b.id === node.id);
+      if (!block) return null;
+      if (block.parentId) {
+        const owner = doc.nodes.get(block.parentId);
+        if (owner && owner.type === "list") return null;
+      }
+      return {
+        range: { startLine: block.range.startLine, endLine: block.range.endLine },
+        parentId: block.parentId,
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * Phase 5D-3C dragstart for a standalone or CompositeBlock-member
+   * callout/blockquote row. Builds a StandaloneComplexBlockSnapshot from
+   * the CURRENT refresh()-time complexScan (the EXACT SAME snapshot
+   * builder Move's own Tree menu already uses — see
+   * buildStandaloneComplexBlockSnapshot's own doc comment) and stores it as
+   * this session's sole safety-bearing field. If resolution or snapshot-
+   * building fails, the drag is cancelled at the browser level via
+   * preventDefault() — mirrors handleParagraphDragStart's own exact
+   * failure-handling shape.
+   *
+   * Deliberately does NOT check composite membership here (or anywhere
+   * else in this ticket's own source-eligibility path) — a
+   * CompositeBlock-member row is just as valid a D&D source as a
+   * standalone one, per this ticket's own approved 案A. Kind/editability/
+   * nested-in-list re-verification still happens, at both dragover
+   * (resolveStandaloneComplexBlockDropTarget) and drop
+   * (edit/dropStandaloneComplexBlock.ts), never trusted from this
+   * dragstart-time snapshot alone.
+   */
+  private handleCalloutDragStart(
+    evt: DragEvent,
+    node: OutlineTreeComplexMemberNode,
+    itemEl: HTMLElement
+  ): void {
+    const complexScan = this.currentComplexScan;
+    if (!complexScan) {
+      evt.preventDefault();
+      return;
+    }
+    const info = complexScan.blocks.find((b) => b.id === node.id);
+    if (!info) {
+      evt.preventDefault();
+      return;
+    }
+    const snapshot = buildStandaloneComplexBlockSnapshot(info);
+    if (!snapshot) {
+      evt.preventDefault();
+      return;
+    }
+    this.calloutDragSession = { snapshot, sourceTreeNodeId: node.id };
+    this.draggingItemEl = itemEl;
+    itemEl.addClass("unified-outliner-dragging");
+    if (evt.dataTransfer) {
+      // Same intentionally-empty-sentinel convention as handleDragStart/
+      // handleParagraphDragStart above — see either of their own doc
+      // comments for the real-device rationale (dropping outside the Tree
+      // must never leak a raw internal id into the body as literal text).
+      evt.dataTransfer.setData("text/plain", "");
+      evt.dataTransfer.effectAllowed = "move";
+    }
+  }
+
+  /**
+   * Phase 5D-3C: shared dragover resolution for a callout/blockquote drag
+   * session hovering `node` (of ANY row kind — see calloutDropTargetHint's
+   * own doc comment for the exact v1-eligible kinds). Called from
+   * handleDragOver (section/list rows), handleParagraphDragOver (paragraph/
+   * complex-member rows), and this ticket's own new composite-member
+   * branch in renderNode. Only calls preventDefault()/shows an indicator
+   * when resolveStandaloneComplexBlockDropTarget says the drop would
+   * actually be allowed — an invalid target gets no indicator and no
+   * drop-allowed cursor at all, matching every other D&D path in this
+   * file's own "don't call preventDefault -> browser shows its own
+   * not-allowed affordance" convention.
+   */
+  private handleCalloutDragOverNode(evt: DragEvent, node: OutlineTreeNode, selfEl: HTMLElement): void {
+    const doc = this.currentDoc;
+    const composites = this.currentComposites;
+    const source = this.resolveCalloutDragSource();
+    const target = source ? this.calloutDropTargetHint(node) : null;
+    if (!doc || !composites || !source || !target) {
+      if (this.dropIndicatorEl === selfEl) this.clearDropIndicator();
+      return;
+    }
+    const zone = this.computeCalloutDropZone(evt, selfEl);
+    const resolution = resolveStandaloneComplexBlockDropTarget(doc, source, composites, target, zone);
+    if (!resolution.allowed) {
+      if (this.dropIndicatorEl === selfEl) this.clearDropIndicator();
+      return;
+    }
+    evt.preventDefault();
+    if (evt.dataTransfer) evt.dataTransfer.dropEffect = "move";
+    this.setDropIndicator(selfEl, zone);
+  }
+
+  /**
+   * Phase 5D-3C: shared drop resolution — mirrors handleCalloutDragOverNode's
+   * own role but for the drop event. `session` must be captured by the
+   * CALLER before invoking `clearDropIndicator()`/`endDrag()` (which null
+   * `this.calloutDragSession`) — every call site does this, mirroring
+   * handleParagraphDrop's own identical ordering requirement for
+   * `this.paragraphDragSession`.
+   */
+  private handleCalloutDropNode(
+    session: StandaloneComplexBlockDragSession,
+    evt: DragEvent,
+    node: OutlineTreeNode,
+    selfEl: HTMLElement
+  ): void {
+    const target = this.calloutDropTargetHint(node);
+    if (!target) return;
+    const zone = this.computeCalloutDropZone(evt, selfEl);
+    this.dispatchAndApplyStandaloneComplexBlockDrop(session.snapshot, target, zone);
+  }
+
+  /**
+   * Phase 5D-3C: dedicated, thin dispatch for a standalone/CompositeBlock-
+   * member callout/blockquote drop — mirrors
+   * dispatchAndApplyStandaloneComplexBlockMove's own exact shape (same
+   * multi-cursor guard, same "read the editor's CURRENT text and hand it
+   * to the pure function along with the drag-time snapshot/target/zone"
+   * pattern, same applyLineEditOutcome/scroll/refresh tail). All Markdown
+   * re-parsing, block re-resolution, target re-verification, and
+   * resolver/insertBlockAt invocation are
+   * edit/dropStandaloneComplexBlock.ts's job — nothing here duplicates any
+   * of it.
+   *
+   * The `notify` callback passed to applyLineEditOutcome is intentionally
+   * a no-op: per this ticket's own approval, no new i18n key was added
+   * for StandaloneComplexBlockDropRejectReason (see that type's own top
+   * doc comment in model/complexBlock.ts) — a rejected drop is
+   * communicated purely by the drop indicator never having appeared
+   * (dragover already filtered it out before drop could even be attempted
+   * in the ordinary case) and by the note staying byte-identical, matching
+   * this codebase's pre-existing convention for section/list D&D's own
+   * NoRelocateReason (confirmed, before this ticket, to have zero i18n
+   * bindings).
+   */
+  private dispatchAndApplyStandaloneComplexBlockDrop(
+    snapshot: StandaloneComplexBlockSnapshot,
+    target: StandaloneComplexBlockDropTargetHint,
+    zone: StandaloneComplexBlockDropZone
+  ): boolean {
+    const view = this.activeMarkdownView.get();
+    if (!view) return false;
+    const editor: Editor = view.editor;
+
+    if (editor.listSelections().length > 1) {
+      this.notify(this.plugin.t("notice.multipleCursors"));
+      return false;
+    }
+
+    const text = editor.getValue();
+    const rules = getEnabledCompositeBlockRules(this.plugin.settings.compositeBlocks);
+    const outcome = dropStandaloneComplexBlock(text, { snapshot, target, zone }, rules);
+
+    const cursor = { line: snapshot.range.startLine, ch: 0 };
+    const changed = applyLineEditOutcome(
+      editor,
+      cursor,
+      snapshot.range.startLine,
+      text.split("\n"),
+      outcome,
+      () => {
+        /* Phase 5D-3C: intentionally silent — see this method's own doc comment. */
+      }
+    );
+
+    if (changed) {
+      const cur = editor.getCursor();
+      const lineLen = editor.getLine(cur.line)?.length ?? 0;
+      editor.scrollIntoView(
+        { from: { line: cur.line, ch: 0 }, to: { line: cur.line, ch: lineLen } },
+        true
+      );
+      this.queueSelectionFollow(outcome.newStartLine);
+      this.refresh();
+    }
+    return changed;
   }
 }
 

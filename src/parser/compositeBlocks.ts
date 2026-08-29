@@ -794,8 +794,17 @@ export function describeCompositeBlockRejection(
  * composite membership — see isStandaloneComplexBlockMoveCandidate's own
  * doc comment below for why that is a separate, `allComposites`-dependent
  * check.
+ *
+ * Exported (Phase 5D-3C, "Callout and Blockquote Drag and Drop") so
+ * move/findStandaloneComplexBlockDropTarget.ts can reuse this EXACT same
+ * source-shape check for D&D — D&D (案A) deliberately does NOT also check
+ * composite membership the way isStandaloneComplexBlockMoveCandidate below
+ * does, since a composite-member source is always D&D-eligible by design
+ * (see model/complexBlock.ts's StandaloneComplexBlockDropRejectReason top
+ * doc comment) — so D&D calls this function directly, never
+ * isStandaloneComplexBlockMoveCandidate.
  */
-function isStandaloneComplexBlockShapeEligible(doc: ParsedDocument, info: ComplexBlockInfo): boolean {
+export function isStandaloneComplexBlockShapeEligible(doc: ParsedDocument, info: ComplexBlockInfo): boolean {
   if (info.kind !== "callout" && info.kind !== "blockquote") return false;
   if (info.editability !== "supported") return false;
   if (info.parentId) {
@@ -813,7 +822,7 @@ function isStandaloneComplexBlockShapeEligible(doc: ParsedDocument, info: Comple
  * (the caller's own current matchCompositeBlocks result), never assumed
  * from any earlier Tree-render-time computation.
  */
-function isComposedMember(allComposites: CompositeBlockInfo[], id: string): boolean {
+export function isComposedMember(allComposites: CompositeBlockInfo[], id: string): boolean {
   return allComposites.some((c) => c.members.some((m) => m.id === id));
 }
 

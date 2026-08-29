@@ -25,6 +25,16 @@ import path from "node:path";
  * paragraph), so this is a pure payload-content change with zero behavioral
  * change to any valid Tree-internal drag/drop path.
  *
+ * Phase 5D-3C ("Callout and Blockquote Drag and Drop") ADDED a THIRD
+ * dragstart call site, handleCalloutDragStart — a standalone or
+ * CompositeBlock-member callout/blockquote row becoming a D&D source for
+ * the first time. It follows the exact same empty-string-sentinel policy
+ * this file already locks in for the other two sources (see
+ * getHandleCalloutDragStartBody's own tests below) — this ticket's own
+ * pre-commit report explains why (dropping a callout/blockquote row
+ * outside the Tree must not leak an internal id into the body as literal
+ * text either).
+ *
  * Same architectural constraint as tests/paragraphOutlineTreeUiWiring.test.ts
  * and tests/listPrefixUiWiring.test.ts: OutlineTreeView extends Obsidian's
  * ItemView, which cannot be constructed in vitest ("obsidian" is a
@@ -81,9 +91,26 @@ describe("OutlineTreeView.ts drag payload safety (static source check, Phase 5T-
     return viewTs.slice(start, closeIdx);
   }
 
-  it("has exactly two dataTransfer.setData(...) call sites in the whole file (section/list dragstart, paragraph dragstart) — no new drag source was added without updating this test", () => {
+  function getHandleCalloutDragStartBody(): string {
+    // handleCalloutDragStart's signature spans multiple lines in source;
+    // anchor on the unique statement that assigns calloutDragSession,
+    // which only appears once and only inside this method.
+    const start = viewTs.indexOf("this.calloutDragSession = {");
+    if (start === -1) {
+      throw new Error(
+        "this.calloutDragSession assignment not found — has handleCalloutDragStart been restructured?"
+      );
+    }
+    const closeIdx = viewTs.indexOf("\n  }\n", start);
+    if (closeIdx === -1) {
+      throw new Error("Could not find the closing brace for handleCalloutDragStart — update this test's bounding logic.");
+    }
+    return viewTs.slice(start, closeIdx);
+  }
+
+  it("has exactly three dataTransfer.setData(...) call sites in the whole file (section/list dragstart, paragraph dragstart, callout/blockquote dragstart) — no new drag source was added without updating this test", () => {
     const matches = viewTs.match(/\.setData\(/g) ?? [];
-    expect(matches.length).toBe(2);
+    expect(matches.length).toBe(3);
   });
 
   it("handleDragStart (section/list) writes the empty-string sentinel, never the real sectionId, as the text/plain payload", () => {
@@ -115,6 +142,21 @@ describe("OutlineTreeView.ts drag payload safety (static source check, Phase 5T-
 
   it("handleParagraphDragStart still sets effectAllowed = \"move\" unchanged", () => {
     const body = getHandleParagraphDragStartBody();
+    expect(body).toContain('evt.dataTransfer.effectAllowed = "move";');
+  });
+
+  it("handleCalloutDragStart writes the empty-string sentinel, never the real node.id, as the text/plain payload (Phase 5D-3C)", () => {
+    const body = getHandleCalloutDragStartBody();
+    expect(body).toContain('evt.dataTransfer.setData("text/plain", "");');
+    expect(body).not.toContain('setData("text/plain", node.id)');
+    const setDataCalls = body.match(/\.setData\([^)]*\)/g) ?? [];
+    for (const call of setDataCalls) {
+      expect(call).not.toMatch(/node\.id/);
+    }
+  });
+
+  it("handleCalloutDragStart still sets effectAllowed = \"move\" unchanged (Phase 5D-3C)", () => {
+    const body = getHandleCalloutDragStartBody();
     expect(body).toContain('evt.dataTransfer.effectAllowed = "move";');
   });
 
@@ -151,12 +193,13 @@ describe("OutlineTreeView.ts drag payload safety (static source check, Phase 5T-
     expect(body).not.toContain("dataTransfer");
   });
 
-  it("endDrag() still unconditionally clears both dragSourceId and paragraphDragSession (dragend/invalid-drop/refresh/onClose cleanup contract unchanged)", () => {
+  it("endDrag() still unconditionally clears dragSourceId, paragraphDragSession, AND calloutDragSession (dragend/invalid-drop/refresh/onClose cleanup contract unchanged, Phase 5D-3C extends it rather than replacing it)", () => {
     const start = viewTs.indexOf("private endDrag(): void {");
     const end = viewTs.indexOf("\n  }\n", start);
     const body = viewTs.slice(start, end);
     expect(body).toContain("this.dragSourceId = null;");
     expect(body).toContain("this.paragraphDragSession = null;");
+    expect(body).toContain("this.calloutDragSession = null;");
   });
 
   it("cancelParagraphDrag() is still wired into both refresh() (Tree refresh) and onClose() (view close) cleanup paths", () => {
@@ -167,9 +210,21 @@ describe("OutlineTreeView.ts drag payload safety (static source check, Phase 5T-
     expect(viewTs).toContain("private cancelParagraphDrag(): void {");
   });
 
-  it("both the section/list row and the paragraph row still bind a dragend listener to handleDragEnd on the source element itself (native HTML5 dragend fires on the drag source regardless of where — or whether — the drop landed, so this is what guarantees cleanup even for an external drop that no Tree listener ever saw)", () => {
+  it("cancelCalloutDrag() is wired into both refresh() and onClose() cleanup paths, mirroring cancelParagraphDrag() (Phase 5D-3C)", () => {
+    const occurrences = viewTs.match(/this\.cancelCalloutDrag\(\);/g) ?? [];
+    expect(occurrences.length).toBeGreaterThanOrEqual(2);
+    expect(viewTs).toContain("private cancelCalloutDrag(): void {");
+  });
+
+  it("every drag-source row kind (section/list, paragraph, standalone callout/blockquote, CompositeBlock-member callout/blockquote) still binds a dragend listener to handleDragEnd on the source element itself (native HTML5 dragend fires on the drag source regardless of where — or whether — the drop landed, so this is what guarantees cleanup even for an external drop that no Tree listener ever saw)", () => {
+    // Phase 5D-3C added two MORE dragend bindings alongside the original
+    // two (section/list, paragraph): one for the standalone callout/
+    // blockquote row (which is now ALSO a drag source, not just a drop
+    // target — see that branch's own updated doc comment in renderNode),
+    // and one for the brand-new CompositeBlock-member callout/blockquote
+    // branch. Four is the correct, current total.
     const occurrences = viewTs.match(/addEventListener\("dragend", \(\) => this\.handleDragEnd\(\)\);/g) ?? [];
-    expect(occurrences.length).toBe(2);
+    expect(occurrences.length).toBe(4);
   });
 
 });

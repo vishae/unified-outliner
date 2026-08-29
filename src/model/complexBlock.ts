@@ -277,3 +277,101 @@ export type StandaloneComplexBlockMoveRejectionReason =
 export type StandaloneComplexBlockMovability =
   | { eligible: true }
   | { eligible: false; reason: StandaloneComplexBlockMoveRejectionReason };
+
+// ---- Phase 5D-3C: standalone / composite-member callout/blockquote
+// Drag and Drop drop-target rejection reasons ----------------------------
+//
+// A related but DELIBERATELY SEPARATE type from
+// StandaloneComplexBlockMoveRejectionReason above. Move (Phase 5C-3/5D-3B)
+// only ever resolves ONE candidate position per direction (the immediately
+// adjacent standalone callout/blockquote), so its reason set is entirely
+// about WHETHER an eligible adjacent unit exists. D&D (Phase 5D-3C,
+// approved design: "案A") lets the user choose an arbitrary before/after
+// position (within the same section scope, never "inside" — see
+// move/findStandaloneComplexBlockDropTarget.ts's own top doc comment for
+// the full v1 scope), so its reason set is instead about whether that
+// CHOSEN position is safe — a different question, hence its own type
+// rather than reusing or widening StandaloneComplexBlockMoveRejectionReason.
+//
+// Per the Phase 5D-3C approval, this reason set is used internally (the
+// resolver/executor return it, and it is asserted on directly by tests) but
+// is NEVER surfaced to the user via a translated Notice — no new i18n key
+// was added for it. Rejection is communicated purely by the drop indicator
+// never appearing (dragover) / the note staying byte-identical (drop),
+// mirroring the existing, pre-5D-3C convention that section/list D&D's own
+// NoRelocateReason already follows (grepped and confirmed to have zero
+// i18n bindings before this ticket).
+//
+// Deliberately NOT included: a "composite-member" value for the SOURCE.
+// Unlike Move, D&D (案A) never rejects a source for currently being a
+// matched CompositeBlock's own member — composite membership is
+// irrelevant to D&D source eligibility by design (see this ticket's own
+// approval: "CompositeBlock member を単独で Drag and Drop した結果...
+// CompositeBlock matching が失われることは許可する"). The absence of that
+// value here is intentional, not an oversight.
+export type StandaloneComplexBlockDropRejectReason =
+  /** Source kind isn't callout/blockquote, or its own `editability !== "supported"`. Same meaning as StandaloneComplexBlockMoveRejectionReason's own "not-supported". */
+  | "not-supported"
+  /** Source's own `parentId` resolves to a list-typed node (sits inside a list item's continuation). Same meaning as Move's own "nested-in-list". */
+  | "nested-in-list"
+  /**
+   * The resolved drop position sits at, or immediately adjacent to (i.e.
+   * would be a true no-op after move/moveBlock.ts#insertBlockAt's own
+   * position-adjustment math), the source's OWN current range — dropping a
+   * block onto itself, or immediately before/after its own current
+   * position, changes nothing.
+   */
+  | "self-drop"
+  /**
+   * The resolved drop target's own `parentId` differs from the source's
+   * own `parentId` — D&D v1 never crosses a section boundary, exactly
+   * like Move's own "different-section". Incidentally, this single check
+   * ALSO structurally prevents "drop as a list item's new child": a
+   * source that passed its own eligibility check always has `parentId`
+   * equal to a section id or null (never a list id — nested-in-list
+   * sources are already rejected), so a target nested inside ANY list
+   * item's continuation (whose own `parentId` is necessarily that list
+   * item's id) can never equal the source's own `parentId` either, and is
+   * therefore always caught here even without a separate, dedicated
+   * "target is nested in a list" reason value.
+   */
+  | "not-same-section"
+  /**
+   * The resolved insertion point sits STRICTLY inside some existing
+   * CompositeBlock's own aggregate `range` (i.e. strictly after that
+   * composite's own first line and at or before its own last line) — this
+   * would insert unrelated content between that composite's own anchor
+   * list item and its own member(s) (or, for a future multi-member rule,
+   * between two of that composite's own members), corrupting a THIRD
+   * PARTY's structure regardless of whether the DRAGGED block's own
+   * membership is separately, and independently, allowed to be affected
+   * (see this type's own top doc comment). See
+   * move/findStandaloneComplexBlockDropTarget.ts's own doc comment for the
+   * exact boundary arithmetic and why checking self-drop FIRST already
+   * excludes the source's own immediately-adjacent position from ever
+   * reaching this check.
+   */
+  | "composite-internal-boundary"
+  /**
+   * Drop-time-only (never returned by the pure resolver itself, only by
+   * edit/dropStandaloneComplexBlock.ts's own re-verification wrapper): the
+   * document changed between drag-start and drop such that no complex
+   * block currently matches the caller's source snapshot (kind/range/
+   * parentId) — the D&D analogue of Move's own
+   * "standalone-boundary-changed". Reported as a safe no-op, per this
+   * ticket's approval: "stale drag source に対して古い range を使って書き
+   * 換えてはならない".
+   */
+  | "source-boundary-changed"
+  /**
+   * Drop-time-only, same rationale as "source-boundary-changed" above but
+   * for the TARGET side: the document changed such that the target hint
+   * captured at dragover no longer matches anything current.
+   */
+  | "target-boundary-changed"
+  /** The source snapshot itself is not self-consistent against the current document's own line count — checked before any parse/scan/match attempt, mirroring Move's own "range-invalid". */
+  | "range-invalid";
+
+export type StandaloneComplexBlockDropResolution =
+  | { allowed: true; insertBeforeLine: number }
+  | { allowed: false; reason: StandaloneComplexBlockDropRejectReason };
