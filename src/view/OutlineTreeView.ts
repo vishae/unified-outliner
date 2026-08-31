@@ -5586,6 +5586,27 @@ export class OutlineTreeView extends ItemView {
     const zone = this.computeParagraphDropZone(evt, selfEl);
     const resolution = resolveParagraphDropDirection(doc.lines.join("\n"), session.anchor, target, zone);
     if (!resolution.allowed) {
+      // Phase 5P-6: the ONLY reject reason eligible for a fallback to the
+      // new non-adjacent cut-and-insert preview is "not-adjacent" — every
+      // other reason (self-drop/wrong-zone/source-side resolve failures)
+      // keeps the exact pre-5P-6 "no indicator" behavior below, unchanged.
+      // This branch never runs at all for a target that IS a true
+      // adjacent sibling (resolution.allowed would already be true above),
+      // so the existing swapBlocks-based path this method's own tail
+      // implements is completely unreachable from here — see the 5P-6
+      // design note on why the two paths are never unified (adjacent
+      // swaps preserve the existing gap in place; cut-and-insert does
+      // not, and would otherwise change the blank-line result of an
+      // adjacent reorder).
+      if (resolution.reason === "not-adjacent") {
+        const nonAdjacent = this.resolveParagraphNonAdjacentDragTarget(session, doc, node, zone);
+        if (nonAdjacent) {
+          evt.preventDefault();
+          if (evt.dataTransfer) evt.dataTransfer.dropEffect = "move";
+          this.setDropIndicator(selfEl, zone);
+          return;
+        }
+      }
       if (this.dropIndicatorEl === selfEl) this.clearDropIndicator();
       return;
     }
@@ -5661,7 +5682,40 @@ export class OutlineTreeView extends ItemView {
     if (!target) return;
     const zone = this.computeParagraphDropZone(evt, selfEl);
     const resolution = resolveParagraphDropDirection(view.editor.getValue(), session.anchor, target, zone);
-    if (!resolution.allowed) return;
+    if (!resolution.allowed) {
+      // Phase 5P-6: mirrors handleParagraphDragOver's own "not-adjacent
+      // only" fallback gate above — see that method's doc comment for why
+      // every other reject reason stays a silent no-op here too (drop
+      // already unconditionally cleaned up the drag/indicator state above,
+      // matching this method's own pre-5P-6 "no Notice on this path"
+      // convention). The candidate SiblingTargetAnchor built here is, like
+      // dragover's own candidate, never itself trusted as final — the
+      // actual write-safety re-verification is entirely
+      // dispatchAndApplyParagraphNonAdjacentMove's own job (it re-reads
+      // editor.getValue() fresh and calls moveParagraphNonAdjacent, which
+      // independently re-resolves BOTH source and target one more time —
+      // the exact same "cached candidate, fresh final check" split the
+      // existing context-menu path already relies on).
+      // handleParagraphDrop (unlike handleParagraphDragOver) has no local
+      // `doc` of its own — resolveParagraphDropDirection above already
+      // reads `view.editor.getValue()` directly instead. The candidate
+      // anchor built here still only ever needs `this.currentDoc` (the
+      // same render-time-cached snapshot dragover's own preview already
+      // uses), never a fresh re-parse: see this branch's own doc comment
+      // above for why that candidate is safe despite being cached.
+      const cachedDoc = this.currentDoc;
+      if (resolution.reason === "not-adjacent" && cachedDoc) {
+        const nonAdjacent = this.resolveParagraphNonAdjacentDragTarget(session, cachedDoc, node, zone);
+        if (nonAdjacent) {
+          this.dispatchAndApplyParagraphNonAdjacentMove(
+            session.anchor,
+            nonAdjacent.targetAnchor,
+            nonAdjacent.position
+          );
+        }
+      }
+      return;
+    }
     this.dispatchAndApplyParagraphMove(session.anchor, resolution.direction);
   }
 
@@ -5698,7 +5752,117 @@ export class OutlineTreeView extends ItemView {
     return { rangeStart: block.range.startLine, rangeEnd: block.range.endLine, parentId: block.parentId };
   }
 
+  /**
+   * Phase 5P-6 ("Paragraph Non-Adjacent Drag and Drop Wiring"): the scope
+   * gate for BOTH the drag source and the drop target of the non-adjacent
+   * D&D adapter below — deliberately its own private helper, NOT a reuse
+   * of edit/deleteParagraph.ts#isInScopeParagraphParent, because that
+   * function was widened by the (separately-numbered, already-shipped)
+   * Phase 5P-5 ("list item 子 paragraph の Tree insert/delete 解禁") to
+   * also accept a `"list"`-type parent — exactly the scope Phase 5P-6's
+   * own approved audit explicitly excludes for non-adjacent D&D ("list
+   * item 子 paragraph は...Phase 5P-6 の対象外とする"). `parentId === null`
+   * (top-level paragraph) and a `"section"`-type parent (section-direct
+   * paragraph) are the only two admitted shapes; a `"list"`-type parent,
+   * or any other/unresolved parent, is rejected. This is a preview-time
+   * convenience gate only — like every other check in this adapter, it
+   * never substitutes for moveParagraphNonAdjacent's own re-resolution at
+   * drop time (see resolveParagraphNonAdjacentDragTarget's own doc
+   * comment below).
+   */
+  private isTopLevelOrSectionDirectParagraphParent(doc: ParsedDocument, parentId: string | null): boolean {
+    if (parentId === null) return true;
+    const parent = doc.nodes.get(parentId);
+    return parent?.type === "section";
+  }
 
+  /**
+   * Phase 5P-6: the ENTIRE new D&D-specific adapter surface this ticket
+   * adds — resolves whether `node` (the row currently under the pointer
+   * during a paragraph drag session already found NOT to be a true
+   * adjacent sibling by resolveParagraphDropDirection — see both call
+   * sites below, which only ever reach this method after that check has
+   * already returned `{ allowed: false, reason: "not-adjacent" }`, never
+   * on any other reject reason) is a safe candidate for the existing
+   * moveParagraphNonAdjacent engine, and if so, builds the exact
+   * `SiblingTargetAnchor` + `NonAdjacentMovePosition` pair that engine
+   * already expects — the SAME two types edit/paragraphNonAdjacentMove.ts
+   * already defines and showParagraphMoveTargetPicker/
+   * dispatchAndApplyParagraphNonAdjacentMove already consume for the
+   * existing context-menu path. No new anchor shape, no new resolution
+   * logic, no new reject-reason vocabulary is introduced here.
+   *
+   * Four gates, in order, ALL preview-only (never themselves a green
+   * light to write — moveParagraphNonAdjacent's own three-stage source/
+   * target re-resolution, called from dispatchAndApplyParagraphNonAdjacentMove
+   * at actual drop time against `editor.getValue()`, remains the sole
+   * authority, exactly like every other caller of that function):
+   *
+   *   1. `node.kind === "paragraph"` — Phase 5P-6's own D&D-target
+   *      restriction. A standalone callout/blockquote row
+   *      (OutlineTreeComplexMemberNode) is a valid non-adjacent-move
+   *      TARGET via the existing context menu (NON_ADJACENT_TARGET_KINDS
+   *      includes "callout"/"blockquote", unchanged by this ticket) but
+   *      is deliberately NOT offered as a D&D target — this gate is the
+   *      one place that restriction lives, applied only here, never
+   *      inside buildSiblingTargetAnchor/resolveTargetAnchor/
+   *      NON_ADJACENT_TARGET_KINDS themselves.
+   *   2. `isTopLevelOrSectionDirectParagraphParent` on BOTH the drag
+   *      session's own source parentId (`session.anchor.parentId`) and
+   *      the hovered target's parentId — Phase 5P-6's source/target scope
+   *      restriction (list-item-child paragraphs excluded from THIS new
+   *      path; the existing adjacent-swap D&D's own handling of such rows,
+   *      whatever it already is, is untouched).
+   *   3. `node.parentId === session.anchor.parentId` — "same section
+   *      scope" per the approved design: since both sides are already
+   *      constrained to top-level (`parentId === null`) or section-direct
+   *      (`parentId` = that section's id) by gate 2, parentId equality
+   *      IS exactly "same section, or both top-level" — no separate
+   *      enclosing-section walk is needed. This is also exactly the same
+   *      condition moveParagraphNonAdjacent's own `parent-mismatch`
+   *      rejection re-checks independently at drop time — this gate is a
+   *      preview optimization only (skip showing an indicator for a drop
+   *      that would certainly be rejected), never a substitute for it.
+   *   4. `resolveParagraphFromTreeHint` + `buildSiblingTargetAnchor` — the
+   *      EXACT SAME pair used at dragstart for the source anchor
+   *      (handleParagraphDragStart) and inside showParagraphMoveMenu for
+   *      the picker's own sibling entries, reused verbatim. Returns null
+   *      on anything resolveParagraphFromTreeHint/buildSiblingTargetAnchor
+   *      themselves already refuse (ambiguous hint, wrong kind,
+   *      editability !== "supported", etc.) — no new refusal condition is
+   *      invented in THIS method beyond gates 1–3 above.
+   *
+   * `zone` maps directly to `NonAdjacentMovePosition` with NO inversion —
+   * unlike the adjacent-swap path's own "landing edge" indicator fix
+   * (Phase 5T-2S-B, see handleParagraphDragOver's own doc comment), a
+   * cut-and-reinsert has no swap-landing illusion to correct for: hovering
+   * the top half of a row and choosing "before" means the source lands
+   * immediately above that row, which IS the top edge being hovered — the
+   * zone and the landing edge are the same edge here.
+   */
+  private resolveParagraphNonAdjacentDragTarget(
+    session: ParagraphDragSession,
+    doc: ParsedDocument,
+    node: OutlineTreeParagraphNode | OutlineTreeComplexMemberNode,
+    zone: ParagraphDropZone
+  ): { targetAnchor: SiblingTargetAnchor; position: NonAdjacentMovePosition } | null {
+    if (node.kind !== "paragraph") return null;
+    if (!this.isTopLevelOrSectionDirectParagraphParent(doc, session.anchor.parentId)) return null;
+    if (!this.isTopLevelOrSectionDirectParagraphParent(doc, node.parentId)) return null;
+    if (node.parentId !== session.anchor.parentId) return null;
+
+    const complexScan = this.currentComplexScan;
+    if (!complexScan) return null;
+    const info = resolveParagraphFromTreeHint(
+      { rangeStart: node.rangeStart, rangeEnd: node.rangeEnd, parentId: node.parentId },
+      complexScan
+    );
+    if (!info) return null;
+    const targetAnchor = buildSiblingTargetAnchor(doc, info);
+    if (!targetAnchor) return null;
+
+    return { targetAnchor, position: zone === "before" ? "before" : "after" };
+  }
 
   private clearDropIndicator(): void {
     if (this.dropIndicatorEl) {

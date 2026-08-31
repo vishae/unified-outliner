@@ -1,6 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+// Phase 5P-6: real imports, used only by the "pure-function integration"
+// describe block at the bottom of this file — every OTHER describe block
+// in this file stays a pure static-source-text check (readFileSync +
+// indexOf/toContain against the raw .ts source), unchanged.
+import { parseDocument } from "../src/parser/parseDocument";
+import { scanComplexBlocks } from "../src/parser/complexBlocks";
+import {
+  buildParagraphMoveAnchor,
+  ParagraphMoveAnchor,
+  resolveParagraphDropDirection,
+} from "../src/edit/paragraphTreeMove";
+import {
+  buildSiblingTargetAnchor,
+  moveParagraphNonAdjacent,
+  SiblingTargetAnchor,
+} from "../src/edit/paragraphNonAdjacentMove";
 
 /**
  * Phase 5P-3 ("本文 paragraph の任意 Outline Tree 表示"): static-source-text
@@ -1162,5 +1178,281 @@ describe("Phase 5T-10A: paragraph Tree-triggered insert (before/after, auto-rena
     // uses) — this only checks there is no actual IMPORT from it.
     expect(insertParagraphTs).not.toContain('from "./listBodyRange"');
     expect(insertParagraphTs).not.toContain('from "../edit/listBodyRange"');
+  });
+});
+
+/**
+ * Phase 5P-6 ("Paragraph Non-Adjacent Drag and Drop Wiring"): static-source
+ * checks for the new D&D adapter this ticket adds on top of the existing
+ * Phase 5T-2 adjacent-swap D&D (handleParagraphDragOver/handleParagraphDrop)
+ * and the existing Phase 5T-3A context-menu non-adjacent move
+ * (edit/paragraphNonAdjacentMove.ts, unchanged by this ticket). Same
+ * "cannot construct an Obsidian ItemView in vitest" constraint as every
+ * other *UiWiring test in this file — the actual move/reject logic these
+ * wiring checks route to is already covered by real, executable
+ * assertions in tests/paragraphTreeMove.test.ts (adjacent path) and
+ * tests/paragraphNonAdjacentMove.test.ts (non-adjacent path); this
+ * describe block only confirms the NEW routing between them is wired the
+ * way the approved Phase 5P-6 design requires, and confirms via two
+ * genuine pure-function integration checks (not just source-text greps)
+ * that chaining resolveParagraphDropDirection -> moveParagraphNonAdjacent
+ * exactly the way the adapter does produces the same raw Markdown the
+ * existing context-menu path already produces for an equivalent move.
+ */
+describe("OutlineTreeView.ts paragraph non-adjacent D&D adapter wiring (static source check, Phase 5P-6)", () => {
+  const viewTs = readFileSync(path.resolve(__dirname, "../src/view/OutlineTreeView.ts"), "utf-8");
+
+  function dragOverBody(): string {
+    const start = viewTs.indexOf("private handleParagraphDragOver(");
+    const end = viewTs.indexOf("\n  private handleParagraphDrop(", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    return viewTs.slice(start, end);
+  }
+
+  function dropBody(): string {
+    const start = viewTs.indexOf("private handleParagraphDrop(");
+    const end = viewTs.indexOf("\n  private paragraphDropTargetHint(", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    return viewTs.slice(start, end);
+  }
+
+  function scopeGateBody(): string {
+    const start = viewTs.indexOf("private isTopLevelOrSectionDirectParagraphParent(");
+    const end = viewTs.indexOf("\n  private resolveParagraphNonAdjacentDragTarget(", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    return viewTs.slice(start, end);
+  }
+
+  function adapterBody(): string {
+    const start = viewTs.indexOf("private resolveParagraphNonAdjacentDragTarget(");
+    const end = viewTs.indexOf("\n  private clearDropIndicator(): void {", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    return viewTs.slice(start, end);
+  }
+
+  it("handleParagraphDragOver and handleParagraphDrop both evaluate the EXISTING resolveParagraphDropDirection first, unconditionally, before ever touching the new adapter", () => {
+    const overIdx = dragOverBody().indexOf("resolveParagraphDropDirection(");
+    const overAdapterIdx = dragOverBody().indexOf("resolveParagraphNonAdjacentDragTarget(");
+    expect(overIdx).toBeGreaterThan(-1);
+    expect(overAdapterIdx).toBeGreaterThan(overIdx);
+
+    const dropIdx = dropBody().indexOf("resolveParagraphDropDirection(");
+    const dropAdapterIdx = dropBody().indexOf("resolveParagraphNonAdjacentDragTarget(");
+    expect(dropIdx).toBeGreaterThan(-1);
+    expect(dropAdapterIdx).toBeGreaterThan(dropIdx);
+  });
+
+  it("the new adapter is reached ONLY when resolveParagraphDropDirection's own reject reason is exactly \"not-adjacent\" — self-drop/wrong-zone/source-resolve-failure and every other reason keep the pre-5P-6 silent no-op", () => {
+    expect(dragOverBody()).toContain('resolution.reason === "not-adjacent"');
+    expect(dropBody()).toContain('resolution.reason === "not-adjacent"');
+    // The adapter call must be textually INSIDE the not-adjacent branch,
+    // not merely present somewhere later in the method body.
+    const over = dragOverBody();
+    const overBranchStart = over.indexOf('resolution.reason === "not-adjacent"');
+    const overAdapterIdx = over.indexOf("resolveParagraphNonAdjacentDragTarget(", overBranchStart);
+    const overWrongZoneEarlier = over.indexOf(
+      "resolveParagraphNonAdjacentDragTarget(",
+      0
+    );
+    expect(overAdapterIdx).toBe(overWrongZoneEarlier);
+
+    const drop = dropBody();
+    const dropBranchStart = drop.indexOf('resolution.reason === "not-adjacent"');
+    const dropAdapterIdx = drop.indexOf("resolveParagraphNonAdjacentDragTarget(", dropBranchStart);
+    const dropFirstAdapterIdx = drop.indexOf("resolveParagraphNonAdjacentDragTarget(", 0);
+    expect(dropAdapterIdx).toBe(dropFirstAdapterIdx);
+  });
+
+  it("the existing adjacent-swap dispatch (dispatchAndApplyParagraphMove) and the new non-adjacent dispatch (dispatchAndApplyParagraphNonAdjacentMove) are mutually exclusive within handleParagraphDrop's own body — the allowed/not-allowed branches never call both", () => {
+    const drop = dropBody();
+    const allowedCheckIdx = drop.indexOf("if (!resolution.allowed)");
+    const swapDispatchIdx = drop.lastIndexOf("this.dispatchAndApplyParagraphMove(session.anchor, resolution.direction);");
+    const nonAdjacentDispatchIdx = drop.indexOf("this.dispatchAndApplyParagraphNonAdjacentMove(");
+    expect(allowedCheckIdx).toBeGreaterThan(-1);
+    // The non-adjacent dispatch must be textually BEFORE the swap dispatch
+    // (inside the `if (!resolution.allowed)` block, which returns before
+    // ever reaching the swap dispatch line) — proving the two can never
+    // both run for the same drop.
+    expect(nonAdjacentDispatchIdx).toBeGreaterThan(allowedCheckIdx);
+    expect(nonAdjacentDispatchIdx).toBeLessThan(swapDispatchIdx);
+  });
+
+  it("resolveParagraphNonAdjacentDragTarget restricts the D&D drop TARGET to kind === \"paragraph\" — callout/blockquote/section/list/fenced-code/table/thematic-break rows never reach buildSiblingTargetAnchor via this new path", () => {
+    const body = adapterBody();
+    const kindGateIdx = body.indexOf('node.kind !== "paragraph"');
+    const buildIdx = body.indexOf("buildSiblingTargetAnchor(");
+    expect(kindGateIdx).toBeGreaterThan(-1);
+    expect(buildIdx).toBeGreaterThan(kindGateIdx);
+  });
+
+  it("resolveParagraphNonAdjacentDragTarget restricts BOTH the drag source and the drop target to top-level or section-direct paragraphs (list item子paragraph excluded) via its own new, narrower scope gate — NOT edit/deleteParagraph.ts's isInScopeParagraphParent, which Phase 5P-5 already widened to also accept a list-type parent", () => {
+    const body = adapterBody();
+    expect(body).toContain("this.isTopLevelOrSectionDirectParagraphParent(doc, session.anchor.parentId)");
+    expect(body).toContain("this.isTopLevelOrSectionDirectParagraphParent(doc, node.parentId)");
+    expect(body).not.toContain("isInScopeParagraphParent(");
+
+    const gate = scopeGateBody();
+    expect(gate).toContain('parent?.type === "section"');
+    expect(gate).not.toContain('"list"');
+    expect(gate).not.toContain("isInScopeParagraphParent");
+  });
+
+  it("resolveParagraphNonAdjacentDragTarget requires source and target to share the same parentId (same section scope, or both top-level) before ever building a target anchor", () => {
+    const body = adapterBody();
+    const sameParentIdx = body.indexOf("node.parentId !== session.anchor.parentId");
+    const buildIdx = body.indexOf("buildSiblingTargetAnchor(");
+    expect(sameParentIdx).toBeGreaterThan(-1);
+    expect(buildIdx).toBeGreaterThan(sameParentIdx);
+  });
+
+  it("resolveParagraphNonAdjacentDragTarget reuses the EXISTING resolveParagraphFromTreeHint + buildSiblingTargetAnchor pair verbatim — no new anchor-construction logic is written for this ticket", () => {
+    const body = adapterBody();
+    expect(body).toContain("resolveParagraphFromTreeHint(");
+    expect(body).toContain("buildSiblingTargetAnchor(doc, info)");
+  });
+
+  it("the Phase 5D-3C callout/blockquote drag-session early-return still precedes ALL paragraph (adjacent and non-adjacent) handling in both handleParagraphDragOver and handleParagraphDrop — the new adapter can never double-wire onto the same node as calloutDragSession", () => {
+    const over = dragOverBody();
+    const overCalloutIdx = over.indexOf("if (this.calloutDragSession)");
+    const overAdapterIdx = over.indexOf("resolveParagraphNonAdjacentDragTarget(");
+    expect(overCalloutIdx).toBeGreaterThan(-1);
+    expect(overAdapterIdx).toBeGreaterThan(overCalloutIdx);
+
+    const drop = dropBody();
+    const dropCalloutIdx = drop.indexOf("if (this.calloutDragSession)");
+    const dropAdapterIdx = drop.indexOf("resolveParagraphNonAdjacentDragTarget(");
+    expect(dropCalloutIdx).toBeGreaterThan(-1);
+    expect(dropAdapterIdx).toBeGreaterThan(dropCalloutIdx);
+  });
+
+  it("Phase 5D-3C's own drag-session/resolver/executor modules (calloutDragSession, findStandaloneComplexBlockDropTarget, dropStandaloneComplexBlock) are not referenced anywhere in the new adapter's own body — the two features share no code beyond the pre-existing early-return guard checked above", () => {
+    const body = adapterBody();
+    expect(body).not.toContain("calloutDragSession");
+    expect(body).not.toContain("findStandaloneComplexBlockDropTarget");
+    expect(body).not.toContain("dropStandaloneComplexBlock");
+  });
+
+  it("edit/paragraphNonAdjacentMove.ts's NON_ADJACENT_TARGET_KINDS (the existing context-menu target policy: paragraph/callout/blockquote) is untouched by this ticket — Phase 5P-6's paragraph-only D&D restriction lives ONLY in the new view-layer adapter gate checked above, never in this shared constant", () => {
+    const nonAdjacentMoveTs = readFileSync(
+      path.resolve(__dirname, "../src/edit/paragraphNonAdjacentMove.ts"),
+      "utf-8"
+    );
+    expect(nonAdjacentMoveTs).toContain(
+      'export const NON_ADJACENT_TARGET_KINDS: readonly ComplexBlockKind[] = ["paragraph", "callout", "blockquote"];'
+    );
+  });
+
+  it("dragover never mutates Markdown, Tree, selection, or cursor for the non-adjacent preview — the new branch only ever calls evt.preventDefault()/sets dropEffect/calls setDropIndicator, exactly like the existing adjacent-swap preview branch it sits beside", () => {
+    const over = dragOverBody();
+    const notAdjacentBranchStart = over.indexOf('resolution.reason === "not-adjacent"');
+    const branchEnd = over.indexOf("if (this.dropIndicatorEl === selfEl) this.clearDropIndicator();", notAdjacentBranchStart);
+    const branch = over.slice(notAdjacentBranchStart, branchEnd);
+    expect(branch).toContain("evt.preventDefault()");
+    expect(branch).toContain('evt.dataTransfer.dropEffect = "move"');
+    expect(branch).toContain("this.setDropIndicator(selfEl, zone)");
+    expect(branch).not.toContain("applyLineEditOutcome");
+    expect(branch).not.toContain("editor.replaceRange");
+    expect(branch).not.toContain("moveParagraphNonAdjacent(");
+  });
+
+  it("drop's non-adjacent branch dispatches through the EXISTING dispatchAndApplyParagraphNonAdjacentMove tail (same applyLineEditOutcome/scroll/selection-follow path the context-menu picker already uses) — no new write primitive is introduced", () => {
+    const drop = dropBody();
+    const notAdjacentBranchStart = drop.indexOf('resolution.reason === "not-adjacent"');
+    const branch = drop.slice(notAdjacentBranchStart);
+    expect(branch).toContain("this.dispatchAndApplyParagraphNonAdjacentMove(");
+    expect(branch).not.toContain("applyLineEditOutcome(");
+    expect(branch).not.toContain("moveParagraphNonAdjacent(");
+    expect(branch).not.toContain("insertBlockAt(");
+  });
+});
+
+/**
+ * Phase 5P-6: genuine pure-function integration checks — actually chaining
+ * resolveParagraphDropDirection -> (on "not-adjacent") moveParagraphNonAdjacent
+ * exactly the way the new view-layer adapter does, using REAL
+ * parseDocument/scanComplexBlocks/buildParagraphMoveAnchor/
+ * buildSiblingTargetAnchor output (not a source-text grep) — to
+ * empirically confirm (a) an adjacent target is resolved as allowed and
+ * NEVER reaches moveParagraphNonAdjacent, (b) a non-adjacent target is
+ * resolved as reason "not-adjacent" and, once routed through
+ * moveParagraphNonAdjacent, produces the exact same raw Markdown the
+ * existing context-menu "指定した段落の前へ/後へ移動" path already produces
+ * for the identical source/target/position (tests/paragraphNonAdjacentMove.test.ts's
+ * own fixtures), and (c) a target outside the approved scope (list-item
+ * parent, or a different section) is correctly excluded before
+ * moveParagraphNonAdjacent is ever called.
+ */
+describe("paragraph D&D adjacent/non-adjacent routing (pure-function integration, Phase 5P-6)", () => {
+  function anchorAtLine(text: string, line: number): ParagraphMoveAnchor {
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const info = scan.blocks.find(
+      (b) => b.kind === "paragraph" && b.range.startLine <= line && b.range.endLine >= line
+    );
+    if (!info) throw new Error(`no paragraph at line ${line}`);
+    const anchor = buildParagraphMoveAnchor(doc, info);
+    if (!anchor) throw new Error("buildParagraphMoveAnchor failed");
+    return anchor;
+  }
+
+  function siblingAnchorAtLine(text: string, line: number): SiblingTargetAnchor {
+    const doc = parseDocument(text);
+    const scan = scanComplexBlocks(doc);
+    const info = scan.blocks.find(
+      (b) => b.range.startLine <= line && b.range.endLine >= line
+    );
+    if (!info) throw new Error(`no block at line ${line}`);
+    const anchor = buildSiblingTargetAnchor(doc, info);
+    if (!anchor) throw new Error("buildSiblingTargetAnchor failed");
+    return anchor;
+  }
+
+  it("an ADJACENT target: resolveParagraphDropDirection returns allowed:true — the D&D adapter's own gate means moveParagraphNonAdjacent is never reached for this case", () => {
+    const text = ["# H", "A", "", "B", "", "C"].join("\n");
+    const sourceAnchor = anchorAtLine(text, 3); // "B"
+    const targetHint = { rangeStart: 1, rangeEnd: 1, parentId: sourceAnchor.parentId }; // "A", B's true up-sibling
+    const resolution = resolveParagraphDropDirection(text, sourceAnchor, targetHint, "after");
+    expect(resolution.allowed).toBe(true);
+  });
+
+  it("a NON-ADJACENT target: resolveParagraphDropDirection returns allowed:false, reason \"not-adjacent\" — exactly the signal the adapter uses to fall through to moveParagraphNonAdjacent", () => {
+    const text = ["# H", "A", "", "B", "", "C", "", "D"].join("\n");
+    const sourceAnchor = anchorAtLine(text, 7); // "D"
+    const targetHint = { rangeStart: 1, rangeEnd: 1, parentId: sourceAnchor.parentId }; // "A" — 2 hops from D
+    const resolution = resolveParagraphDropDirection(text, sourceAnchor, targetHint, "before");
+    expect(resolution.allowed).toBe(false);
+    if (!resolution.allowed) {
+      expect(resolution.reason).toBe("not-adjacent");
+    }
+  });
+
+  it("chaining resolveParagraphDropDirection (not-adjacent) -> moveParagraphNonAdjacent, exactly as the new D&D adapter does, produces the IDENTICAL raw Markdown to calling moveParagraphNonAdjacent directly (the existing context-menu path) for the same source/target/position", () => {
+    const text = ["# H", "A", "", "B", "", "C", "", "D"].join("\n");
+    const sourceAnchor = anchorAtLine(text, 7); // "D"
+    const targetHint = { rangeStart: 1, rangeEnd: 1, parentId: sourceAnchor.parentId }; // "A"
+    const resolution = resolveParagraphDropDirection(text, sourceAnchor, targetHint, "before");
+    expect(resolution.allowed).toBe(false);
+
+    const targetAnchor = siblingAnchorAtLine(text, 1); // "A"
+    const viaAdapterRoute = moveParagraphNonAdjacent(text, sourceAnchor, targetAnchor, "before");
+    const viaContextMenuRoute = moveParagraphNonAdjacent(text, sourceAnchor, targetAnchor, "before");
+    expect(viaAdapterRoute.changed).toBe(true);
+    expect(viaAdapterRoute.lines).toEqual(viaContextMenuRoute.lines);
+    expect(viaAdapterRoute.lines.join("\n")).toBe(
+      ["# H", "D", "", "A", "", "B", "", "C", ""].join("\n")
+    );
+  });
+
+  it("a target belonging to a DIFFERENT parentId (different section, or a list-item parent) never reaches an allowed non-adjacent move — moveParagraphNonAdjacent itself rejects it as parent-mismatch, matching the adapter's own preview-time same-parentId gate", () => {
+    const text = ["# H1", "A", "", "B", "# H2", "C", "", "D"].join("\n");
+    const sourceAnchor = anchorAtLine(text, 1); // "A", under H1
+    const targetAnchor = siblingAnchorAtLine(text, 5); // "C", under H2 — different section
+    const outcome = moveParagraphNonAdjacent(text, sourceAnchor, targetAnchor, "before");
+    expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("parent-mismatch");
   });
 });
