@@ -25,6 +25,7 @@ import {
 } from "../src/edit/compositeBlockPartialEdit";
 import { CompositeBlockRule, DEFAULT_COMPOSITE_BLOCK_RULES } from "../src/model/compositeBlock";
 import { createTranslator } from "../src/i18n";
+import { moveCompositeBlock } from "../src/edit/moveCompositeBlock";
 
 /** Real pipeline: parse -> scan -> match -> snapshot the Nth recognized composite (0-based). */
 function snapshotOf(
@@ -373,6 +374,54 @@ describe("applyCompositeBlockEdit: rejections leave the note COMPLETELY unchange
     expect(outcome.changed).toBe(false);
     expect(outcome.reason).toBe("range-invalid");
     expect(outcome.lines.join("\n")).toBe(text);
+  });
+});
+
+/**
+ * Phase 5D-4A acceptance evidence (the audit's own most important
+ * conclusion — see docs/phase5d4a_composite_block_atomic_move_review.md
+ * §1's "監査で確認した事実"): unlike the "snapshot-mismatch" cases above
+ * (which hand-simulate a "the composite moved elsewhere" text by literally
+ * splicing an unrelated line into a string), this describe block chains an
+ * ACTUAL edit/moveCompositeBlock.ts#moveCompositeBlock() call's real output
+ * into applyCompositeBlockEdit — reproducing, with real data, the exact
+ * sequence a stale Partial Edit Pane would hit in practice: (1) the pane
+ * loads a composite and captures its snapshot/originalText while the
+ * composite still sits at its ORIGINAL position; (2) the user leaves the
+ * pane open and performs an atomic Move (Tree menu or editor command) on
+ * that SAME composite, which genuinely relocates it via moveCompositeBlock;
+ * (3) the user returns to the still-open pane and Applies against the now-
+ * stale snapshot/originalText. No text is hand-constructed to represent
+ * step 2 — it is the real moveCompositeBlock() outcome.
+ */
+describe("applyCompositeBlockEdit: fail-closed after an ACTUAL moveCompositeBlock() relocated the composite (Phase 5D-4A acceptance evidence)", () => {
+  it("rejects (snapshot-mismatch), and leaves the moved text unchanged, when a stale whole-Composite Partial Edit is Applied after moveCompositeBlock has already relocated the composite", () => {
+    const originalText = ["- one", "> [!note]", "> body", "- two"].join("\n");
+    const { snapshot: staleSnapshot, extracted } = loadOwn(originalText);
+
+    // Step 2 above: a REAL move, not a simulated one.
+    const moveOutcome = moveCompositeBlock(
+      originalText,
+      { snapshot: staleSnapshot, direction: "down" },
+      DEFAULT_COMPOSITE_BLOCK_RULES
+    );
+    expect(moveOutcome.changed).toBe(true);
+    const movedText = moveOutcome.lines.join("\n");
+    expect(movedText).not.toBe(originalText);
+
+    // Step 3 above: Apply against the PRE-MOVE snapshot/originalText, but
+    // re-resolved against the CURRENT (post-move) text.
+    const doc = parseDocument(movedText);
+    const outcome = applyCompositeBlockEdit(
+      doc,
+      staleSnapshot,
+      extracted.text,
+      "- one edited\n> [!note]\n> body edited",
+      DEFAULT_COMPOSITE_BLOCK_RULES
+    );
+    expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("snapshot-mismatch");
+    expect(outcome.lines.join("\n")).toBe(movedText);
   });
 });
 

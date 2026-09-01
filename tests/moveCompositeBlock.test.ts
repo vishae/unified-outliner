@@ -116,6 +116,42 @@ describe("moveCompositeBlock: positive cases — composite-widening (adjacent bl
   });
 });
 
+/**
+ * Phase 5D-4A acceptance evidence: the audit's raw-range-preservation
+ * conclusion rests on moveCompositeBlock's own executor contract (swapBlocks
+ * exchanges two contiguous raw-text LineRange slices verbatim, with zero
+ * re-serialization) — see docs/phase5d4a_composite_block_atomic_move_review.md
+ * §1's "監査で確認した事実" for the full reasoning. The existing "positive
+ * cases" describes above already prove this for a callout's own
+ * `[!type]`/title/body and for composite-widening; the two cases below close
+ * the two remaining gaps the audit's own checklist named explicitly — a
+ * FOLD MARKER and an INTERNAL NESTED LIST — each isolated into its own test
+ * (not combined into one fixture) so a future regression's failure message
+ * points unambiguously at which one broke.
+ */
+describe("moveCompositeBlock: raw range preservation of composite-internal details (Phase 5D-4A acceptance evidence)", () => {
+  it("preserves the callout's fold marker ('+') through an actual swap", () => {
+    const text = ["- one", "> [!note]+ Folded title", "> body a", "- two"].join("\n");
+    const outcome = moveOwn(text, "down");
+    expect(outcome.changed).toBe(true);
+    expect(outcome.lines).toEqual(["- two", "- one", "> [!note]+ Folded title", "> body a"]);
+  });
+
+  it("preserves a markdown list nested inside the callout body through an actual swap", () => {
+    const text = ["- one", "> [!note]", "> body a", "> - nested item 1", "> - nested item 2", "- two"].join("\n");
+    const outcome = moveOwn(text, "down");
+    expect(outcome.changed).toBe(true);
+    expect(outcome.lines).toEqual([
+      "- two",
+      "- one",
+      "> [!note]",
+      "> body a",
+      "> - nested item 1",
+      "> - nested item 2",
+    ]);
+  });
+});
+
 describe("moveCompositeBlock: rejections reachable through a genuinely re-matched composite", () => {
   it("rejects (nested-in-list) a composite whose anchor list item is nested inside another list item", () => {
     const text = ["- outer", "  - inner", "> [!note]", "> body"].join("\n");
@@ -154,6 +190,41 @@ describe("moveCompositeBlock: rejections reachable through a genuinely re-matche
     const outcome = moveOwn(text, "down");
     expect(outcome.changed).toBe(false);
     expect(outcome.reason).toBe("different-parent-or-depth");
+    expect(outcome.lines.join("\n")).toBe(text);
+  });
+
+  /**
+   * Phase 5D-4A acceptance evidence: judge-layer coverage for THIS exact
+   * fixture (direction "down", next block a section heading) already
+   * exists in tests/compositeBlockMovability.test.ts ("rejects
+   * (no-adjacent-compatible-unit) direction 'down' when the very next
+   * block is a section heading (no cross-section hop supported)") — that
+   * test proves evaluateCompositeBlockMovability itself refuses to cross a
+   * section boundary. This test closes the one remaining gap: that the
+   * EXECUTOR (moveCompositeBlock, which re-runs the same judge internally)
+   * also refuses end-to-end, with `reason` reported AND the note left
+   * byte-identical, not merely that the judge would say so in isolation.
+   *
+   * Direction "up" is deliberately NOT duplicated here as a second
+   * executor-level test: moveCompositeBlock's own "up" and "down" branches
+   * both funnel through the exact same skipBlankLines/findAdjacentAnchorNode
+   * primitives (see parser/compositeBlocks.ts's own doc comment on
+   * evaluateCompositeBlockMovability, condition 3) with no direction-specific
+   * branching beyond which boundary line to scan from, and the "down"
+   * case above already proves the executor correctly wires that shared
+   * primitive's rejection through to `reason`/unchanged `lines`. Per this
+   * ticket's minimal-scope constraint (受入証跡化であり網羅的な経路比較では
+   * ない), a second, structurally-redundant "up" executor test is not
+   * added; "up" direction's OWN document-edge case is already covered by
+   * this same describe block's existing
+   * "no-adjacent-compatible-unit direction 'up' at the start of the
+   * document" test above.
+   */
+  it("rejects (no-adjacent-compatible-unit) direction 'down' when the next block is a section heading (no cross-section hop)", () => {
+    const text = ["# A", "- one", "> [!note]", "> body", "# B"].join("\n");
+    const outcome = moveOwn(text, "down");
+    expect(outcome.changed).toBe(false);
+    expect(outcome.reason).toBe("no-adjacent-compatible-unit");
     expect(outcome.lines.join("\n")).toBe(text);
   });
 });
