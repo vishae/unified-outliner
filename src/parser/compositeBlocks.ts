@@ -654,6 +654,25 @@ export function findAdjacentAnchorNode(
  *      anchor), so no separate "sibling-is-nested-in-list"-style check is
  *      needed here.
  */
+/**
+ * Phase 5D-4C: extracted from evaluateCompositeBlockMovability's own
+ * condition 4 (see that function's doc comment for the full rationale —
+ * why indentColumns is compared in addition to parentId/depth) so
+ * move/findCompositeBlockDropTarget.ts#resolveCompositeBlockDropTarget
+ * (the non-adjacent CompositeBlock D&D resolver) can share the EXACT same
+ * "same structural level" judgment for its own drop-target check, rather
+ * than independently re-deriving an equivalent comparison that could drift
+ * out of sync with this one over time. Pure field comparison only — no
+ * behavior change to evaluateCompositeBlockMovability itself, which now
+ * calls this function instead of the same three-field check inline.
+ */
+export function sameCompositeAnchorLevel(
+  a: { parentId: string | null; depth: number; indentColumns: number },
+  b: { parentId: string | null; depth: number; indentColumns: number }
+): boolean {
+  return a.parentId === b.parentId && a.depth === b.depth && a.indentColumns === b.indentColumns;
+}
+
 export function evaluateCompositeBlockMovability(
   doc: ParsedDocument,
   complexScan: ComplexBlockScanResult,
@@ -690,11 +709,7 @@ export function evaluateCompositeBlockMovability(
     return { eligible: false, reason: "no-adjacent-compatible-unit" };
   }
 
-  if (
-    candidate.parentId !== anchorNode.parentId ||
-    candidate.depth !== anchorNode.depth ||
-    candidate.indentColumns !== anchorNode.indentColumns
-  ) {
+  if (!sameCompositeAnchorLevel(candidate, anchorNode)) {
     return { eligible: false, reason: "different-parent-or-depth" };
   }
 

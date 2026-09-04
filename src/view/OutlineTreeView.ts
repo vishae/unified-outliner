@@ -202,8 +202,15 @@ import {
   CompositeBlockSnapshot,
   deleteCompositeBlock,
 } from "../edit/deleteCompositeBlock";
-import { CompositeMoveDirection } from "../move/findCompositeMoveTarget";
+import { CompositeMoveDirection, findCompositeMoveTarget } from "../move/findCompositeMoveTarget";
 import { compositeMoveReasonText, moveCompositeBlock } from "../edit/moveCompositeBlock";
+import {
+  CompositeBlockDropTargetCandidate,
+  CompositeBlockDropTargetHint,
+  CompositeBlockDropZone,
+  resolveCompositeBlockDropTarget,
+} from "../move/findCompositeBlockDropTarget";
+import { dropCompositeBlock } from "../edit/dropCompositeBlock";
 import { StandaloneMoveDirection } from "../move/findStandaloneComplexBlockMoveTarget";
 import {
   buildStandaloneComplexBlockSnapshot,
@@ -395,6 +402,32 @@ interface StandaloneComplexBlockDragSession {
   sourceTreeNodeId: string;
 }
 
+/**
+ * Phase 5D-4C ("CompositeBlock Atomic Drag-and-Drop 最小実装", Phase 5D-4B
+ * design approved): drag session state for a CompositeBlock PARENT row
+ * being dragged as a D&D SOURCE — the CompositeBlock counterpart to
+ * StandaloneComplexBlockDragSession above, deliberately just as thin: the
+ * ONLY safety-bearing field is `snapshot` (re-verified fresh, never
+ * trusted as-is, by resolveCompositeBlockDropTarget/dropCompositeBlock/
+ * moveCompositeBlock at every dragover and at drop — mirrors
+ * StandaloneComplexBlockDragSession.snapshot's own role exactly).
+ * Deliberately a SEPARATE field from dragSourceId/paragraphDragSession/
+ * calloutDragSession — a single native HTML5 drag operation can only have
+ * one source, so only one of the four session fields is ever set at a
+ * time, but keeping each as its own independently-nullable field (rather
+ * than a tagged union) lets every existing session's call sites stay
+ * byte-for-byte unchanged — this ticket only ADDS a new field and new
+ * call sites that check it, mirroring how endDrag() already clears all
+ * three existing sessions unconditionally (see that method's own updated
+ * doc comment).
+ */
+interface CompositeDragSession {
+  /** Captured once at dragstart via buildCompositeBlockSnapshot — the EXACT same snapshot type/builder showCompositeCommandMenu's own Move/Delete items already use. */
+  snapshot: CompositeBlockSnapshot;
+  /** The dragged row's OWN Tree view id (the composite's own `composite-N` id) — DOM cleanup / row-highlight bookkeeping ONLY, never a comparison key for identity or safety (mirrors the other drag sessions' own sourceTreeNodeId role). */
+  sourceTreeNodeId: string;
+}
+
 export class OutlineTreeView extends ItemView {
   private treeRootEl!: HTMLElement;
   // Keyed by the CURRENT parse's node.id, exactly as every prior phase —
@@ -533,6 +566,16 @@ export class OutlineTreeView extends ItemView {
    * updated doc comment).
    */
   private calloutDragSession: StandaloneComplexBlockDragSession | null = null;
+
+  /**
+   * Phase 5D-4C: the in-progress CompositeBlock (parent row) drag, if any
+   * — see CompositeDragSession's own doc comment. A SEPARATE field from
+   * dragSourceId/paragraphDragSession/calloutDragSession, for the same
+   * reason those are each their own field — only one of the four is ever
+   * set at a time, and endDrag() clears all four unconditionally (see
+   * that method's own updated doc comment).
+   */
+  private compositeDragSession: CompositeDragSession | null = null;
 
   /**
    * UXP-02 (2026-08-12, docs/uxp-02-long-press-menu-duplicate.md): the
@@ -786,6 +829,8 @@ export class OutlineTreeView extends ItemView {
     this.cancelParagraphDrag();
     // Phase 5D-3C: same reasoning for a callout/blockquote drag session.
     this.cancelCalloutDrag();
+    // Phase 5D-4C: same reasoning for a CompositeBlock drag session.
+    this.cancelCompositeDrag();
     this.contentEl.empty();
     // Phase 4E: flush any fold-state mutation still sitting inside the
     // debounce window rather than leaving it to onunload's synchronous,
@@ -820,6 +865,10 @@ export class OutlineTreeView extends ItemView {
     // an in-progress callout/blockquote drag session — see
     // cancelCalloutDrag's own doc comment.
     this.cancelCalloutDrag();
+    // Phase 5D-4C: same unconditional, refresh()-cause-agnostic guard for
+    // an in-progress CompositeBlock drag session — see
+    // cancelCompositeDrag's own doc comment.
+    this.cancelCompositeDrag();
 
     // Inline rename in progress: never tear down the row's <input> out
     // from under the user for an unrelated refresh trigger (debounced
@@ -1382,12 +1431,23 @@ export class OutlineTreeView extends ItemView {
     // drag handle, spatially separated from the rest of the row so a touch
     // on the row BODY (long-press -> context menu, tier 2 below) and a
     // touch on the HANDLE (drag, further below) are never the same gesture
-    // recognizer target. null for a readOnly row (composite/complex-member
-    // — never a drag source, Phase 5D-0.3 approval §1), matching the
-    // existing `if (!readOnly)` gate around the drag listeners further
-    // down.
+    // recognizer target. null for a readOnly row that is NOT a CompositeBlock
+    // parent row (complex-member/paragraph member rows — never a drag
+    // source, Phase 5D-0.3 approval §1), matching the existing `if
+    // (!readOnly)` gate around the drag listeners further down.
+    //
+    // Phase 5D-4D (docs/phase5d4d_mobile_composite_block_drag_handle_design.md):
+    // a CompositeBlock PARENT row (isComposite) is always `readOnly` (Phase
+    // 5D-0.3 approval §1 — rename/indent/outdent stay excluded, unchanged),
+    // yet is now also a valid D&D source/target (Phase 5D-4C on desktop;
+    // this ticket extends the same handle to mobile). `isComposite` is a
+    // deliberate, narrow widening of this one generation condition, layered
+    // on top of the still-unrelaxed read-only contract — mirroring exactly
+    // how the composite drag-wiring branch below is its own `else if`
+    // rather than a relaxation of `!readOnly`. member/complex-member rows
+    // remain excluded: `isComposite` is only ever true for the parent row.
     let dragHandleEl: HTMLElement | null = null;
-    if (!readOnly) {
+    if (!readOnly || isComposite) {
       dragHandleEl = selfEl.createDiv({ cls: "unified-outliner-drag-handle" });
       setIcon(dragHandleEl, "grip-vertical");
       dragHandleEl.setAttribute("aria-hidden", "true");
@@ -1891,10 +1951,20 @@ export class OutlineTreeView extends ItemView {
     // — composite rows are always `readOnly` (correctly, for rename/drag/
     // the structure+list menus), so they're excluded from that block
     // entirely, and need their own parallel wiring to reach
-    // showCompositeCommandMenu. No dragHandleEl exclusion is needed here:
-    // composite rows are never draggable (Phase 5D-0.3 approval §1), so
-    // there is no drag-handle-origin touch to distinguish from the rest of
-    // the row.
+    // showCompositeCommandMenu.
+    //
+    // Phase 5D-4D (docs/phase5d4d_mobile_composite_block_drag_handle_design.md):
+    // composite rows now DO have a mobile drag handle (dragHandleEl — see
+    // its own creation above, generation condition widened to `!readOnly
+    // || isComposite`), so a touch starting on that handle must be excluded
+    // from arming this timer, exactly mirroring the generic `!readOnly &&
+    // Platform.isMobile` block's own dragHandleEl exclusion above (this
+    // block's own doc comment previously said no exclusion was needed —
+    // that was true only while composite rows had no handle at all).
+    // Without this guard, a handle-origin touch would race the handle's
+    // own native drag-lift gesture against this row's long-press timer,
+    // reintroducing the exact conflict UXP-01 already fixed for
+    // section/list.
     if (isComposite && Platform.isMobile) {
       let longPressTimerId: number | null = null;
       let longPressStart: { x: number; y: number } | null = null;
@@ -1908,6 +1978,7 @@ export class OutlineTreeView extends ItemView {
       };
 
       selfEl.addEventListener("pointerdown", (evt) => {
+        if (dragHandleEl && dragHandleEl.contains(evt.target as Node)) return;
         if (!evt.isPrimary) return;
         clearLongPressTimer();
         longPressStart = { x: evt.clientX, y: evt.clientY };
@@ -2140,6 +2211,78 @@ export class OutlineTreeView extends ItemView {
         this.clearDropIndicator();
         this.endDrag();
         this.handleCalloutDropNode(session, evt, node, selfEl);
+      });
+      selfEl.addEventListener("dragend", () => this.handleDragEnd());
+    } else if (isComposite) {
+      // Phase 5D-4C ("CompositeBlock Atomic Drag-and-Drop 最小実装", Phase
+      // 5D-4B design approved): an EIGHTH, entirely new drag-wiring branch
+      // — for a CompositeBlock PARENT row (isComposite).
+      //
+      // Phase 5D-4D (docs/phase5d4d_mobile_composite_block_drag_handle_design.md):
+      // originally desktop only (`!Platform.isMobile`, mirroring Phase
+      // 5T-2's own "初期版はデスクトップ限定" scope decision for paragraph
+      // D&D — Phase 5D-4B design's approved minimum scope excluded
+      // mobile/touch/long-press D&D for that earlier ticket). This ticket
+      // widens the gate to admit mobile too, reusing the exact same UXP-01
+      // handle pattern section/list already use (draggable on dragHandleEl
+      // for mobile, on selfEl for desktop — see just below). An iPad real-
+      // device spike (recorded in the design memo above) confirmed that
+      // existing pattern's native HTML5 D&D already works reliably from a
+      // standalone handle before this ticket extended it here. None of the
+      // five listeners below change.
+      //
+      // A CompositeBlock parent row is ALWAYS in readOnlyNodeIds (Phase
+      // 5D-0.3 approval §1 — rename/indent/outdent/delete/member-level
+      // operations stay fully excluded, UNCHANGED by this ticket), so this
+      // row matched none of the branches above (not `!readOnly`, not a
+      // paragraph, not a complex-member) until now. This branch adds ONLY
+      // drag wiring — no rename, no indent/outdent, no delete-via-drag —
+      // on top of that still-unrelaxed read-only contract.
+      //
+      // A composite row is BOTH a valid D&D SOURCE (dragstart, via
+      // handleCompositeDragStart, reusing buildCompositeBlockSnapshot —
+      // the exact same snapshot builder showCompositeCommandMenu's own
+      // Move/Delete items already use) AND a valid D&D TARGET for another
+      // composite's own D&D (dragover/drop, via the shared
+      // handleCompositeDragOverNode/handleCompositeDropNode core — see
+      // those methods' own doc comments; the SAME core is also reached
+      // from this class's own handleDragOver/handleDrop when a
+      // compositeDragSession is hovering a plain LIST row instead). A
+      // composite row is NEVER a valid target for any OTHER drag session
+      // kind (paragraph/callout/section/list) — this branch intentionally
+      // does not check this.paragraphDragSession/this.calloutDragSession/
+      // this.dragSourceId at all, since none of those existing paths'
+      // own target-resolution helpers ever recognized a composite row as
+      // a target (calloutDropTargetHint explicitly excludes `isComposite`;
+      // this row previously had no drag wiring of any kind) — this ticket
+      // does not change any of that.
+      //
+      // Phase 5D-4D: `draggable` now follows the exact same platform split
+      // as section/list's own UXP-01 wiring above — the handle is the sole
+      // drag origin on mobile, `selfEl` stays the drag origin on desktop
+      // (unchanged from Phase 5D-4C). `dragHandleEl` is guaranteed non-null
+      // here: this branch only runs when `isComposite` is true, and the
+      // generation condition above (`!readOnly || isComposite`) creates the
+      // handle for exactly that case.
+      if (Platform.isMobile) {
+        dragHandleEl?.setAttribute("draggable", "true");
+      } else {
+        selfEl.setAttribute("draggable", "true");
+      }
+      selfEl.addEventListener("dragstart", (evt) =>
+        this.handleCompositeDragStart(evt, node.id, itemEl)
+      );
+      selfEl.addEventListener("dragover", (evt) => {
+        if (this.compositeDragSession) this.handleCompositeDragOverNode(evt, node, selfEl);
+      });
+      selfEl.addEventListener("dragleave", () => this.handleDragLeave(selfEl));
+      selfEl.addEventListener("drop", (evt) => {
+        evt.preventDefault();
+        if (!this.compositeDragSession) return;
+        const session = this.compositeDragSession;
+        this.clearDropIndicator();
+        this.endDrag();
+        this.handleCompositeDropNode(session, evt, node, selfEl);
       });
       selfEl.addEventListener("dragend", () => this.handleDragEnd());
     }
@@ -5370,6 +5513,23 @@ export class OutlineTreeView extends ItemView {
    * what makes a drop illegal per the HTML5 DnD spec).
    */
   private handleDragOver(evt: DragEvent, targetId: string, selfEl: HTMLElement): void {
+    // Phase 5D-4C: a CompositeBlock drag session hovering a section or
+    // list row is resolved through the shared handleCompositeDragOverNode
+    // core — an early, purely additive branch ahead of every other branch
+    // below, which never runs at all while a CompositeBlock drag is active
+    // (only one drag session of any kind is ever active at once). A
+    // SECTION row target is rejected by handleCompositeDragOverNode itself
+    // (via compositeDropTargetHint, which only recognizes list/composite
+    // row kinds) — no separate exclusion is needed here.
+    if (this.compositeDragSession) {
+      const node = this.nodeById.get(targetId);
+      if (!node) {
+        if (this.dropIndicatorEl === selfEl) this.clearDropIndicator();
+        return;
+      }
+      this.handleCompositeDragOverNode(evt, node, selfEl);
+      return;
+    }
     // Phase 5D-3C: a callout/blockquote drag session hovering a section or
     // list row is resolved through the SAME shared core every other row
     // kind uses (handleCalloutDragOverNode) — an early, purely additive
@@ -5403,6 +5563,17 @@ export class OutlineTreeView extends ItemView {
 
   private handleDrop(evt: DragEvent, targetId: string, selfEl: HTMLElement): void {
     evt.preventDefault();
+    // Phase 5D-4C: same early, additive branch as handleDragOver above —
+    // a CompositeBlock drag session dropped onto a section or list row is
+    // resolved through the shared handleCompositeDropNode core.
+    if (this.compositeDragSession) {
+      const session = this.compositeDragSession;
+      this.clearDropIndicator();
+      this.endDrag();
+      const node = this.nodeById.get(targetId);
+      if (node) this.handleCompositeDropNode(session, evt, node, selfEl);
+      return;
+    }
     // Phase 5D-3C: same early, additive branch as handleDragOver above —
     // a callout/blockquote drag session dropped onto a section or list row
     // is resolved through the shared handleCalloutDropNode core.
@@ -5444,6 +5615,9 @@ export class OutlineTreeView extends ItemView {
     // Phase 5D-3C: same unconditional-clear treatment for a callout/
     // blockquote drag session — see calloutDragSession's own doc comment.
     this.calloutDragSession = null;
+    // Phase 5D-4C: same unconditional-clear treatment for a CompositeBlock
+    // drag session — see compositeDragSession's own doc comment.
+    this.compositeDragSession = null;
   }
 
   /**
@@ -5469,6 +5643,18 @@ export class OutlineTreeView extends ItemView {
    */
   private cancelCalloutDrag(): void {
     if (!this.calloutDragSession) return;
+    this.endDrag();
+    this.clearDropIndicator();
+  }
+
+  /**
+   * Phase 5D-4C: cancels an in-progress CompositeBlock (parent row) drag
+   * session specifically — mirrors cancelCalloutDrag's own doc comment/
+   * role exactly, called from the exact same two call sites (refresh(),
+   * onClose()), never from a native drag event.
+   */
+  private cancelCompositeDrag(): void {
+    if (!this.compositeDragSession) return;
     this.endDrag();
     this.clearDropIndicator();
   }
@@ -6202,6 +6388,385 @@ export class OutlineTreeView extends ItemView {
       outcome,
       () => {
         /* Phase 5D-3C: intentionally silent — see this method's own doc comment. */
+      }
+    );
+
+    if (changed) {
+      const cur = editor.getCursor();
+      const lineLen = editor.getLine(cur.line)?.length ?? 0;
+      editor.scrollIntoView(
+        { from: { line: cur.line, ch: 0 }, to: { line: cur.line, ch: lineLen } },
+        true
+      );
+      this.queueSelectionFollow(outcome.newStartLine);
+      this.refresh();
+    }
+    return changed;
+  }
+
+  // ---- Phase 5D-4C ("CompositeBlock Atomic Drag-and-Drop 最小実装",
+  // Phase 5D-4B design approved): CompositeBlock (parent row) D&D --------
+  //
+  // An EIGHTH drag-wiring family, alongside section/list (Phase 3A/4A),
+  // paragraph (Phase 5T-2), and standalone/composite-member callout/
+  // blockquote (Phase 5D-3C) already defined above. Reuses
+  // move/moveBlock.ts's existing primitives exclusively — swapBlocks (via
+  // the UNCHANGED edit/moveCompositeBlock.ts, for the adjacent case) and
+  // insertBlockAt (via the new edit/dropCompositeBlock.ts, for the
+  // non-adjacent case) — never a new text-splice primitive.
+  //
+  // Unlike the callout/blockquote D&D family (whose shared resolution core
+  // is reached from FOUR row kinds), this family's shared core
+  // (handleCompositeDragOverNode/handleCompositeDropNode, below) is reached
+  // from only TWO: this class's own handleDragOver/handleDrop (a plain
+  // list row as target) and this class's own renderNode composite-row
+  // branch (another CompositeBlock's own parent row as target). Every
+  // other row kind (section, paragraph, standalone/composite-member
+  // callout/blockquote, and any list/composite row nested inside another
+  // composite) rejects a CompositeBlock drag session WITHOUT any new code
+  // in this ticket — see this class's own renderNode doc comment on the
+  // new composite-row branch, and compositeDropTargetHint's own doc
+  // comment below, for why.
+
+  /** Phase 5D-4C (v1 scope): upper half -> "before", lower half -> "after". Mirrors computeCalloutDropZone's own two-way split exactly (own independent type — see CompositeBlockDropZone's own doc comment in move/findCompositeBlockDropTarget.ts for why it is not shared with StandaloneComplexBlockDropZone/ParagraphDropZone). */
+  private computeCompositeDropZone(evt: DragEvent, el: HTMLElement): CompositeBlockDropZone {
+    const rect = el.getBoundingClientRect();
+    const ratio = rect.height > 0 ? (evt.clientY - rect.top) / rect.height : 0.5;
+    return ratio < 0.5 ? "before" : "after";
+  }
+
+  /**
+   * Phase 5D-4C: UI-time-only "is this the same CompositeBlock" check —
+   * mirrors edit/moveCompositeBlock.ts's own private snapshotMatches
+   * exactly (same fields compared, same deliberate exclusion of `id`),
+   * reimplemented locally rather than imported since that function is not
+   * exported (each CompositeBlock-editing module in this codebase keeps
+   * its own independent copy — see moveCompositeBlock.ts's own top doc
+   * comment). Used ONLY for dragover-time preview/source-resolution
+   * (resolveCompositeDragSource, below) against the CACHED
+   * this.currentComposites — never for the actual drop's own safety
+   * decision, which is entirely edit/dropCompositeBlock.ts's/
+   * edit/moveCompositeBlock.ts's own re-parse-based re-verification job.
+   */
+  private compositeSnapshotMatches(snapshot: CompositeBlockSnapshot, composite: CompositeBlockInfo): boolean {
+    if (composite.ruleId !== snapshot.ruleId) return false;
+    if (composite.sectionId !== snapshot.sectionId) return false;
+    if (
+      composite.range.startLine !== snapshot.range.startLine ||
+      composite.range.endLine !== snapshot.range.endLine
+    ) {
+      return false;
+    }
+    if (composite.members.length !== snapshot.members.length) return false;
+    for (let i = 0; i < composite.members.length; i++) {
+      const actual = composite.members[i];
+      const expected = snapshot.members[i];
+      if (actual.kind !== expected.kind) return false;
+      if (actual.id !== expected.id) return false;
+      if (
+        actual.range.startLine !== expected.range.startLine ||
+        actual.range.endLine !== expected.range.endLine
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Phase 5D-4C: resolves the CURRENT source CompositeBlockInfo for the
+   * active CompositeBlock drag session, by re-finding a
+   * this.currentComposites entry that structurally matches the session's
+   * own snapshot. Uses the CACHED this.currentComposites, not a fresh
+   * re-parse — safe for the same reason resolveCalloutDragSource's own doc
+   * comment gives: any document change since drag-start would already
+   * have torn this session down via cancelCompositeDrag()/refresh().
+   * Returns null when no session is active or it can no longer be resolved
+   * this way (dragover simply shows no indicator in that case — the
+   * actual DROP still re-verifies everything again from a fully fresh
+   * parse, via edit/dropCompositeBlock.ts / edit/moveCompositeBlock.ts).
+   */
+  private resolveCompositeDragSource(): CompositeBlockInfo | null {
+    const session = this.compositeDragSession;
+    if (!session) return null;
+    return this.currentComposites.find((c) => this.compositeSnapshotMatches(session.snapshot, c)) ?? null;
+  }
+
+  /**
+   * Phase 5D-4C: resolves a hovered/dropped-on Tree row into a
+   * CompositeBlockDropTargetHint, or null when that row's kind is not a
+   * valid v1 CompositeBlock D&D target. Only TWO row kinds are ever
+   * eligible:
+   *
+   *   - a plain list item row (isOutlineListNode) -> its own current
+   *     range/parentId, read directly from this.currentDoc.
+   *   - a CompositeBlock parent row (isOutlineCompositeNode) -> that OTHER
+   *     composite's own full range, and its own anchor member's parentId
+   *     — i.e. already "widened" to the whole other composite, by
+   *     construction (see this class's own renderNode composite-row
+   *     branch and Phase 5D-4B design §4 for why widening is this
+   *     method's job, not the resolver's).
+   *
+   * Every other row kind (section, paragraph, standalone/composite-member
+   * callout/blockquote) returns null — a section row and a
+   * CompositeBlock's own aggregate row are both explicitly out of scope
+   * for OTHER D&D families' own target hints too (see
+   * calloutDropTargetHint's own doc comment), and paragraph/callout rows
+   * were never wired to check this.compositeDragSession at all (see this
+   * class's own new drag-wiring branch's doc comment).
+   */
+  private compositeDropTargetHint(node: OutlineTreeNode): CompositeBlockDropTargetHint | null {
+    const doc = this.currentDoc;
+    if (!doc) return null;
+
+    if (isOutlineListNode(node)) {
+      const listNode = doc.nodes.get(node.id);
+      if (!listNode || listNode.type !== "list") return null;
+      return {
+        range: { startLine: listNode.range.startLine, endLine: listNode.range.endLine },
+        parentId: listNode.parentId,
+      };
+    }
+
+    if (isOutlineCompositeNode(node)) {
+      const composite = this.currentComposites.find((c) => c.id === node.id);
+      if (!composite) return null;
+      const anchor = doc.nodes.get(composite.members[0].id);
+      if (!anchor || anchor.type !== "list") return null;
+      return {
+        range: { startLine: composite.range.startLine, endLine: composite.range.endLine },
+        parentId: anchor.parentId,
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * Phase 5D-4C: dragover-time-only re-resolution of `target` (a
+   * range+parentId hint from compositeDropTargetHint) into a full
+   * CompositeBlockDropTargetCandidate (adding depth/indentColumns),
+   * against the CACHED this.currentDoc/this.currentComposites — mirrors
+   * edit/dropCompositeBlock.ts's own resolveTargetCandidate exactly in
+   * logic, independently reimplemented here since it operates on cached
+   * view-layer state rather than a fresh parse (same Obsidian/pure
+   * boundary split calloutDropTargetHint (view) vs.
+   * dropTargetHintStillValid (executor) already established). Used ONLY
+   * for the dragover indicator preview — the actual drop always re-derives
+   * this fresh via edit/dropCompositeBlock.ts's own re-parse.
+   */
+  private resolveCompositeDropCandidate(
+    doc: ParsedDocument,
+    composites: CompositeBlockInfo[],
+    target: CompositeBlockDropTargetHint
+  ): CompositeBlockDropTargetCandidate | null {
+    for (const node of doc.nodes.values()) {
+      if (node.type !== "list") continue;
+      if (
+        node.range.startLine === target.range.startLine &&
+        node.range.endLine === target.range.endLine &&
+        node.parentId === target.parentId
+      ) {
+        return {
+          range: { startLine: node.range.startLine, endLine: node.range.endLine },
+          parentId: node.parentId,
+          depth: node.depth,
+          indentColumns: node.indentColumns,
+        };
+      }
+    }
+    for (const composite of composites) {
+      if (
+        composite.range.startLine === target.range.startLine &&
+        composite.range.endLine === target.range.endLine
+      ) {
+        const anchor = doc.nodes.get(composite.members[0].id);
+        if (anchor && anchor.type === "list" && anchor.parentId === target.parentId) {
+          return {
+            range: { startLine: composite.range.startLine, endLine: composite.range.endLine },
+            parentId: anchor.parentId,
+            depth: anchor.depth,
+            indentColumns: anchor.indentColumns,
+          };
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Phase 5D-4C dragstart for a CompositeBlock parent row. Builds a
+   * CompositeBlockSnapshot from the CURRENT refresh()-time
+   * this.currentComposites (the EXACT SAME snapshot builder
+   * showCompositeCommandMenu's own Move/Delete items already use) and
+   * stores it as this session's sole safety-bearing field. If the
+   * composite can no longer be resolved, the drag is cancelled at the
+   * browser level via preventDefault() — mirrors handleCalloutDragStart's
+   * own exact failure-handling shape. Takes `compositeId` (not the node
+   * object) — mirrors showCompositeCommandMenu's own signature, and avoids
+   * any need to narrow OutlineTreeNode to OutlineTreeCompositeNode at the
+   * renderNode call site.
+   */
+  private handleCompositeDragStart(evt: DragEvent, compositeId: string, itemEl: HTMLElement): void {
+    const composite = this.currentComposites.find((c) => c.id === compositeId);
+    if (!composite) {
+      evt.preventDefault();
+      return;
+    }
+    const snapshot = buildCompositeBlockSnapshot(composite);
+    this.compositeDragSession = { snapshot, sourceTreeNodeId: compositeId };
+    this.draggingItemEl = itemEl;
+    itemEl.addClass("unified-outliner-dragging");
+    if (evt.dataTransfer) {
+      // Same intentionally-empty-sentinel convention as every other
+      // dragstart handler in this file — see handleDragStart's own doc
+      // comment for the real-device rationale.
+      evt.dataTransfer.setData("text/plain", "");
+      evt.dataTransfer.effectAllowed = "move";
+    }
+  }
+
+  /**
+   * Phase 5D-4C: shared dragover resolution for a CompositeBlock drag
+   * session hovering `node` (a plain list row OR another CompositeBlock's
+   * own parent row — see compositeDropTargetHint's own doc comment).
+   * Called from handleDragOver (list rows) and this class's own new
+   * composite-row branch in renderNode (composite-row targets). Only
+   * calls preventDefault()/shows an indicator when
+   * resolveCompositeBlockDropTarget says the drop would actually be
+   * allowed — an invalid target gets no indicator and no drop-allowed
+   * cursor at all, matching every other D&D path in this file's own
+   * "don't call preventDefault -> browser shows its own not-allowed
+   * affordance" convention.
+   */
+  private handleCompositeDragOverNode(evt: DragEvent, node: OutlineTreeNode, selfEl: HTMLElement): void {
+    const doc = this.currentDoc;
+    const composites = this.currentComposites;
+    const source = this.resolveCompositeDragSource();
+    const target = source ? this.compositeDropTargetHint(node) : null;
+    if (!doc || !source || !target) {
+      if (this.dropIndicatorEl === selfEl) this.clearDropIndicator();
+      return;
+    }
+    const candidate = this.resolveCompositeDropCandidate(doc, composites, target);
+    if (!candidate) {
+      if (this.dropIndicatorEl === selfEl) this.clearDropIndicator();
+      return;
+    }
+    const zone = this.computeCompositeDropZone(evt, selfEl);
+    const resolution = resolveCompositeBlockDropTarget(doc, source, composites, candidate, zone);
+    if (!resolution.allowed) {
+      if (this.dropIndicatorEl === selfEl) this.clearDropIndicator();
+      return;
+    }
+    evt.preventDefault();
+    if (evt.dataTransfer) evt.dataTransfer.dropEffect = "move";
+    this.setDropIndicator(selfEl, zone);
+  }
+
+  /**
+   * Phase 5D-4C: shared drop resolution — mirrors
+   * handleCompositeDragOverNode's own role but for the drop event.
+   * `session` must be captured by the CALLER before invoking
+   * `clearDropIndicator()`/`endDrag()` (which null
+   * `this.compositeDragSession`) — every call site does this, mirroring
+   * handleCalloutDropNode's own identical ordering requirement.
+   */
+  private handleCompositeDropNode(
+    session: CompositeDragSession,
+    evt: DragEvent,
+    node: OutlineTreeNode,
+    selfEl: HTMLElement
+  ): void {
+    const target = this.compositeDropTargetHint(node);
+    if (!target) return;
+    const zone = this.computeCompositeDropZone(evt, selfEl);
+    const rules = getEnabledCompositeBlockRules(this.plugin.settings.compositeBlocks);
+    this.dispatchAndApplyCompositeDrop(session.snapshot, target, zone, rules);
+  }
+
+  /**
+   * Phase 5D-4C: dedicated, thin dispatch for a CompositeBlock drop —
+   * mirrors dispatchAndApplyStandaloneComplexBlockDrop's own exact shape
+   * (same multi-cursor guard, same "read the editor's CURRENT text and
+   * hand it to the pure function(s) along with the drag-time snapshot/
+   * target/zone" pattern, same applyLineEditOutcome/scroll/refresh tail).
+   *
+   * Unlike every other dispatchAndApply* method in this file, this one
+   * chooses BETWEEN TWO pure functions before applying an outcome — see
+   * Phase 5D-4B design doc §5's own "隣接・非隣接の判定（dispatch 層）"
+   * section for the full rationale. Re-parses the editor's current text
+   * once, re-resolves the source snapshot against it, and (only when that
+   * resolution succeeds) asks the EXISTING, UNCHANGED
+   * move/findCompositeMoveTarget.ts#findCompositeMoveTarget whether the
+   * drop target's own range is EXACTLY the adjacent target it would
+   * itself resolve for the implied direction. A match dispatches through
+   * the EXISTING, UNCHANGED edit/moveCompositeBlock.ts#moveCompositeBlock
+   * (adjacent case, swapBlocks-based); anything else — including a source
+   * that can no longer be resolved at all — dispatches through the new
+   * edit/dropCompositeBlock.ts#dropCompositeBlock (non-adjacent case,
+   * insertBlockAt-based). This routing choice is never itself
+   * safety-critical: BOTH pure functions independently re-parse/re-scan/
+   * re-match/re-resolve everything from scratch and are each fully
+   * fail-closed on their own, so a wrong routing guess here can never
+   * produce an unsafe write — at worst it would produce a "no-target"/
+   * rejection outcome from whichever function was called, exactly as if
+   * that function had been called directly.
+   *
+   * The `notify` callback passed to applyLineEditOutcome is intentionally
+   * a no-op: per Phase 5D-4B design §6, CompositeBlock D&D is a silent
+   * rejection, mirroring every other existing D&D path in this codebase
+   * (section/list, paragraph, callout/blockquote). The existing
+   * menu/command-driven dispatchAndApplyCompositeMove (unchanged) keeps
+   * its own existing Notice behavior via compositeMoveReasonText.
+   */
+  private dispatchAndApplyCompositeDrop(
+    snapshot: CompositeBlockSnapshot,
+    target: CompositeBlockDropTargetHint,
+    zone: CompositeBlockDropZone,
+    rules: CompositeBlockRule[]
+  ): boolean {
+    const view = this.activeMarkdownView.get();
+    if (!view) return false;
+    const editor: Editor = view.editor;
+
+    if (editor.listSelections().length > 1) {
+      this.notify(this.plugin.t("notice.multipleCursors"));
+      return false;
+    }
+
+    const text = editor.getValue();
+    const doc = parseDocument(text);
+    const complexScan = scanComplexBlocks(doc);
+    const composites = matchCompositeBlocks(doc, complexScan, rules);
+    const resolvedSource = composites.find((c) => this.compositeSnapshotMatches(snapshot, c));
+
+    let outcome: LineEditOutcome;
+    if (resolvedSource) {
+      const insertBeforeLine = zone === "before" ? target.range.startLine : target.range.endLine + 1;
+      const direction: CompositeMoveDirection =
+        insertBeforeLine <= resolvedSource.range.startLine ? "up" : "down";
+      const adjacentTarget = findCompositeMoveTarget(doc, complexScan, resolvedSource, direction, composites);
+      const isAdjacentMatch =
+        !!adjacentTarget &&
+        adjacentTarget.range.startLine === target.range.startLine &&
+        adjacentTarget.range.endLine === target.range.endLine;
+      outcome = isAdjacentMatch
+        ? moveCompositeBlock(text, { snapshot, direction }, rules)
+        : dropCompositeBlock(text, { snapshot, target, zone }, rules);
+    } else {
+      outcome = dropCompositeBlock(text, { snapshot, target, zone }, rules);
+    }
+
+    const cursor = { line: snapshot.range.startLine, ch: 0 };
+    const changed = applyLineEditOutcome(
+      editor,
+      cursor,
+      snapshot.range.startLine,
+      text.split("\n"),
+      outcome,
+      () => {
+        /* Phase 5D-4C: intentionally silent — see this method's own doc comment. */
       }
     );
 

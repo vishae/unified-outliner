@@ -548,14 +548,68 @@ describe("Phase 5T-2: paragraph drag & drop wiring (narrow, desktop-only, plan-A
   const moveTs = readFileSync(path.resolve(__dirname, "../src/edit/paragraphTreeMove.ts"), "utf-8");
   const stylesCss = readFileSync(path.resolve(__dirname, "../styles.css"), "utf-8");
 
+  /**
+   * Phase 5D-4D (2026-09, "CompositeBlock 親行へのモバイル六点ハンドル追加")
+   * landmark update. The contract this helper protects is UNCHANGED: "the
+   * paragraph drag branch's own code — never any later, unrelated branch —
+   * must stay free of dragHandleEl / CompositeBlock-specific drag wiring".
+   * Only the END landmark had to change. It used to be the end of the
+   * ENTIRE if/else-if drag-wiring chain
+   * ("\n    }\n\n    if (hasChildren && !isCollapsed)"), which only worked
+   * by accident: none of the branches AFTER the paragraph branch (the
+   * standalone callout/blockquote branch, the composite-member
+   * callout/blockquote branch, the CompositeBlock branch) used to
+   * reference dragHandleEl/CompositeBlock-specific wiring in their own
+   * CODE. Phase 5D-4D's new CompositeBlock branch legitimately references
+   * dragHandleEl as real production code
+   * (`dragHandleEl?.setAttribute("draggable", "true");`, Platform.isMobile
+   * -gated) — once that branch got swept into this extraction by the old,
+   * too-broad end landmark, this file's "paragraph branch never references
+   * dragHandleEl" check broke, even though the paragraph branch's OWN code
+   * was never touched. The fix narrows the end landmark to the paragraph
+   * branch's actual next sibling in the if/else-if chain (the standalone
+   * callout/blockquote branch's own opening condition) instead of the end
+   * of the whole chain, five branches later.
+   */
   function paragraphDragBranch(): string {
-    const start = viewTs.indexOf(
-      "} else if (isOutlineParagraphNode(node) && !Platform.isMobile) {"
-    );
-    expect(start).toBeGreaterThan(-1);
-    const end = viewTs.indexOf("\n    }\n\n    if (hasChildren && !isCollapsed)", start);
-    expect(end).toBeGreaterThan(start);
-    return viewTs.slice(start, end);
+    const startLandmark = "} else if (isOutlineParagraphNode(node) && !Platform.isMobile) {";
+    const start = viewTs.indexOf(startLandmark);
+    if (start === -1) {
+      throw new Error(
+        `paragraph drag branch start landmark ${JSON.stringify(startLandmark)} not found — has the paragraph drag branch been renamed, removed, or reordered? Update this test's bounding logic.`
+      );
+    }
+    // A second occurrence would make `start` itself ambiguous — assert
+    // there is exactly one before trusting it.
+    expect(viewTs.split(startLandmark).length - 1).toBe(1);
+
+    // The paragraph branch's actual next sibling: the standalone
+    // callout/blockquote branch's own opening condition. Written WITHOUT a
+    // leading "!" — the composite-MEMBER callout/blockquote branch further
+    // down uses the negated `!node.isStandalone` condition, which is
+    // textually distinct from this one (confirmed by the occurrence-count
+    // assertion below), so the two can never be confused.
+    const endLandmark = "} else if (\n      isComplexMember &&\n      node.isStandalone &&";
+    const end = viewTs.indexOf(endLandmark, start);
+    if (end === -1) {
+      throw new Error(
+        `paragraph drag branch's own next-sibling-branch landmark ${JSON.stringify(endLandmark)} not found after the paragraph branch — has the standalone callout/blockquote branch been renamed, removed, or reordered? Update this test's bounding logic.`
+      );
+    }
+    if (end <= start) {
+      throw new Error(
+        "paragraph drag branch's end landmark resolved to a position at or before its own start — bounding logic is broken."
+      );
+    }
+    // Exactly one occurrence of this landmark from `start` onward — a
+    // second occurrence would make the chosen `end` ambiguous.
+    expect(viewTs.slice(start).split(endLandmark).length - 1).toBe(1);
+
+    const branch = viewTs.slice(start, end);
+    if (branch.trim().length === 0) {
+      throw new Error("paragraph drag branch extracted as empty — bounding logic is broken.");
+    }
+    return branch;
   }
 
   it("the paragraph drag branch is gated by isOutlineParagraphNode(node) && !Platform.isMobile — desktop only, never attached for a mobile paragraph row", () => {
@@ -588,13 +642,17 @@ describe("Phase 5T-2: paragraph drag & drop wiring (narrow, desktop-only, plan-A
     expect(branch).toContain("this.handleDragEnd()");
   });
 
-  it("the paragraph drag branch never references dragHandleEl in its actual CODE (desktop-only — selfEl itself is the drag source, exactly like desktop's existing section/list behavior; no mobile drag-handle carve-out was added) - the branch's own explanatory comment legitimately mentions dragHandleEl by name to explain why it is irrelevant here, so comments are excluded from this check", () => {
+  it("the paragraph drag branch never references dragHandleEl in its actual CODE (desktop-only — selfEl itself is the drag source, exactly like desktop's existing section/list behavior; no mobile drag-handle carve-out was added) - the branch's own explanatory comment legitimately mentions dragHandleEl by name to explain why it is irrelevant here, so comments are excluded from this check. (Phase 5D-4D: also re-verified that none of handleCompositeDragStart/handleCompositeDragOverNode/handleCompositeDropNode/compositeDragSession leaked in — the new mobile CompositeBlock drag handle work is confined to its own, separate branch, five branches later in the same if/else-if chain.)", () => {
     const branch = paragraphDragBranch();
     const codeOnly = branch
       .split("\n")
       .filter((line) => !line.trim().startsWith("//"))
       .join("\n");
     expect(codeOnly).not.toContain("dragHandleEl");
+    expect(codeOnly).not.toContain("handleCompositeDragStart");
+    expect(codeOnly).not.toContain("handleCompositeDragOverNode");
+    expect(codeOnly).not.toContain("handleCompositeDropNode");
+    expect(codeOnly).not.toContain("compositeDragSession");
   });
 
   it("no child/inside drop affordance exists anywhere in the paragraph drag path — 'unified-outliner-drop-inside' never appears in the branch itself, in computeParagraphDropZone, or in resolveParagraphDropDirection/ParagraphDropZone's own type", () => {
