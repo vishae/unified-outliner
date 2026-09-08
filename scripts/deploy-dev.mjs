@@ -1,4 +1,4 @@
-import { copyFile, mkdir, stat } from "node:fs/promises";
+import { copyFile, mkdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 const vault = process.env.OBSIDIAN_VAULT;
@@ -10,7 +10,14 @@ if (!vault) {
 }
 
 const sourceRoot = resolve(import.meta.dirname, "..");
-const destination = join(resolve(vault), ".obsidian", "plugins", "unified-outliner");
+// Read the plugin id from manifest.json rather than hardcoding it: this
+// fork ships a different id from upstream so it can sit alongside the
+// community build, and a hardcoded folder name would deploy over the top
+// of that build instead.
+const manifest = JSON.parse(
+  await readFile(join(sourceRoot, "manifest.json"), "utf8")
+);
+const destination = join(resolve(vault), ".obsidian", "plugins", manifest.id);
 const artifacts = ["manifest.json", "main.js", "styles.css"];
 
 try {
