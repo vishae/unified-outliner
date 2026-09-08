@@ -1,10 +1,10 @@
 {
-  "id": "unified-outliner",
-  "name": "Unified Outliner",
+  "id": "unified-outliner-serena",
+  "name": "Unified Outliner (Serena)",
   "version": "0.5.1",
   "minAppVersion": "1.8.7",
   "description": "Move, reorganize, and locally edit heading sections and list subtrees.",
   "author": "kazdonkai",
-  "authorUrl": "https://github.com/kazdonkai",
+  "authorUrl": "https://github.com/vishae/unified-outliner",
   "isDesktopOnly": false
 }
