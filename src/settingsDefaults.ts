@@ -74,6 +74,28 @@ export interface UnifiedOutlinerSettings {
    */
   syncOutlineTreeFoldingToEditor: boolean;
   /**
+   * Extra vertical distance, in pixels, kept between the top of the body
+   * editor's viewport and a line jumped to from the Outline Tree
+   * (OutlineTreeView.scrollLineToTop). 0 — the default, and the behavior
+   * every version before this setting existed had — puts the target line
+   * flush with the top of the scroller.
+   *
+   * That flush-to-top position is wrong whenever something is pinned over
+   * the top of the same scroller: a sticky toolbar from another plugin, or
+   * a theme's own sticky header, covers the very line that was just jumped
+   * to. CM6's scrollIntoView takes a `yMargin` alongside `y: "start"` for
+   * exactly this, so this value is threaded straight into that one call
+   * rather than reimplementing the scroll.
+   *
+   * Clamped to 0–1000 by mergeSettings — a negative margin would scroll the
+   * target line off the top of the viewport, and anything beyond a
+   * screen-height of offset is a corrupted/hand-edited value rather than an
+   * intent. Only the CM6 path honors it; the `.cm`-absent fallback branch
+   * uses Obsidian's public Editor.scrollIntoView, which cannot express a
+   * margin at all.
+   */
+  jumpScrollOffset: number;
+  /**
    * 2026-08-11 ticket ("Move block の対象を最小安全ブロックへ" §5–6): purely
    * cosmetic Outline Tree visual aids, plus the two move-command
    * notifications introduced alongside the Move block/Move section
@@ -280,6 +302,7 @@ export const DEFAULT_SETTINGS: UnifiedOutlinerSettings = {
   showListItemsInOutline: false,
   followKeyboardSelectionIntoBody: true,
   syncOutlineTreeFoldingToEditor: true,
+  jumpScrollOffset: 0,
   treeKindHighlight: { ...DEFAULT_TREE_KIND_HIGHLIGHT },
   compositeBlocks: { ...DEFAULT_COMPOSITE_BLOCK_SETTINGS },
   headingPrefixStyle: "none",
@@ -298,6 +321,26 @@ export const DEFAULT_SETTINGS: UnifiedOutlinerSettings = {
  * wiring this into `this.settings` alongside the actual Obsidian
  * loadData() call.
  */
+/**
+ * `jumpScrollOffset` is a top-level SCALAR field, so the shallow
+ * Object.assign in mergeSettings carries over whatever raw value data.json
+ * held — including a string, a NaN, a negative number, or something absurd
+ * from a hand-edited file. Same "explicit re-validation" treatment as
+ * `language` / `outlineTreeSidebarPosition` / `listPrefixStyle`, but a
+ * clamp rather than an enum check: a value outside 0–1000 is pulled back to
+ * the nearest end rather than discarded, since the user's intent (some
+ * offset, mistyped) is still legible; a non-finite or non-numeric value
+ * falls back to the 0 default.
+ */
+export const MAX_JUMP_SCROLL_OFFSET = 1000;
+
+export function normalizeJumpScrollOffset(raw: unknown): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return DEFAULT_SETTINGS.jumpScrollOffset;
+  }
+  return Math.min(Math.max(Math.round(raw), 0), MAX_JUMP_SCROLL_OFFSET);
+}
+
 export function mergeSettings(
   raw: Record<string, unknown>
 ): UnifiedOutlinerSettings {
@@ -357,5 +400,9 @@ export function mergeSettings(
   merged.listPrefixStyle = isValidListPrefixStyle(raw.listPrefixStyle)
     ? raw.listPrefixStyle
     : DEFAULT_SETTINGS.listPrefixStyle;
+  // jumpScrollOffset: same "top-level scalar, explicit re-validation"
+  // treatment as the three above, clamped rather than enum-checked — see
+  // normalizeJumpScrollOffset's own doc comment.
+  merged.jumpScrollOffset = normalizeJumpScrollOffset(raw.jumpScrollOffset);
   return merged;
 }

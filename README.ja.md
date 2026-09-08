@@ -217,6 +217,7 @@ callout member には、単体の callout と同じ **▣** prefix が付きま�
 - **Normalize ordered list markers to `1.`**: 構造編集後に、順序付きリストの番号記号を `1.` に統一します。
 - **Follow keyboard selection into body editor**: キーボードでツリーを移動すると、本文エディタも追従します。
 - **Sync Outline Tree folding to editor**: ツリーでノードを折りたたむ／展開すると、本文エディタ側の該当箇所も連動して折りたたみ／展開します。
+- **Jump scroll offset (pixels)**: ツリーからジャンプした行の上に確保する余白。既定の `0` では対象行がエディタ最上部にぴったり配置されます。固定表示のツールバーやテーマのヘッダーがノート上部を覆う場合に値を大きくしてください。最大 `1000`。
 - **Show no-op notices**: 実行できない操作が変更を行わなかった理由を表示します。
 
 設定は **General**（上記のとおりカテゴリごとに区切り線で分類）と **Extended blocks** の2タブに分かれています。**Extended blocks** タブは、プラグイン組み込みの **List + Callout** と **List + Quote** のグループ化規則（詳しくは上記「callout・blockquote・拡張ブロックを編集する」を参照）を個別に有効・無効化するものです。規則を無効にしてもグループ表示が止まるだけで、Markdown本体や、まとめられているリスト項目・callout/blockquote自体は変更されません。

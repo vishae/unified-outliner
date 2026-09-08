@@ -2717,6 +2717,14 @@ export class OutlineTreeView extends ItemView {
    * Falls back to the previous `Editor.scrollIntoView(..., true)` (center)
    * behavior if `.cm` is ever absent — keeps this from throwing even if
    * that private property is renamed/removed in a future Obsidian version.
+   *
+   * "Top" is the top of the viewport plus `settings.jumpScrollOffset`,
+   * which defaults to 0 (flush, the behavior before that setting existed).
+   * A non-zero offset exists for the case where the top of the scroller is
+   * not actually visible — a sticky toolbar from another plugin, a theme's
+   * sticky header — where a flush-to-top jump lands the target line
+   * underneath it. The fallback branch above cannot honor the offset:
+   * Obsidian's public Editor.scrollIntoView has no margin parameter.
    */
   private scrollLineToTop(editor: Editor, line: number): void {
     const cm = getEditorCmView(editor);
@@ -2732,7 +2740,20 @@ export class OutlineTreeView extends ItemView {
     // this view's own `node.line`) are 0-indexed throughout.
     const clampedLine = Math.min(Math.max(line, 0), cm.state.doc.lines - 1);
     const pos = cm.state.doc.line(clampedLine + 1).from;
-    cm.dispatch({ effects: EditorView.scrollIntoView(pos, { y: "start" }) });
+    // `yMargin` is CM6's own "keep this much extra space on the scroll
+    // axis" option, honored alongside y: "start" — so a non-zero
+    // jumpScrollOffset lands the target line that many pixels below the top
+    // of the viewport instead of flush against it, clearing anything the
+    // user has pinned over the top of the same scroller (a sticky toolbar
+    // from another plugin, a theme's sticky header). 0 — the default —
+    // reproduces the previous behavior exactly, since CM6 treats an absent
+    // yMargin as 0.
+    cm.dispatch({
+      effects: EditorView.scrollIntoView(pos, {
+        y: "start",
+        yMargin: this.plugin.settings.jumpScrollOffset,
+      }),
+    });
   }
 
   /**

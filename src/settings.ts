@@ -4,6 +4,7 @@ import {
   DEFAULT_SETTINGS,
   HeadingPrefixStyle,
   ListPrefixStyle,
+  normalizeJumpScrollOffset,
   OutlineTreeSidebarPosition,
   TreeKindHighlightSettings,
   UnifiedOutlinerSettings,
@@ -126,8 +127,9 @@ export class UnifiedOutlinerSettingTab extends PluginSettingTab {
   //     showMoveResultToast (what Move block / Move section is allowed to
   //     do, and how its result is surfaced back to the user).
   //   - 編集・操作: normalizeOrderedLists, followKeyboardSelectionIntoBody,
-  //     syncOutlineTreeFoldingToEditor, showNoopNotices (remaining editor-
-  //     interaction behaviors that don't belong to any of the above three).
+  //     jumpScrollOffset, syncOutlineTreeFoldingToEditor, showNoopNotices
+  //     (remaining editor-interaction behaviors that don't belong to any of
+  //     the above three).
   private renderGeneralTab(containerEl: HTMLElement): void {
     // i18n実装 (2026-08-11): language switch, deliberately the FIRST control
     // in this tab (per the ticket's "分かりやすい位置（原則として先頭）"
@@ -372,6 +374,31 @@ export class UnifiedOutlinerSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.followKeyboardSelectionIntoBody)
           .onChange(async (v) => {
             this.plugin.settings.followKeyboardSelectionIntoBody = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    // Free text rather than a slider: the useful value is whatever the
+    // user's own sticky header happens to measure, which is a specific
+    // number they arrive at by trying one — not a point on a range they
+    // drag along. Parsed leniently and normalized through the SAME
+    // normalizeJumpScrollOffset used by mergeSettings, so a typo, an empty
+    // field, or an out-of-range number lands on exactly the value a
+    // reloaded data.json would produce; the field is then rewritten to the
+    // normalized value so what is displayed is what is stored.
+    new Setting(containerEl)
+      .setName(this.plugin.t("settings.jumpScrollOffset.name"))
+      .setDesc(this.plugin.t("settings.jumpScrollOffset.desc"))
+      .addText((t) =>
+        t
+          .setPlaceholder(String(DEFAULT_SETTINGS.jumpScrollOffset))
+          .setValue(String(this.plugin.settings.jumpScrollOffset))
+          .onChange(async (v) => {
+            const trimmed = v.trim();
+            const parsed = trimmed === "" ? DEFAULT_SETTINGS.jumpScrollOffset : Number(trimmed);
+            const normalized = normalizeJumpScrollOffset(parsed);
+            this.plugin.settings.jumpScrollOffset = normalized;
+            if (String(normalized) !== trimmed) t.setValue(String(normalized));
             await this.plugin.saveSettings();
           })
       );
