@@ -88,3 +88,47 @@ describe("focus repaint (static source check)", () => {
     expect(viewTs).toContain("selfEl.id = `unified-outliner-row-${node.id}`;");
   });
 });
+
+/**
+ * The residual half of the same bug: the focus handler was one cause of a
+ * mid-click rebuild, the DEBOUNCED refresh triggers are the other. Those
+ * fire on a 150ms timer (active-leaf-change when the pane is first
+ * clicked, editor-change, the document mouseup handler), so a click held a
+ * little longer than the debounce still lost its click — which is why the
+ * first click into the pane went missing only "sometimes" after the focus
+ * fix landed.
+ */
+describe("no rebuild while a click is in progress (static source check)", () => {
+  it("refresh() defers instead of rebuilding while a pointer is down on a row", () => {
+    const body = slice("refresh(): void {", "const view = this.activeMarkdownView.get();");
+    expect(body).toContain("if (this.pointerDownInTree) {");
+    expect(body).toContain("this.refreshDeferredByPointer = true;");
+    expect(body).toContain("return;");
+  });
+
+  it("the guard is set on pointerdown over the tree", () => {
+    expect(viewTs).toContain('this.registerDomEvent(this.treeRootEl, "pointerdown", () => {');
+    expect(viewTs).toContain("this.pointerDownInTree = true;");
+  });
+
+  it("release is listened for on the document, and covers cancellation", () => {
+    expect(viewTs).toContain('for (const release of ["pointerup", "pointercancel"] as const) {');
+    expect(viewTs).toContain("this.registerDomEvent(document, release, () => {");
+  });
+
+  it("a deferred refresh is replayed after the click, not dropped", () => {
+    const start = viewTs.indexOf('for (const release of ["pointerup", "pointercancel"] as const) {');
+    const body = viewTs.slice(start, start + 1200);
+    expect(body).toContain("this.refreshDeferredByPointer = false;");
+    expect(body).toContain("requestAnimationFrame(() => this.refresh());");
+  });
+
+  it("the guard clears even when nothing was deferred", () => {
+    const start = viewTs.indexOf('for (const release of ["pointerup", "pointercancel"] as const) {');
+    const body = viewTs.slice(start, start + 1200);
+    const cleared = body.indexOf("this.pointerDownInTree = false;");
+    const deferredCheck = body.indexOf("if (!this.refreshDeferredByPointer) return;");
+    expect(cleared).toBeGreaterThan(-1);
+    expect(deferredCheck).toBeGreaterThan(cleared);
+  });
+});

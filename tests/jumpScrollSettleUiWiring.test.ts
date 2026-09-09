@@ -56,11 +56,35 @@ describe("jump scroll settle (static source check, 26048-TECH-006)", () => {
     expect(body).not.toContain("cm.lineBlockAt(pos).top - this.plugin.settings.jumpScrollOffset");
   });
 
-  it("is bounded by TIME, not a frame count — a Dataview block can render hundreds of ms late", () => {
+  it("watches the editor's rendered height instead of guessing at a duration", () => {
     const body = settle();
-    expect(body).toContain("const deadline = win.performance.now() + 900;");
-    expect(body).toContain("win.performance.now() > deadline");
+    expect(body).toContain("observer.observe(cm.contentDOM);");
     expect(body).not.toContain("framesLeft");
+    expect(body).not.toContain("deadline");
+  });
+
+  it("uses the editor window's own ResizeObserver, not the global one", () => {
+    // A constructor from another realm observes nothing — and in a popout
+    // the editor's window is not this one.
+    const body = settle();
+    expect(body).toContain(".ResizeObserver;");
+    expect(body).toContain("new ResizeObserverCtor(");
+  });
+
+  it("stops after a quiet period and under a hard cap, so nothing is held indefinitely", () => {
+    const body = settle();
+    expect(body).toContain("const QUIET_MS = 1200;");
+    expect(body).toContain("const HARD_CAP_MS = 8000;");
+    expect(body).toContain("quietTimer = win.setTimeout(finish, QUIET_MS);");
+    expect(body).toContain("win.performance.now() > hardCap");
+  });
+
+  it("corrects on a frame rather than inside the observer callback", () => {
+    const body = settle();
+    const observerStart = body.indexOf("new ResizeObserverCtor(");
+    const raf = body.indexOf("win.requestAnimationFrame(", observerStart);
+    expect(raf).toBeGreaterThan(observerStart);
+    expect(body).toContain("if (this.jumpScrollSettleHandle !== null) return;");
   });
 
   it("stops when the document changes under it", () => {
@@ -72,28 +96,22 @@ describe("jump scroll settle (static source check, 26048-TECH-006)", () => {
   it("detects the user from real input events, not from scrollTop moving", () => {
     // CM6 re-applies its own pending scroll target across measure cycles,
     // which is indistinguishable from a user scroll if you only watch
-    // scrollTop — and that made the loop abort exactly when it was needed.
+    // scrollTop — and that made an earlier version abort exactly when it
+    // was needed.
     const body = settle();
     expect(body).toContain('const events = ["wheel", "touchstart", "pointerdown", "keydown"] as const;');
     expect(body).toContain("cm.scrollDOM.addEventListener(name, abort, options);");
-    expect(body).toContain("if (aborted ||");
+    expect(body).toContain("const options = { capture: true, passive: true } as const;");
     expect(body).not.toContain("lastWritten");
   });
 
-  it("listens in the capture phase and passively, so a gesture can't be hidden from it", () => {
+  it("disconnects the observer, clears the timer and removes the listeners on every exit", () => {
     const body = settle();
-    expect(body).toContain("const options = { capture: true, passive: true } as const;");
-  });
-
-  it("removes its listeners when it stops, by every exit path", () => {
-    const body = settle();
-    expect(body).toContain("this.jumpScrollSettleCleanup = cleanup;");
+    expect(body).toContain("observer.disconnect();");
     expect(body).toContain("cm.scrollDOM.removeEventListener(name, abort, options);");
+    expect(body).toContain("if (quietTimer !== null) win.clearTimeout(quietTimer);");
     const cancel = slice("private cancelJumpScrollSettle(): void {", "\n  /**");
     expect(cancel).toContain("this.jumpScrollSettleCleanup?.();");
-    expect(cancel).toContain("this.jumpScrollSettleCleanup = null;");
-    // The loop's own exit path must go through the same teardown.
-    expect(body).toContain("this.cancelJumpScrollSettle();\n        return;");
   });
 
   it("tolerates sub-pixel differences rather than writing every frame", () => {
@@ -110,7 +128,7 @@ describe("jump scroll settle (static source check, 26048-TECH-006)", () => {
   it("requests and cancels the frame on the EDITOR's window, which in a popout is not activeWindow", () => {
     const body = settle();
     expect(body).toContain("const win = cm.dom.win;");
-    expect(body).toContain("win.requestAnimationFrame(step);");
+    expect(body).toContain("win.requestAnimationFrame(");
     const cancel = slice("private cancelJumpScrollSettle(): void {", "\n  /**");
     expect(cancel).toContain("this.jumpScrollSettleWin?.cancelAnimationFrame(this.jumpScrollSettleHandle);");
     expect(cancel).not.toContain("activeWindow");
