@@ -445,6 +445,18 @@ export class OutlineTreeView extends ItemView {
    * existing hidden.
    */
   private headingLevelBarEl: HTMLElement | null = null;
+  /**
+   * Pending animation frame for settleJumpScroll's re-assert loop, or null
+   * when no jump is settling. Cancelled on the next jump and on close.
+   */
+  private jumpScrollSettleHandle: number | null = null;
+  /**
+   * The window that owns jumpScrollSettleHandle. Held because the frame is
+   * requested on the EDITOR's own window (`cm.dom.win`), which in a popout
+   * is not this view's window and not `activeWindow` — cancelling on the
+   * wrong window silently does nothing.
+   */
+  private jumpScrollSettleWin: Window | null = null;
   // Keyed by the CURRENT parse's node.id, exactly as every prior phase —
   // every existing consumer (renderNode, flattenVisibleOutlineTree, the
   // structure/list context menus' contextual-mode check) keeps working
@@ -872,6 +884,9 @@ export class OutlineTreeView extends ItemView {
     this.cancelCalloutDrag();
     // Phase 5D-4C: same reasoning for a CompositeBlock drag session.
     this.cancelCompositeDrag();
+    // 26048-TECH-006: a jump's settle loop must not outlive the view it
+    // was scrolling for.
+    this.cancelJumpScrollSettle();
     this.contentEl.empty();
     // Phase 4E: flush any fold-state mutation still sitting inside the
     // debounce window rather than leaving it to onunload's synchronous,
@@ -3081,6 +3096,80 @@ export class OutlineTreeView extends ItemView {
         yMargin: this.plugin.settings.jumpScrollOffset,
       }),
     });
+    this.settleJumpScroll(cm, pos);
+  }
+
+  /**
+   * Hold the jump where it landed while the editor finishes rendering.
+   *
+   * The dispatch above is a single, one-shot request, resolved against the
+   * heights CM6 knows about at that instant. In a note full of Dataview
+   * blocks (or any other async-rendered Live Preview widget) many of those
+   * heights are ESTIMATES: the widget has not rendered yet, so CM6 assumes
+   * a placeholder height. When the real content arrives and it is shorter
+   * than the estimate, everything below it moves up — including the line
+   * just jumped to, which slides up under whatever the offset was meant to
+   * clear. Jumping DOWN rarely shows this (the content being landed in has
+   * usually been measured already); jumping UP past a screenful of
+   * unrendered blocks shows it every time, and jumping twice appears to
+   * "fix" it only because the first jump forced the measurement. Clicking
+   * into the editor makes it reappear, since Live Preview re-renders on
+   * that transition and the heights go stale again.
+   *
+   * So rather than trusting one dispatch, re-assert the intended scroll
+   * position for a few frames while the layout settles. Cheap (a geometry
+   * read and at most one scrollTop write per frame, for well under a
+   * second) and self-limiting.
+   *
+   * It deliberately yields to anything that isn't this jump:
+   *  - a document change (the user typed, or a widget edited the doc) —
+   *    `pos` may not mean the same place any more, so stop;
+   *  - a scroll this method did not perform (the user reached for the
+   *    wheel, or another plugin scrolled) — detected by comparing against
+   *    the last value written here, so a correction is never a fight;
+   *  - the pane closing (onClose cancels the pending frame).
+   */
+  private settleJumpScroll(cm: EditorView, pos: number): void {
+    this.cancelJumpScrollSettle();
+    const startDoc = cm.state.doc;
+    // ~8 frames is a shade over 100ms at 60fps — long enough for a
+    // Dataview block to render and be measured, short enough that a user
+    // scrolling immediately after a jump is not fought for perceptibly
+    // long (and that path bails out on its own below anyway).
+    let framesLeft = 8;
+    let lastWritten: number | null = null;
+    const win = cm.dom.win;
+    const step = (): void => {
+      this.jumpScrollSettleHandle = null;
+      if (framesLeft-- <= 0) return;
+      // The document changed under us: pos is no longer trustworthy.
+      if (cm.state.doc !== startDoc) return;
+      // Someone else scrolled since our last write — theirs wins.
+      const current = cm.scrollDOM.scrollTop;
+      if (lastWritten !== null && Math.abs(current - lastWritten) > 1) return;
+      const target = Math.max(
+        0,
+        cm.lineBlockAt(pos).top - this.plugin.settings.jumpScrollOffset
+      );
+      // Sub-pixel differences are the browser's own rounding, not drift.
+      if (Math.abs(current - target) > 1) {
+        cm.scrollDOM.scrollTop = target;
+        lastWritten = cm.scrollDOM.scrollTop;
+      } else {
+        lastWritten = current;
+      }
+      this.jumpScrollSettleHandle = win.requestAnimationFrame(step);
+    };
+    this.jumpScrollSettleWin = win;
+    this.jumpScrollSettleHandle = win.requestAnimationFrame(step);
+  }
+
+  /** Stops any in-flight settle loop — see settleJumpScroll. */
+  private cancelJumpScrollSettle(): void {
+    if (this.jumpScrollSettleHandle === null) return;
+    this.jumpScrollSettleWin?.cancelAnimationFrame(this.jumpScrollSettleHandle);
+    this.jumpScrollSettleHandle = null;
+    this.jumpScrollSettleWin = null;
   }
 
   /**
