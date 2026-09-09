@@ -1,5 +1,7 @@
 # Unified Outliner — personal fork
 
+[日本語](README.ja.md)
+
 This is a personal fork of **[kazdonkai/unified-outliner](https://github.com/kazdonkai/unified-outliner)**, an Obsidian plugin for structural editing inside a single Markdown note.
 
 All credit for the plugin belongs upstream. For what it does, how to install the real thing, screenshots and the full documentation, go to the [upstream repository](https://github.com/kazdonkai/unified-outliner) or its [Community Plugins listing](https://community.obsidian.md/plugins/unified-outliner). Nothing here replaces that; this fork is not published anywhere, and is built and deployed straight into one vault.

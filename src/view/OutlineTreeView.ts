@@ -780,7 +780,20 @@ export class OutlineTreeView extends ItemView {
       if (this.renameState) return;
       this.hasFocus = true;
       this.ensureSelection();
-      this.renderTree();
+      // NOT renderTree(): focus fires on MOUSEDOWN, and a full rebuild here
+      // destroys the very row the pointer is pressing. mouseup then lands
+      // on a freshly created element, the browser sees mousedown and mouseup
+      // on different nodes, and no `click` event is ever dispatched — so the
+      // first click into an unfocused pane was silently swallowed and had to
+      // be repeated. Obsidian's own Outline has no such rebuild, which is
+      // why it never behaved this way.
+      //
+      // Focus changes nothing structural — ensureSelection() above only
+      // moves selectedId, never the tree or the collapsed set — so the
+      // visible difference is entirely per-row classes and aria state, and
+      // applyFocusSelectionToDom updates those in place instead. See that
+      // method for why mobile still takes the rebuild.
+      this.repaintFocusState();
     });
     this.registerDomEvent(this.treeRootEl, "blur", () => {
       // Inline rename guard: beginRename's inputEl.focus() call moves DOM
@@ -796,7 +809,10 @@ export class OutlineTreeView extends ItemView {
       // themselves once renameState is cleared.
       if (this.renameState) return;
       this.hasFocus = false;
-      this.renderTree();
+      // Same in-place update as the focus handler above, for symmetry and
+      // for the same reason: a blur caused by clicking something else in
+      // the pane must not tear that element out from under the click.
+      this.repaintFocusState();
     });
 
     this.registerEvent(
@@ -1385,6 +1401,58 @@ export class OutlineTreeView extends ItemView {
       // user-originated and round-trip every one of them back through the
       // Tree's own fold state.
       annotations: outlineTreeFoldOrigin.of(true),
+    });
+  }
+
+  /**
+   * Repaint after a focus change, without rebuilding the tree.
+   *
+   * Mobile is the exception and still takes the full renderTree(): a
+   * selected row on mobile grows a drag handle (see renderNode's
+   * `Platform.isMobile && this.hasFocus && node.id === this.selectedId`
+   * branch), which is a structural difference no class swap can express.
+   * Mobile has no mouse click to swallow — a tap is a touch sequence, not
+   * a mousedown/mouseup pair on a specific element — so the rebuild that
+   * costs desktop its first click costs mobile nothing, and leaving that
+   * path exactly as it was avoids regressing the drag handle.
+   */
+  private repaintFocusState(): void {
+    if (Platform.isMobile) {
+      this.renderTree();
+      return;
+    }
+    this.applyFocusSelectionToDom();
+  }
+
+  /**
+   * The class/aria half of renderNode's selection rendering, applied to
+   * rows that already exist. Deliberately mirrors exactly what renderNode
+   * writes for a selected row — `is-selected unified-outliner-selected`,
+   * `aria-selected`, and the root's `aria-activedescendant` — so a
+   * focus-driven repaint and a full render leave the DOM in the same
+   * state. Keep the two in step if renderNode's selected-row branch
+   * changes.
+   *
+   * Note the condition renderNode uses: a row is selected only while the
+   * pane HAS focus (`this.hasFocus && node.id === this.selectedId`), which
+   * is why blur clears every row rather than moving the marker.
+   */
+  private applyFocusSelectionToDom(): void {
+    const selectedRowId =
+      this.hasFocus && this.selectedId
+        ? `unified-outliner-row-${this.selectedId}`
+        : null;
+    if (selectedRowId) {
+      this.treeRootEl.setAttribute("aria-activedescendant", selectedRowId);
+    } else {
+      this.treeRootEl.removeAttribute("aria-activedescendant");
+    }
+    const rows = this.treeRootEl.querySelectorAll<HTMLElement>(".tree-item-self");
+    rows.forEach((rowEl) => {
+      const isSelected = rowEl.id === selectedRowId;
+      rowEl.classList.toggle("is-selected", isSelected);
+      rowEl.classList.toggle("unified-outliner-selected", isSelected);
+      rowEl.setAttribute("aria-selected", isSelected ? "true" : "false");
     });
   }
 
