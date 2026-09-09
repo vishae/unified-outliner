@@ -1,6 +1,6 @@
 import type { ParsedDocument } from "../model/block";
 import type { OutlineTreeNode } from "./buildOutlineTree";
-import { canCollapseOutlineNode } from "./canCollapseOutlineNode";
+import { canCollapseOutlineNode } from "./hasFoldableContent";
 
 /**
  * One heading level present in the current note, and everything the level

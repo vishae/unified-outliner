@@ -2,7 +2,9 @@ import type { ParsedDocument } from "../model/block";
 import type { OutlineTreeNode } from "./buildOutlineTree";
 
 /**
- * Whether a row in the Outline Tree should offer a fold toggle at all.
+ * Whether a node's DOCUMENT RANGE has anything to fold — the question the
+ * body fold itself asks, kept separate from the tree's own "does this row
+ * have children" question.
  *
  * Until this predicate existed, the answer was simply `children.length > 0`
  * — the tree widget's structural question, "is there a subtree to hide?".
@@ -41,17 +43,37 @@ import type { OutlineTreeNode } from "./buildOutlineTree";
  * has a real fold to perform, and no row is offered one the fold would
  * decline.
  */
-export function canCollapseOutlineNode(
-  node: OutlineTreeNode,
-  doc: ParsedDocument | null | undefined
+export function hasFoldableContent(
+  doc: ParsedDocument | null | undefined,
+  nodeId: string
 ): boolean {
-  if (node.children.length > 0) return true;
   if (!doc) return false;
-  const blockNode = doc.nodes.get(node.id);
+  const blockNode = doc.nodes.get(nodeId);
   if (!blockNode) return false;
   const { startLine, endLine } = blockNode.range;
   for (let line = startLine + 1; line <= endLine && line < doc.lines.length; line++) {
     if (doc.lines[line].trim() !== "") return true;
   }
   return false;
+}
+
+/**
+ * Whether a ROW should offer a fold toggle: it has a subtree to hide, or
+ * its document range has something to fold.
+ *
+ * Kept as a separate, thin composition rather than folded into
+ * hasFoldableContent above, because the two answer different questions and
+ * only one of them is about the document. A node with children is foldable
+ * regardless of what the document says — and must be, since list,
+ * paragraph and composite projections carry synthetic view ids that are
+ * not keys in `doc.nodes` at all, so the document half cannot answer for
+ * them. Tree hierarchy itself stays keyed to `children`; this widens only
+ * the fold affordance.
+ */
+export function canCollapseOutlineNode(
+  node: OutlineTreeNode,
+  doc: ParsedDocument | null | undefined
+): boolean {
+  if (node.children.length > 0) return true;
+  return hasFoldableContent(doc, node.id);
 }

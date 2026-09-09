@@ -27,7 +27,7 @@ The chevron gate and both keyboard paths now ask "is there anything to fold?" in
 
 Upstream scrolls a jumped-to line flush with the top of the editor. Anything pinned over the top of that same scroller — a sticky toolbar from another plugin, or a theme's sticky header — then covers the very line just jumped to.
 
-A **Jump scroll offset (pixels)** setting (0–1000, default 0, which is upstream's behaviour) is threaded into CodeMirror's existing `scrollIntoView` `yMargin`, rather than reimplementing the scroll.
+A **Top offset when jumping from Outline Tree (pixels)** setting (0–1000, default 0, which is upstream's behaviour) is threaded into CodeMirror's existing `scrollIntoView` `yMargin`, rather than reimplementing the scroll.
 
 ### Heading-level bulk collapse/expand buttons
 

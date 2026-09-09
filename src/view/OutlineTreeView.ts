@@ -188,7 +188,7 @@ import {
   paragraphTreeLabel,
   standaloneComplexBlockLabel,
 } from "../tree/buildOutlineTree";
-import { canCollapseOutlineNode } from "../tree/canCollapseOutlineNode";
+import { canCollapseOutlineNode } from "../tree/hasFoldableContent";
 import {
   collectOutlineHeadingLevels,
   OutlineHeadingLevelGroup,

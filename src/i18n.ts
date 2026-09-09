@@ -110,7 +110,7 @@ const en = {
   "tree.headingLevelFoldButtonExpandTooltip": "Expand every level {level} heading",
   "tree.headingLevelFoldButtonNothingTooltip": "No level {level} heading has anything to fold",
   "tree.headingLevelFoldBarLabel": "Collapse or expand by heading level",
-  "settings.jumpScrollOffset.name": "Jump scroll offset (pixels)",
+  "settings.jumpScrollOffset.name": "Top offset when jumping from Outline Tree (pixels)",
   "settings.jumpScrollOffset.desc":
     "Extra space left above a line jumped to from the Outline Tree. 0 places the target line flush with the top of the editor; raise it when a sticky toolbar or theme header covers the top of the note. Maximum 1000.",
   // UXP-05 (2026-08-24): four category-divider headings replacing the old
@@ -801,7 +801,7 @@ const ja: Record<TranslationKey, string> = {
   "tree.headingLevelFoldButtonExpandTooltip": "レベル {level} の見出しをすべて展開する",
   "tree.headingLevelFoldButtonNothingTooltip": "レベル {level} の見出しには折りたたむ対象がない",
   "tree.headingLevelFoldBarLabel": "見出しレベルごとの折りたたみ／展開",
-  "settings.jumpScrollOffset.name": "ジャンプ時のスクロール余白（ピクセル）",
+  "settings.jumpScrollOffset.name": "Outline Tree からジャンプする際の上部オフセット（ピクセル）",
   "settings.jumpScrollOffset.desc":
     "アウトラインツリーからジャンプした行の上に確保する余白。0 の場合、対象行はエディタの最上部にぴったり配置される。固定表示のツールバーやテーマのヘッダーがノート上部を覆う場合に値を大きくする。最大 1000。",
   // UXP-05（2026-08-24）: 旧「移動・アウトラインツリーの種別強調」見出しを
