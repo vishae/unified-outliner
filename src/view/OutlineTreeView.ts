@@ -3153,56 +3153,80 @@ export class OutlineTreeView extends ItemView {
   /**
    * Hold the jump where it landed until the editor stops moving under it.
    *
-   * The dispatch above is a single, one-shot request, resolved against the
-   * heights CM6 knows at that instant. In a note full of Dataview blocks
-   * (or any other async-rendered Live Preview widget) many of those are
-   * ESTIMATES — the widget has not rendered yet — and when the real
-   * content arrives and proves shorter, everything below it moves up,
-   * taking the just-jumped-to line with it, back under whatever the offset
-   * was meant to clear.
+   * The dispatch above is one request, resolved against the heights CM6
+   * knows at that instant, and many of those are guesses: CM6 renders only
+   * a window of the document and ESTIMATES everything outside it, while a
+   * Live Preview widget that has not rendered yet (a `dataviewjs` block,
+   * say) contributes a placeholder height. As the real geometry arrives,
+   * content shifts and the just-jumped-to line goes with it — back under
+   * whatever the offset was meant to clear.
    *
-   * Three shapes of this were tried before this one, and each failed for a
-   * reason worth keeping written down:
+   * Four shapes of this were tried. The failures are the design:
    *
-   *  - **8 animation frames (~130ms).** Nowhere near long enough: a
-   *    `dataviewjs` block runs a query, renders a table and is re-measured
-   *    hundreds of milliseconds — sometimes seconds — later.
-   *  - **A 900ms deadline.** Better, still a guess, and still short of a
-   *    heavy page's render. Any fixed duration is either too short for a
-   *    slow page or pointless work on a fast one.
+   *  - **8 animation frames (~130ms)**, then **a 900ms deadline.** Any
+   *    fixed duration is either too short for a slow page or wasted work
+   *    on a fast one; a dataviewjs block's render and re-measure routinely
+   *    outlast both.
    *  - **Treating a scrollTop change it had not written as the user.** CM6
    *    re-applies its own pending scroll target across measure cycles,
-   *    which is indistinguishable from that test, so the loop gave up
-   *    exactly when it was needed.
+   *    which that test cannot distinguish, so the loop gave up exactly
+   *    when it was needed.
+   *  - **A ResizeObserver on the content element.** Right idea, wrong
+   *    signal: when CM6 renders a region it had only estimated, it
+   *    replaces estimated height with measured height and the TOTAL height
+   *    often barely moves — no resize fires — while every line's position
+   *    inside it shifts. That is precisely the case that was still
+   *    failing: jumping up to a heading far outside the rendered window
+   *    (on a long note, anything above the section adjacent to where the
+   *    jump started) drifted, while a nearer one, already measured, was
+   *    fine.
    *
-   * So this watches the actual cause instead of guessing at its duration:
-   * a ResizeObserver on the editor's content element fires whenever the
-   * rendered height changes — which is precisely when a landing can drift
-   * — and each notification re-asserts the intended position. Between
-   * notifications nothing runs at all.
-   *
-   * It ends on: a quiet period (nothing has resized for QUIET_MS), a hard
-   * cap (some page will always still be rendering), a real user gesture on
-   * the scroller, a document change, or the pane closing.
+   * So the only reliable signal is the thing actually being asked about:
+   * where the line IS. Re-measure it every frame, correct when it has
+   * moved, and stop once it has held still — not after some duration, and
+   * not when a proxy for movement says so.
    */
   private settleJumpScroll(cm: EditorView, pos: number): void {
     this.cancelJumpScrollSettle();
     const startDoc = cm.state.doc;
     const win = cm.dom.win;
-    // Long enough that a slow Dataview page finishes; capped so nothing is
-    // ever held indefinitely. A real interaction ends it sooner.
-    const QUIET_MS = 1200;
-    const HARD_CAP_MS = 8000;
-    const hardCap = win.performance.now() + HARD_CAP_MS;
-    let quietTimer: number | null = null;
+    // Held still for half a second: long enough that a late re-measure or
+    // a widget rendering in two stages does not end it early, short enough
+    // to stop well before a user could act on what they are looking at.
+    const STABLE_FRAMES = 30;
+    // Some page will always still be rendering. Nothing is held longer
+    // than this regardless.
+    const hardCap = win.performance.now() + 8000;
+    let stableFrames = 0;
+    let aborted = false;
 
-    const finish = (): void => {
-      this.cancelJumpScrollSettle();
+    // User intent is read from real input events, which nothing else can
+    // imitate — capture phase so a gesture is seen even if something in
+    // the editor stops it bubbling, passive since these only observe.
+    const abort = (): void => {
+      aborted = true;
+    };
+    const events = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+    const options = { capture: true, passive: true } as const;
+    for (const name of events) {
+      cm.scrollDOM.addEventListener(name, abort, options);
+    }
+    this.jumpScrollSettleCleanup = (): void => {
+      for (const name of events) {
+        cm.scrollDOM.removeEventListener(name, abort, options);
+      }
     };
 
-    const reassert = (): void => {
-      if (cm.state.doc !== startDoc || win.performance.now() > hardCap) {
-        finish();
+    const step = (): void => {
+      this.jumpScrollSettleHandle = null;
+      if (
+        aborted ||
+        // The document changed under us: pos no longer means the same place.
+        cm.state.doc !== startDoc ||
+        stableFrames >= STABLE_FRAMES ||
+        win.performance.now() > hardCap
+      ) {
+        this.cancelJumpScrollSettle();
         return;
       }
       // Measured as a DELTA between where the line is on screen and the
@@ -3218,60 +3242,15 @@ export class OutlineTreeView extends ItemView {
       // Sub-pixel differences are the browser's own rounding, not drift.
       if (Math.abs(drift) > 1) {
         cm.scrollDOM.scrollTop = Math.max(0, cm.scrollDOM.scrollTop + drift);
+        stableFrames = 0;
+      } else {
+        stableFrames++;
       }
+      this.jumpScrollSettleHandle = win.requestAnimationFrame(step);
     };
-
-    const restartQuietTimer = (): void => {
-      if (quietTimer !== null) win.clearTimeout(quietTimer);
-      quietTimer = win.setTimeout(finish, QUIET_MS);
-    };
-
-    // The editor's rendered height changing IS the drift, so observe that
-    // rather than polling frames. Corrections are made on the next frame:
-    // writing scrollTop from inside a ResizeObserver callback risks the
-    // browser's own "ResizeObserver loop" warning, and the layout is not
-    // final until that frame anyway.
-    // `win.ResizeObserver` is not in the DOM lib's Window type (only the
-    // global is), though it exists on every window — including a popout's,
-    // which is the one that matters here, since a constructor from the
-    // wrong realm observes nothing.
-    const ResizeObserverCtor = (win as unknown as { ResizeObserver: typeof ResizeObserver })
-      .ResizeObserver;
-    const observer = new ResizeObserverCtor(() => {
-      restartQuietTimer();
-      if (this.jumpScrollSettleHandle !== null) return;
-      this.jumpScrollSettleHandle = win.requestAnimationFrame(() => {
-        this.jumpScrollSettleHandle = null;
-        reassert();
-      });
-    });
-    observer.observe(cm.contentDOM);
-
-    // User intent is read from real input events, which nothing else can
-    // imitate. Capture phase so a gesture is seen even if something inside
-    // the editor stops it bubbling; passive, since these only observe.
-    const abort = (): void => finish();
-    const events = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
-    const options = { capture: true, passive: true } as const;
-    for (const name of events) {
-      cm.scrollDOM.addEventListener(name, abort, options);
-    }
 
     this.jumpScrollSettleWin = win;
-    this.jumpScrollSettleCleanup = (): void => {
-      observer.disconnect();
-      if (quietTimer !== null) win.clearTimeout(quietTimer);
-      for (const name of events) {
-        cm.scrollDOM.removeEventListener(name, abort, options);
-      }
-    };
-    restartQuietTimer();
-    // One correction up front: the very first re-measure may already have
-    // happened between the dispatch above and this line.
-    this.jumpScrollSettleHandle = win.requestAnimationFrame(() => {
-      this.jumpScrollSettleHandle = null;
-      reassert();
-    });
+    this.jumpScrollSettleHandle = win.requestAnimationFrame(step);
   }
 
   /** Stops any in-flight settle loop — see settleJumpScroll. */

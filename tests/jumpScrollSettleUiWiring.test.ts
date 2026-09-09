@@ -56,35 +56,30 @@ describe("jump scroll settle (static source check, 26048-TECH-006)", () => {
     expect(body).not.toContain("cm.lineBlockAt(pos).top - this.plugin.settings.jumpScrollOffset");
   });
 
-  it("watches the editor's rendered height instead of guessing at a duration", () => {
+  it("re-measures the line every frame — no proxy for movement", () => {
+    // A ResizeObserver on the content element was tried and was the wrong
+    // signal: when CM6 renders a region it had only estimated, total
+    // height barely moves (no resize fires) while every line's position
+    // inside it shifts. That was exactly the case still drifting.
     const body = settle();
-    expect(body).toContain("observer.observe(cm.contentDOM);");
-    expect(body).not.toContain("framesLeft");
+    expect(body).toContain("win.requestAnimationFrame(step);");
+    expect(body).not.toContain("ResizeObserver");
     expect(body).not.toContain("deadline");
+    expect(body).not.toContain("framesLeft");
   });
 
-  it("uses the editor window's own ResizeObserver, not the global one", () => {
-    // A constructor from another realm observes nothing — and in a popout
-    // the editor's window is not this one.
+  it("stops when the line has HELD STILL, not after a fixed duration", () => {
     const body = settle();
-    expect(body).toContain(".ResizeObserver;");
-    expect(body).toContain("new ResizeObserverCtor(");
+    expect(body).toContain("const STABLE_FRAMES = 30;");
+    expect(body).toContain("stableFrames >= STABLE_FRAMES");
+    expect(body).toContain("stableFrames = 0;");
+    expect(body).toContain("stableFrames++;");
   });
 
-  it("stops after a quiet period and under a hard cap, so nothing is held indefinitely", () => {
+  it("still has a hard cap, so nothing is held indefinitely", () => {
     const body = settle();
-    expect(body).toContain("const QUIET_MS = 1200;");
-    expect(body).toContain("const HARD_CAP_MS = 8000;");
-    expect(body).toContain("quietTimer = win.setTimeout(finish, QUIET_MS);");
+    expect(body).toContain("win.performance.now() + 8000;");
     expect(body).toContain("win.performance.now() > hardCap");
-  });
-
-  it("corrects on a frame rather than inside the observer callback", () => {
-    const body = settle();
-    const observerStart = body.indexOf("new ResizeObserverCtor(");
-    const raf = body.indexOf("win.requestAnimationFrame(", observerStart);
-    expect(raf).toBeGreaterThan(observerStart);
-    expect(body).toContain("if (this.jumpScrollSettleHandle !== null) return;");
   });
 
   it("stops when the document changes under it", () => {
@@ -94,22 +89,17 @@ describe("jump scroll settle (static source check, 26048-TECH-006)", () => {
   });
 
   it("detects the user from real input events, not from scrollTop moving", () => {
-    // CM6 re-applies its own pending scroll target across measure cycles,
-    // which is indistinguishable from a user scroll if you only watch
-    // scrollTop — and that made an earlier version abort exactly when it
-    // was needed.
     const body = settle();
     expect(body).toContain('const events = ["wheel", "touchstart", "pointerdown", "keydown"] as const;');
-    expect(body).toContain("cm.scrollDOM.addEventListener(name, abort, options);");
     expect(body).toContain("const options = { capture: true, passive: true } as const;");
+    expect(body).toContain("if (\n        aborted ||");
     expect(body).not.toContain("lastWritten");
   });
 
-  it("disconnects the observer, clears the timer and removes the listeners on every exit", () => {
+  it("removes its listeners on every exit path", () => {
     const body = settle();
-    expect(body).toContain("observer.disconnect();");
     expect(body).toContain("cm.scrollDOM.removeEventListener(name, abort, options);");
-    expect(body).toContain("if (quietTimer !== null) win.clearTimeout(quietTimer);");
+    expect(body).toContain("this.cancelJumpScrollSettle();");
     const cancel = slice("private cancelJumpScrollSettle(): void {", "\n  /**");
     expect(cancel).toContain("this.jumpScrollSettleCleanup?.();");
   });
