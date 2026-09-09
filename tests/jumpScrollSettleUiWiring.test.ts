@@ -40,9 +40,20 @@ describe("jump scroll settle (static source check, 26048-TECH-006)", () => {
 
   it("re-asserts the SAME target the offset defines, never a bare scrollIntoView repeat", () => {
     const body = settle();
-    expect(body).toContain("cm.lineBlockAt(pos).top - this.plugin.settings.jumpScrollOffset");
-    expect(body).toContain("cm.scrollDOM.scrollTop = target;");
-    expect(body).toContain("Math.max(");
+    expect(body).toContain("this.plugin.settings.jumpScrollOffset");
+    expect(body).toContain("cm.scrollDOM.scrollTop = Math.max(0, current + drift);");
+  });
+
+  it("corrects by a measured on-screen delta, not an absolute scrollTop from block.top", () => {
+    // block.top is relative to the top of the DOCUMENT; the scroller's own
+    // top is elsewhere, because Obsidian gives .cm-content a large top
+    // padding. Subtracting the two coordinate spaces added that padding to
+    // every downward jump.
+    const body = settle();
+    expect(body).toContain("const lineViewportY = cm.documentTop + cm.lineBlockAt(pos).top;");
+    expect(body).toContain("const scrollerViewportY = cm.scrollDOM.getBoundingClientRect().top;");
+    expect(body).toContain("lineViewportY - scrollerViewportY - this.plugin.settings.jumpScrollOffset");
+    expect(body).not.toContain("cm.lineBlockAt(pos).top - this.plugin.settings.jumpScrollOffset");
   });
 
   it("is bounded — a fixed frame budget, not an open-ended loop", () => {
@@ -65,7 +76,7 @@ describe("jump scroll settle (static source check, 26048-TECH-006)", () => {
 
   it("tolerates sub-pixel differences rather than writing every frame", () => {
     const body = settle();
-    expect(body).toContain("if (Math.abs(current - target) > 1) {");
+    expect(body).toContain("if (Math.abs(drift) > 1) {");
   });
 
   it("cancels a previous settle before starting a new one, so two jumps never race", () => {

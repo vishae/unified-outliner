@@ -3147,13 +3147,22 @@ export class OutlineTreeView extends ItemView {
       // Someone else scrolled since our last write — theirs wins.
       const current = cm.scrollDOM.scrollTop;
       if (lastWritten !== null && Math.abs(current - lastWritten) > 1) return;
-      const target = Math.max(
-        0,
-        cm.lineBlockAt(pos).top - this.plugin.settings.jumpScrollOffset
-      );
+      // Measured as a DELTA against where the line is on screen right now,
+      // never as an absolute scrollTop computed from block.top. CM6's
+      // block coordinates are relative to the top of the DOCUMENT, which
+      // is not the top of the scroller: Obsidian gives .cm-content its own
+      // (substantial, theme-dependent) top padding, and treating the two
+      // as the same coordinate space adds exactly that padding to every
+      // jump — which is what a first version of this did, pushing a
+      // downward jump visibly too far down. Working in deltas needs no
+      // knowledge of the padding at all.
+      const lineViewportY = cm.documentTop + cm.lineBlockAt(pos).top;
+      const scrollerViewportY = cm.scrollDOM.getBoundingClientRect().top;
+      const drift =
+        lineViewportY - scrollerViewportY - this.plugin.settings.jumpScrollOffset;
       // Sub-pixel differences are the browser's own rounding, not drift.
-      if (Math.abs(current - target) > 1) {
-        cm.scrollDOM.scrollTop = target;
+      if (Math.abs(drift) > 1) {
+        cm.scrollDOM.scrollTop = Math.max(0, current + drift);
         lastWritten = cm.scrollDOM.scrollTop;
       } else {
         lastWritten = current;
