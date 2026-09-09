@@ -106,7 +106,8 @@ const en = {
   "settings.showHeadingLevelFoldButtons.desc":
     "Add a row of buttons (H1, H2, H3 ...) above the Outline Tree, one per heading level the current note uses. Clicking a level collapses every heading at that level, or expands them all if none is currently expanded. A level with nothing to fold is shown as a disabled button. Off by default.",
   "tree.headingLevelFoldButton": "H{level}",
-  "tree.headingLevelFoldButtonTooltip": "Collapse or expand every level {level} heading",
+  "tree.headingLevelFoldButtonCollapseTooltip": "Collapse every level {level} heading",
+  "tree.headingLevelFoldButtonExpandTooltip": "Expand every level {level} heading",
   "tree.headingLevelFoldButtonNothingTooltip": "No level {level} heading has anything to fold",
   "tree.headingLevelFoldBarLabel": "Collapse or expand by heading level",
   "settings.jumpScrollOffset.name": "Jump scroll offset (pixels)",
@@ -796,7 +797,8 @@ const ja: Record<TranslationKey, string> = {
   "settings.showHeadingLevelFoldButtons.desc":
     "アウトラインツリーの上部に、現在のノートで使われている見出しレベルごとのボタン（H1、H2、H3 ...）を表示する。ボタンを押すと、そのレベルの見出しをすべて折りたたむ（すべて折りたたみ済みの場合はすべて展開する）。折りたたむ対象がないレベルのボタンは無効状態で表示される。既定ではオフ。",
   "tree.headingLevelFoldButton": "H{level}",
-  "tree.headingLevelFoldButtonTooltip": "レベル {level} の見出しをすべて折りたたむ／展開する",
+  "tree.headingLevelFoldButtonCollapseTooltip": "レベル {level} の見出しをすべて折りたたむ",
+  "tree.headingLevelFoldButtonExpandTooltip": "レベル {level} の見出しをすべて展開する",
   "tree.headingLevelFoldButtonNothingTooltip": "レベル {level} の見出しには折りたたむ対象がない",
   "tree.headingLevelFoldBarLabel": "見出しレベルごとの折りたたみ／展開",
   "settings.jumpScrollOffset.name": "ジャンプ時のスクロール余白（ピクセル）",

@@ -112,9 +112,29 @@ describe("heading level fold bar wiring (static source check, 26048-FEAT-001)", 
 
   it("every button is labelled for assistive tech, in both the foldable and nothing-to-fold cases", () => {
     const body = renderBar();
-    expect(body).toContain("tree.headingLevelFoldButtonTooltip");
+    expect(body).toContain("tree.headingLevelFoldButtonCollapseTooltip");
     expect(body).toContain("tree.headingLevelFoldButtonNothingTooltip");
     expect(body).toContain('buttonEl.setAttribute(\n        "aria-label",');
+  });
+
+  it("shows which way the next click goes — a chevron whose direction follows anyExpanded", () => {
+    const body = renderBar();
+    expect(body).toContain('setIcon(chevronEl, group.anyExpanded ? "chevron-right" : "chevron-down");');
+  });
+
+  it("a disabled level gets no chevron — it has no next click to describe", () => {
+    const body = renderBar();
+    const guard = body.indexOf("if (hasSomethingToFold) {");
+    const chevron = body.indexOf("const chevronEl = buttonEl.createSpan({");
+    expect(guard).toBeGreaterThan(-1);
+    expect(chevron).toBeGreaterThan(guard);
+  });
+
+  it("the direction is never colour-only: the aria-label names the action too", () => {
+    const body = renderBar();
+    expect(body).toContain("tree.headingLevelFoldButtonCollapseTooltip");
+    expect(body).toContain("tree.headingLevelFoldButtonExpandTooltip");
+    expect(body).toContain("group.anyExpanded");
   });
 
   it("a click goes through planHeadingLevelFold and the BATCHED setNodesCollapsed, never a per-node loop", () => {
@@ -220,7 +240,11 @@ describe("heading level fold bar setting and strings (26048-FEAT-001)", () => {
     for (const locale of ["en", "ja"] as const) {
       const t = createTranslator(locale);
       expect(t("tree.headingLevelFoldButton", { level: 2 })).toBe("H2");
-      expect(t("tree.headingLevelFoldButtonTooltip", { level: 3 })).toContain("3");
+      expect(t("tree.headingLevelFoldButtonCollapseTooltip", { level: 3 })).toContain("3");
+      expect(t("tree.headingLevelFoldButtonExpandTooltip", { level: 3 })).toContain("3");
+      expect(t("tree.headingLevelFoldButtonCollapseTooltip", { level: 3 })).not.toBe(
+        t("tree.headingLevelFoldButtonExpandTooltip", { level: 3 })
+      );
       expect(t("tree.headingLevelFoldButtonNothingTooltip", { level: 4 })).toContain("4");
       expect(t("tree.headingLevelFoldBarLabel")).not.toBe("");
       expect(t("settings.showHeadingLevelFoldButtons.name")).not.toBe("");

@@ -1454,9 +1454,29 @@ export class OutlineTreeView extends ItemView {
     for (const group of groups) {
       const hasSomethingToFold = group.foldableIds.length > 0;
       const buttonEl = this.headingLevelBarEl.createEl("button", {
-        cls: "unified-outliner-heading-level-button",
+        cls:
+          "unified-outliner-heading-level-button" +
+          (hasSomethingToFold && !group.anyExpanded
+            ? " unified-outliner-heading-level-button-will-expand"
+            : ""),
+      });
+      buttonEl.createSpan({
+        cls: "unified-outliner-heading-level-button-label",
         text: this.plugin.t("tree.headingLevelFoldButton", { level: group.level }),
       });
+      // Which way the next click goes, shown rather than guessed at: a
+      // right-pointing chevron for "this will collapse" and a downward one
+      // for "this will expand", the same direction language as the rows'
+      // own fold chevrons (renderNode's collapse-icon, which CSS rotates
+      // between the two states). A disabled level gets no chevron at all —
+      // it has no next click to describe, and an arbitrary direction there
+      // would be a lie.
+      if (hasSomethingToFold) {
+        const chevronEl = buttonEl.createSpan({
+          cls: "unified-outliner-heading-level-button-chevron",
+        });
+        setIcon(chevronEl, group.anyExpanded ? "chevron-right" : "chevron-down");
+      }
       // A level whose headings all have empty bodies keeps its button —
       // disabled, not hidden — so the row stays stable as the note is
       // edited instead of buttons appearing and vanishing under the
@@ -1465,12 +1485,17 @@ export class OutlineTreeView extends ItemView {
       // empty level and a malformed batch (planHeadingLevelFold returns an
       // empty plan for one regardless).
       buttonEl.disabled = !hasSomethingToFold;
+      // The label names the action the next click performs, not the
+      // level's current state — the chevron above is the same information
+      // for sighted users, and neither is colour-only.
       buttonEl.setAttribute(
         "aria-label",
         this.plugin.t(
-          hasSomethingToFold
-            ? "tree.headingLevelFoldButtonTooltip"
-            : "tree.headingLevelFoldButtonNothingTooltip",
+          !hasSomethingToFold
+            ? "tree.headingLevelFoldButtonNothingTooltip"
+            : group.anyExpanded
+              ? "tree.headingLevelFoldButtonCollapseTooltip"
+              : "tree.headingLevelFoldButtonExpandTooltip",
           { level: group.level }
         )
       );
