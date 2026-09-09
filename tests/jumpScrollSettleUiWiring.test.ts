@@ -41,7 +41,8 @@ describe("jump scroll settle (static source check, 26048-TECH-006)", () => {
   it("re-asserts the SAME target the offset defines, never a bare scrollIntoView repeat", () => {
     const body = settle();
     expect(body).toContain("this.plugin.settings.jumpScrollOffset");
-    expect(body).toContain("cm.scrollDOM.scrollTop = Math.max(0, cm.scrollDOM.scrollTop + drift);");
+    expect(body).toContain("effects: EditorView.scrollIntoView(pos, {");
+    expect(body).toContain("yMargin: this.plugin.settings.jumpScrollOffset,");
   });
 
   it("corrects by a measured on-screen delta, not an absolute scrollTop from block.top", () => {
@@ -54,6 +55,22 @@ describe("jump scroll settle (static source check, 26048-TECH-006)", () => {
     expect(body).toContain("const scrollerViewportY = cm.scrollDOM.getBoundingClientRect().top;");
     expect(body).toContain("lineViewportY - scrollerViewportY - this.plugin.settings.jumpScrollOffset");
     expect(body).not.toContain("cm.lineBlockAt(pos).top - this.plugin.settings.jumpScrollOffset");
+  });
+
+  it("corrects by re-issuing CM6's own scroll, never by writing scrollTop", () => {
+    // CM6 re-applies its pending scroll target on every measure cycle, so
+    // a hand-written scrollTop is overwritten — the two fight, CM6 wins,
+    // and the jump stops responding even when repeated.
+    const body = settle();
+    expect(body).not.toContain("cm.scrollDOM.scrollTop =");
+    expect(body).toContain("cm.dispatch({");
+  });
+
+  it("throttles and caps the re-issues rather than dispatching every frame", () => {
+    const body = settle();
+    expect(body).toContain("const REISSUE_INTERVAL_MS = 80;");
+    expect(body).toContain("const MAX_REISSUES = 20;");
+    expect(body).toContain("reissues < MAX_REISSUES && now - lastReissueAt >= REISSUE_INTERVAL_MS");
   });
 
   it("re-measures the line every frame — no proxy for movement", () => {

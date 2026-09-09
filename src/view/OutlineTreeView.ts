@@ -3181,10 +3181,19 @@ export class OutlineTreeView extends ItemView {
    *    jump started) drifted, while a nearer one, already measured, was
    *    fine.
    *
-   * So the only reliable signal is the thing actually being asked about:
-   * where the line IS. Re-measure it every frame, correct when it has
-   * moved, and stop once it has held still — not after some duration, and
-   * not when a proxy for movement says so.
+   *  - **Writing `scrollDOM.scrollTop` directly.** Measuring the line
+   *    every frame was right; correcting it by hand was not. CM6 keeps its
+   *    own pending scroll target and re-applies it on every measure cycle,
+   *    so a hand-written scrollTop is simply overwritten — the two fight,
+   *    CM6 wins, and the visible symptom is a jump that will not correct
+   *    even when repeated, because the loop keeps putting the view back
+   *    where CM6 already had it.
+   *
+   * So: measure every frame (the only honest signal for where the line
+   * is), but correct by re-issuing CM6's OWN scroll request, so the
+   * position is recomputed against the geometry that now exists rather
+   * than fought over. Stop once the line has held still — not after some
+   * duration, and not when a proxy for movement says so.
    */
   private settleJumpScroll(cm: EditorView, pos: number): void {
     this.cancelJumpScrollSettle();
@@ -3199,6 +3208,14 @@ export class OutlineTreeView extends ItemView {
     const hardCap = win.performance.now() + 8000;
     let stableFrames = 0;
     let aborted = false;
+    // Re-issuing the scroll is a real transaction, so it is throttled
+    // rather than fired every frame, and capped: if this many re-issues
+    // have not settled it, something outside this method's understanding
+    // is moving the view and repeating will not help.
+    const REISSUE_INTERVAL_MS = 80;
+    const MAX_REISSUES = 20;
+    let reissues = 0;
+    let lastReissueAt = 0;
 
     // User intent is read from real input events, which nothing else can
     // imitate — capture phase so a gesture is seen even if something in
@@ -3241,8 +3258,22 @@ export class OutlineTreeView extends ItemView {
         lineViewportY - scrollerViewportY - this.plugin.settings.jumpScrollOffset;
       // Sub-pixel differences are the browser's own rounding, not drift.
       if (Math.abs(drift) > 1) {
-        cm.scrollDOM.scrollTop = Math.max(0, cm.scrollDOM.scrollTop + drift);
         stableFrames = 0;
+        const now = win.performance.now();
+        if (reissues < MAX_REISSUES && now - lastReissueAt >= REISSUE_INTERVAL_MS) {
+          lastReissueAt = now;
+          reissues++;
+          // The same request scrollLineToTop made, re-resolved against the
+          // geometry CM6 has NOW. Deliberately not a scrollTop write: CM6
+          // re-applies its own pending scroll target every measure cycle,
+          // so a manual write is overwritten and the two fight.
+          cm.dispatch({
+            effects: EditorView.scrollIntoView(pos, {
+              y: "start",
+              yMargin: this.plugin.settings.jumpScrollOffset,
+            }),
+          });
+        }
       } else {
         stableFrames++;
       }
