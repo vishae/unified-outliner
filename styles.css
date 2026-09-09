@@ -1126,12 +1126,34 @@ settings:
 }
 
 .unified-outliner-heading-level-button {
-  padding: 1px 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 5px 1px 7px;
   font-size: var(--font-smaller);
   line-height: 1.4;
   height: auto;
   box-shadow: none;
   cursor: pointer;
+}
+
+/* Direction indicator: chevron-right = the next click collapses,
+ * chevron-down = it expands, matching the row chevrons' own language.
+ * Deliberately a shape rather than only a colour — the accent tint below
+ * is a second, redundant cue for the expand state, never the only one. */
+.unified-outliner-heading-level-button-chevron {
+  display: inline-flex;
+  align-items: center;
+  opacity: 0.75;
+}
+
+.unified-outliner-heading-level-button-chevron .svg-icon {
+  width: 13px;
+  height: 13px;
+}
+
+.unified-outliner-heading-level-button-will-expand {
+  color: var(--text-accent);
 }
 
 .unified-outliner-heading-level-button:disabled {
