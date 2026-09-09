@@ -102,7 +102,7 @@ const en = {
   "settings.syncOutlineTreeFoldingToEditor.name": "Sync Outline Tree folding to editor",
   "settings.syncOutlineTreeFoldingToEditor.desc":
     "When enabled, folding or unfolding a node in the Outline Tree also folds or unfolds the matching content in the active Markdown editor.",
-  "settings.jumpScrollOffset.name": "Jump scroll offset (pixels)",
+  "settings.jumpScrollOffset.name": "Top offset when jumping from Outline Tree (pixels)",
   "settings.jumpScrollOffset.desc":
     "Extra space left above a line jumped to from the Outline Tree. 0 places the target line flush with the top of the editor; raise it when a sticky toolbar or theme header covers the top of the note. Maximum 1000.",
   // UXP-05 (2026-08-24): four category-divider headings replacing the old
@@ -785,7 +785,7 @@ const ja: Record<TranslationKey, string> = {
   "settings.syncOutlineTreeFoldingToEditor.name": "アウトラインツリーの折りたたみをエディタに同期",
   "settings.syncOutlineTreeFoldingToEditor.desc":
     "有効にすると、アウトラインツリーでノードを折りたたむ・展開する操作が、アクティブな Markdown エディタ内の対応する内容にも反映される。",
-  "settings.jumpScrollOffset.name": "ジャンプ時のスクロール余白（ピクセル）",
+  "settings.jumpScrollOffset.name": "Outline Tree からジャンプする際の上部オフセット（ピクセル）",
   "settings.jumpScrollOffset.desc":
     "アウトラインツリーからジャンプした行の上に確保する余白。0 の場合、対象行はエディタの最上部にぴったり配置される。固定表示のツールバーやテーマのヘッダーがノート上部を覆う場合に値を大きくする。最大 1000。",
   // UXP-05（2026-08-24）: 旧「移動・アウトラインツリーの種別強調」見出しを
