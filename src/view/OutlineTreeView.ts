@@ -510,6 +510,21 @@ export class OutlineTreeView extends ItemView {
   // when the user's actual focus (and thus their next keypress) is
   // somewhere else entirely (the body editor, another pane, etc.).
   private hasFocus = false;
+  /**
+   * True between pointerdown and pointerup on a tree row. While it is set,
+   * refresh() defers instead of rebuilding: a click is only delivered when
+   * mousedown and mouseup land on the SAME element, so any rebuild inside
+   * that window silently destroys the click. The focus handler was one
+   * cause (26048-TECH-005); the debounced refresh triggers — active-leaf
+   * -change when the pane is first clicked, editor-change, the document
+   * mouseup handler — are the other, and they fire on a timer, so a click
+   * held a little longer than the 150ms debounce lost its click too. That
+   * is why the first click into the pane still went missing "sometimes"
+   * after the focus fix.
+   */
+  private pointerDownInTree = false;
+  /** A refresh that arrived while pointerDownInTree, replayed on release. */
+  private refreshDeferredByPointer = false;
 
   // Mobile gesture state (tap/long-press/menu — see renderNode's "Mobile
   // gesture" block for the full design). Set right before a long-press
@@ -746,6 +761,27 @@ export class OutlineTreeView extends ItemView {
     this.treeRootEl.setAttribute("role", "tree");
     this.treeRootEl.setAttribute("aria-label", this.plugin.t("tree.viewName"));
     this.registerDomEvent(this.treeRootEl, "keydown", this.handleTreeKeyDown);
+    // 26048-TECH-005: hold off any rebuild for the duration of a click.
+    // pointerdown/pointerup rather than mousedown/mouseup so pen and touch
+    // are covered by the same guard; the release is listened for on the
+    // DOCUMENT because a drag can end anywhere, and a pointerup that never
+    // arrives over the tree must still clear the flag.
+    this.registerDomEvent(this.treeRootEl, "pointerdown", () => {
+      this.pointerDownInTree = true;
+    });
+    for (const release of ["pointerup", "pointercancel"] as const) {
+      this.registerDomEvent(document, release, () => {
+        if (!this.pointerDownInTree) return;
+        this.pointerDownInTree = false;
+        if (!this.refreshDeferredByPointer) return;
+        this.refreshDeferredByPointer = false;
+        // Deferred, not dropped: whatever the refresh was for (an edit, a
+        // file switch) still has to reach the tree — just after the click
+        // it would have eaten. A frame's delay puts it after the click
+        // event itself, which is dispatched immediately on release.
+        this.treeRootEl.win.requestAnimationFrame(() => this.refresh());
+      });
+    }
     this.registerDomEvent(this.treeRootEl, "focus", () => {
       // Inline rename guard (see renameState's own doc comment / refresh()'s
       // matching guard): focusing the rename <input> itself never fires
@@ -755,7 +791,20 @@ export class OutlineTreeView extends ItemView {
       if (this.renameState) return;
       this.hasFocus = true;
       this.ensureSelection();
-      this.renderTree();
+      // NOT renderTree(): focus fires on MOUSEDOWN, and a full rebuild here
+      // destroys the very row the pointer is pressing. mouseup then lands
+      // on a freshly created element, the browser sees mousedown and mouseup
+      // on different nodes, and no `click` event is ever dispatched — so the
+      // first click into an unfocused pane was silently swallowed and had to
+      // be repeated. Obsidian's own Outline has no such rebuild, which is
+      // why it never behaved this way.
+      //
+      // Focus changes nothing structural — ensureSelection() above only
+      // moves selectedId, never the tree or the collapsed set — so the
+      // visible difference is entirely per-row classes and aria state, and
+      // applyFocusSelectionToDom updates those in place instead. See that
+      // method for why mobile still takes the rebuild.
+      this.repaintFocusState();
     });
     this.registerDomEvent(this.treeRootEl, "blur", () => {
       // Inline rename guard: beginRename's inputEl.focus() call moves DOM
@@ -771,7 +820,10 @@ export class OutlineTreeView extends ItemView {
       // themselves once renameState is cleared.
       if (this.renameState) return;
       this.hasFocus = false;
-      this.renderTree();
+      // Same in-place update as the focus handler above, for symmetry and
+      // for the same reason: a blur caused by clicking something else in
+      // the pane must not tear that element out from under the click.
+      this.repaintFocusState();
     });
 
     this.registerEvent(
@@ -869,6 +921,15 @@ export class OutlineTreeView extends ItemView {
     // an in-progress CompositeBlock drag session — see
     // cancelCompositeDrag's own doc comment.
     this.cancelCompositeDrag();
+
+    // A click is in progress on a row: rebuilding now would destroy the
+    // element between its own mousedown and mouseup and the browser would
+    // never dispatch the click. Remember that a refresh was wanted and run
+    // it on release instead — see pointerDownInTree.
+    if (this.pointerDownInTree) {
+      this.refreshDeferredByPointer = true;
+      return;
+    }
 
     // Inline rename in progress: never tear down the row's <input> out
     // from under the user for an unrelated refresh trigger (debounced
@@ -1295,6 +1356,58 @@ export class OutlineTreeView extends ItemView {
       // createCm6FoldSyncExtension's listener (bottom of this file) can
       // ignore it — see outlineTreeFoldOrigin's own doc comment.
       annotations: outlineTreeFoldOrigin.of(true),
+    });
+  }
+
+  /**
+   * Repaint after a focus change, without rebuilding the tree.
+   *
+   * Mobile is the exception and still takes the full renderTree(): a
+   * selected row on mobile grows a drag handle (see renderNode's
+   * `Platform.isMobile && this.hasFocus && node.id === this.selectedId`
+   * branch), which is a structural difference no class swap can express.
+   * Mobile has no mouse click to swallow — a tap is a touch sequence, not
+   * a mousedown/mouseup pair on a specific element — so the rebuild that
+   * costs desktop its first click costs mobile nothing, and leaving that
+   * path exactly as it was avoids regressing the drag handle.
+   */
+  private repaintFocusState(): void {
+    if (Platform.isMobile) {
+      this.renderTree();
+      return;
+    }
+    this.applyFocusSelectionToDom();
+  }
+
+  /**
+   * The class/aria half of renderNode's selection rendering, applied to
+   * rows that already exist. Deliberately mirrors exactly what renderNode
+   * writes for a selected row — `is-selected unified-outliner-selected`,
+   * `aria-selected`, and the root's `aria-activedescendant` — so a
+   * focus-driven repaint and a full render leave the DOM in the same
+   * state. Keep the two in step if renderNode's selected-row branch
+   * changes.
+   *
+   * Note the condition renderNode uses: a row is selected only while the
+   * pane HAS focus (`this.hasFocus && node.id === this.selectedId`), which
+   * is why blur clears every row rather than moving the marker.
+   */
+  private applyFocusSelectionToDom(): void {
+    const selectedRowId =
+      this.hasFocus && this.selectedId
+        ? `unified-outliner-row-${this.selectedId}`
+        : null;
+    if (selectedRowId) {
+      this.treeRootEl.setAttribute("aria-activedescendant", selectedRowId);
+    } else {
+      this.treeRootEl.removeAttribute("aria-activedescendant");
+    }
+    const rows = this.treeRootEl.querySelectorAll<HTMLElement>(".tree-item-self");
+    rows.forEach((rowEl) => {
+      const isSelected = rowEl.id === selectedRowId;
+      rowEl.classList.toggle("is-selected", isSelected);
+      rowEl.classList.toggle("unified-outliner-selected", isSelected);
+      rowEl.setAttribute("aria-selected", isSelected ? "true" : "false");
     });
   }
 
