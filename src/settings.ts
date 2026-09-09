@@ -416,6 +416,22 @@ export class UnifiedOutlinerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName(this.plugin.t("settings.showHeadingLevelFoldButtons.name"))
+      .setDesc(this.plugin.t("settings.showHeadingLevelFoldButtons.desc"))
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.showHeadingLevelFoldButtons)
+          .onChange(async (v) => {
+            this.plugin.settings.showHeadingLevelFoldButtons = v;
+            await this.plugin.saveSettings();
+            // 26048-FEAT-001: same on/off -> refreshOutlineTreeViews() shape
+            // as showListItemsInOutline above, so the bar appears or
+            // disappears in every already-open leaf without reopening it.
+            this.plugin.refreshOutlineTreeViews();
+          })
+      );
+
+    new Setting(containerEl)
       .setName(this.plugin.t("settings.showNoopNotices.name"))
       .setDesc(this.plugin.t("settings.showNoopNotices.desc"))
       .addToggle((t) =>

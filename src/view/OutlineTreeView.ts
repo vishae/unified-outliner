@@ -160,7 +160,7 @@ import {
 } from "obsidian";
 import { EditorView, ViewUpdate } from "@codemirror/view";
 import { foldEffect, unfoldEffect } from "@codemirror/language";
-import { Annotation, Extension } from "@codemirror/state";
+import { Annotation, Extension, StateEffect } from "@codemirror/state";
 import type UnifiedOutlinerPlugin from "../main";
 import { parseDocument } from "../parser/parseDocument";
 import {
@@ -189,6 +189,11 @@ import {
   standaloneComplexBlockLabel,
 } from "../tree/buildOutlineTree";
 import { canCollapseOutlineNode } from "../tree/canCollapseOutlineNode";
+import {
+  collectOutlineHeadingLevels,
+  OutlineHeadingLevelGroup,
+  planHeadingLevelFold,
+} from "../tree/outlineHeadingLevels";
 import { complexBlockDepth, scanComplexBlocks } from "../parser/complexBlocks";
 import {
   evaluateCompositeBlockDeletability,
@@ -431,6 +436,15 @@ interface CompositeDragSession {
 
 export class OutlineTreeView extends ItemView {
   private treeRootEl!: HTMLElement;
+  /**
+   * 26048-FEAT-001's heading-level fold bar, or null when the setting is
+   * off — it is created and destroyed by renderHeadingLevelBar() rather
+   * than created once in onOpen(), so toggling the setting takes effect in
+   * an already-open leaf (settings.ts calls refreshOutlineTreeViews) and
+   * so "off" means the element genuinely does not exist rather than
+   * existing hidden.
+   */
+  private headingLevelBarEl: HTMLElement | null = null;
   // Keyed by the CURRENT parse's node.id, exactly as every prior phase —
   // every existing consumer (renderNode, flattenVisibleOutlineTree, the
   // structure/list context menus' contextual-mode check) keeps working
@@ -732,6 +746,16 @@ export class OutlineTreeView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.contentEl.empty();
+    // 26048-FEAT-001: the bar is a child of contentEl, so the empty()
+    // above has just detached any bar a previous open of this same view
+    // instance left behind (a leaf moved between splits reuses the
+    // instance). Without this the field would still point at that
+    // detached element, renderHeadingLevelBar would skip creating a new
+    // one, and the buttons would be rendered into a node that is no
+    // longer in the document — a silently missing bar, no error. Keeps
+    // the invariant "field non-null <=> element is in contentEl" true by
+    // construction rather than by luck.
+    this.headingLevelBarEl = null;
     this.contentEl.addClass("unified-outliner-outline-view");
     this.treeRootEl = this.contentEl.createDiv({
       cls: "unified-outliner-tree-root",
@@ -1175,18 +1199,57 @@ export class OutlineTreeView extends ItemView {
    * needed on top of that existing guarantee.
    */
   private setNodeCollapsed(nodeId: string, collapsed: boolean): void {
-    if (collapsed) {
-      this.collapsedIds.add(nodeId);
-    } else {
-      this.collapsedIds.delete(nodeId);
+    this.setNodesCollapsed([{ nodeId, collapsed }]);
+  }
+
+  /**
+   * 26048-FEAT-001: the batched form, and the actual body of the write
+   * path — setNodeCollapsed above is a one-entry delegate to it, so the
+   * single-write-through-point property the doc comment above describes is
+   * unchanged: there is still exactly one place collapsedIds is mutated
+   * and one place FoldStateManager is written from a Tree origin. What
+   * changed is that the place now accepts N nodes at once.
+   *
+   * The three effects each behave differently under a bulk write, and the
+   * batching is entirely about the last two:
+   *
+   *  - collapsedIds and FoldStateManager persistence are genuinely
+   *    per-node and stay in the loop. That is already cheap: the manager
+   *    only mutates an in-memory blob and schedules a DEBOUNCED save (see
+   *    persistence/foldStateManager.ts's setNodeCollapsed/scheduleSave), so
+   *    N calls inside one click still cost one disk write, not N.
+   *  - refreshOtherOutlineTreeViews is hoisted out of the loop and fired
+   *    ONCE, after every node's state is settled. Calling it per node made
+   *    every other open Tree leaf re-render N times to display one final
+   *    state.
+   *  - The CM6 fold sync is dispatched ONCE, as a single transaction
+   *    carrying every fold effect, instead of N transactions — see
+   *    syncFoldsToBodyEditor below.
+   *
+   * Order matters: every collapsedIds/persistence write completes before
+   * either of the two batched effects runs, so another leaf refreshing off
+   * this write can never observe a half-applied bulk fold.
+   */
+  private setNodesCollapsed(entries: Array<{ nodeId: string; collapsed: boolean }>): void {
+    if (entries.length === 0) return;
+    let persistedAny = false;
+    for (const { nodeId, collapsed } of entries) {
+      if (collapsed) {
+        this.collapsedIds.add(nodeId);
+      } else {
+        this.collapsedIds.delete(nodeId);
+      }
+      const identity = this.nodeIdentityById.get(nodeId);
+      if (identity && this.currentFilePath) {
+        this.plugin.foldStateManager.setNodeCollapsed(
+          this.currentFilePath,
+          identity,
+          collapsed
+        );
+        persistedAny = true;
+      }
     }
-    const identity = this.nodeIdentityById.get(nodeId);
-    if (identity && this.currentFilePath) {
-      this.plugin.foldStateManager.setNodeCollapsed(
-        this.currentFilePath,
-        identity,
-        collapsed
-      );
+    if (persistedAny) {
       // Phase 4F: propagate this Tree-origin write to any OTHER open
       // Outline Tree View leaf (see main.ts's refreshOtherOutlineTreeViews
       // doc comment) — closes the one-sided gap where only CM6-origin
@@ -1212,7 +1275,7 @@ export class OutlineTreeView extends ItemView {
     // persistence, refreshOtherOutlineTreeViews) always runs regardless of
     // the setting — only the CM6-facing half of this method is optional.
     if (this.plugin.settings.syncOutlineTreeFoldingToEditor) {
-      this.syncFoldToBodyEditor(nodeId, collapsed);
+      this.syncFoldsToBodyEditor(entries);
     }
   }
 
@@ -1260,46 +1323,78 @@ export class OutlineTreeView extends ItemView {
    *    Outline Tree fold state, never a data mutation, so there is nothing
    *    for the user to be notified about when it can't apply.
    */
-  private syncFoldToBodyEditor(nodeId: string, collapsed: boolean): void {
+  private syncFoldsToBodyEditor(
+    entries: Array<{ nodeId: string; collapsed: boolean }>
+  ): void {
+    // 26048-FEAT-001: the per-entry guards below are unchanged, but the
+    // three that depend only on the VIEW rather than the node — is the
+    // right file active, and is there a reachable CM6 instance — are
+    // hoisted above the loop. They cannot differ between entries of one
+    // batch, and re-answering them per node was the other half of what
+    // made a bulk fold expensive.
     const view = this.activeMarkdownView.get();
     if (!view || view.file?.path !== this.currentFilePath) return;
-
-    const node = this.currentDoc?.nodes.get(nodeId);
-    if (!node) return;
-    // Nothing below the node's own first line to fold — an empty heading.
-    // canCollapseOutlineNode applies this same test before a row is given
-    // a fold affordance at all, so in practice this is unreachable; kept as
-    // the defensive guard it has always been, and as the single definition
-    // of "has something to fold" that the affordance is derived from.
-    if (node.range.endLine <= node.range.startLine) return;
 
     const cm = getEditorCmView(view.editor);
     if (!cm) return;
 
-    // CM6's Text.line() is 1-indexed; this codebase's line numbers (and
-    // ParsedDocument's LineRange) are 0-indexed throughout — same
-    // conversion scrollLineToTop already does.
     const docLines = cm.state.doc.lines;
-    const startLine = Math.min(Math.max(node.range.startLine, 0), docLines - 1);
-    const endLine = Math.min(Math.max(node.range.endLine, 0), docLines - 1);
-    // Fold from the END of the node's own first line (heading/marker text
-    // itself stays visible) to the END of its last line — matching
-    // Obsidian's own heading/list fold boundary, and lining up with how
-    // ParsedDocument's range is already defined for this node.
-    const from = cm.state.doc.line(startLine + 1).to;
-    const to = cm.state.doc.line(endLine + 1).to;
-    if (from >= to) return;
+    const effects: StateEffect<unknown>[] = [];
+    for (const { nodeId, collapsed } of entries) {
+      const node = this.currentDoc?.nodes.get(nodeId);
+      if (!node) continue;
+      // Nothing below the node's own first line to fold — an empty heading.
+      // canCollapseOutlineNode applies this same test before a row is given
+      // a fold affordance at all, so in practice this is unreachable; kept as
+      // the defensive guard it has always been, and as the single definition
+      // of "has something to fold" that the affordance is derived from.
+      if (node.range.endLine <= node.range.startLine) continue;
+
+      // CM6's Text.line() is 1-indexed; this codebase's line numbers (and
+      // ParsedDocument's LineRange) are 0-indexed throughout — same
+      // conversion scrollLineToTop already does.
+      const startLine = Math.min(Math.max(node.range.startLine, 0), docLines - 1);
+      const endLine = Math.min(Math.max(node.range.endLine, 0), docLines - 1);
+      // Fold from the END of the node's own first line (heading/marker text
+      // itself stays visible) to the END of its last line — matching
+      // Obsidian's own heading/list fold boundary, and lining up with how
+      // ParsedDocument's range is already defined for this node.
+      const from = cm.state.doc.line(startLine + 1).to;
+      const to = cm.state.doc.line(endLine + 1).to;
+      if (from >= to) continue;
+
+      effects.push((collapsed ? foldEffect : unfoldEffect).of({ from, to }));
+    }
+    // Every entry was skipped by a guard above — dispatching an empty
+    // effects array would be a pointless transaction, and (unlike the
+    // single-node form's early returns) an easy one to introduce by
+    // accident here.
+    if (effects.length === 0) return;
 
     cm.dispatch({
-      effects: (collapsed ? foldEffect : unfoldEffect).of({ from, to }),
+      // ONE transaction carrying every fold, rather than one transaction
+      // per node: CM6 applies them together and the editor re-measures
+      // once. This is the change that makes "collapse all H2" on a large
+      // note feel instant rather than sluggish.
+      effects,
       // Phase 3D stage 3: identifies this dispatch as Tree-originated so
       // createCm6FoldSyncExtension's listener (bottom of this file) can
-      // ignore it — see outlineTreeFoldOrigin's own doc comment.
+      // ignore it — see outlineTreeFoldOrigin's own doc comment. Just as
+      // load-bearing for a batch as for a single fold, and more costly to
+      // omit: without it the listener would treat all N folds as
+      // user-originated and round-trip every one of them back through the
+      // Tree's own fold state.
       annotations: outlineTreeFoldOrigin.of(true),
     });
   }
 
   private renderEmptyState(message: string): void {
+    // 26048-FEAT-001: every path that repaints the pane must repaint the
+    // bar. refresh()'s "no active Markdown note" branch calls this
+    // directly, without going through renderTree(), and would otherwise
+    // leave the previous note's buttons standing above the empty-state
+    // message — wired to ids from a tree that no longer exists.
+    this.renderHeadingLevelBar();
     this.treeRootEl.empty();
     this.treeRootEl.createDiv({
       cls: "unified-outliner-tree-empty",
@@ -1307,7 +1402,121 @@ export class OutlineTreeView extends ItemView {
     });
   }
 
+  /**
+   * 26048-FEAT-001: (re)builds the row of per-heading-level bulk fold
+   * buttons above the tree, or tears it down when the setting is off.
+   *
+   * Deliberately a sibling of treeRootEl inside contentEl, never a child
+   * of it: treeRootEl carries `role="tree"` and its children are read as
+   * tree rows, so a button row inside it would corrupt the accessibility
+   * tree for anything reading the outline. Real <button> elements, so
+   * keyboard focus, activation and the disabled state all come from the
+   * platform rather than being reimplemented.
+   *
+   * Called from renderTree() rather than built once in onOpen(), because
+   * the set of levels is a property of the current note and changes as it
+   * is edited (and as the active file switches).
+   */
+  private renderHeadingLevelBar(): void {
+    if (!this.plugin.settings.showHeadingLevelFoldButtons) {
+      this.headingLevelBarEl?.remove();
+      this.headingLevelBarEl = null;
+      return;
+    }
+    const groups = collectOutlineHeadingLevels(
+      this.currentTree,
+      this.currentDoc,
+      this.collapsedIds
+    );
+    // A note with no headings at all (or no note at all) gets no bar
+    // rather than an empty bordered strip above the empty-state message.
+    // Same removal branch as the setting being off, so there is only one
+    // way the bar ceases to exist.
+    if (groups.length === 0) {
+      this.headingLevelBarEl?.remove();
+      this.headingLevelBarEl = null;
+      return;
+    }
+    if (!this.headingLevelBarEl) {
+      this.headingLevelBarEl = this.contentEl.createDiv({
+        cls: "unified-outliner-heading-level-bar",
+      });
+      this.headingLevelBarEl.setAttribute("role", "toolbar");
+      this.headingLevelBarEl.setAttribute(
+        "aria-label",
+        this.plugin.t("tree.headingLevelFoldBarLabel")
+      );
+      // createDiv appends; the bar belongs above the tree.
+      this.contentEl.insertBefore(this.headingLevelBarEl, this.treeRootEl);
+    }
+    this.headingLevelBarEl.empty();
+
+    for (const group of groups) {
+      const hasSomethingToFold = group.foldableIds.length > 0;
+      const buttonEl = this.headingLevelBarEl.createEl("button", {
+        cls: "unified-outliner-heading-level-button",
+        text: this.plugin.t("tree.headingLevelFoldButton", { level: group.level }),
+      });
+      // A level whose headings all have empty bodies keeps its button —
+      // disabled, not hidden — so the row stays stable as the note is
+      // edited instead of buttons appearing and vanishing under the
+      // pointer. `disabled` also blocks activation from the keyboard, so
+      // the click handler below is not the only thing standing between an
+      // empty level and a malformed batch (planHeadingLevelFold returns an
+      // empty plan for one regardless).
+      buttonEl.disabled = !hasSomethingToFold;
+      buttonEl.setAttribute(
+        "aria-label",
+        this.plugin.t(
+          hasSomethingToFold
+            ? "tree.headingLevelFoldButtonTooltip"
+            : "tree.headingLevelFoldButtonNothingTooltip",
+          { level: group.level }
+        )
+      );
+      buttonEl.setAttribute("title", buttonEl.getAttribute("aria-label") ?? "");
+      // aria-pressed is deliberately absent: one button drives N headings
+      // that can disagree with each other, so there is no single pressed
+      // state to report. The label says what the button does, not what
+      // state it is in.
+      if (hasSomethingToFold) {
+        buttonEl.addEventListener("click", (evt) => {
+          evt.preventDefault();
+          this.foldHeadingLevel(group);
+        });
+      }
+    }
+  }
+
+  /**
+   * 26048-FEAT-001: one click of a level button. Toggling rather than a
+   * separate collapse/expand pair — collapse every foldable heading at the
+   * level if any is currently expanded, otherwise expand them all — with
+   * the direction decided by the pure planHeadingLevelFold, and the writes
+   * applied through the batched setNodesCollapsed so the whole level costs
+   * one CM6 transaction and one cross-view refresh.
+   *
+   * The group handed in was computed by the render that drew the button,
+   * against the same currentTree/collapsedIds that are still live here: a
+   * click is a synchronous DOM event on a row this render produced, so
+   * there is no window in which the tree could have been rebuilt in
+   * between. setNodesCollapsed tolerates a stale id regardless (an
+   * unresolvable identity simply isn't persisted, and a missing document
+   * node is skipped by the CM6 half).
+   */
+  private foldHeadingLevel(group: OutlineHeadingLevelGroup): void {
+    const plan = planHeadingLevelFold(group);
+    if (plan.length === 0) return;
+    this.setNodesCollapsed(plan);
+    this.renderTree();
+  }
+
   private renderTree(): void {
+    // Before treeRootEl.empty() below and before its early return for an
+    // empty tree: the bar reflects the note's own heading levels, so a note
+    // with no headings must clear it rather than leave the previous note's
+    // buttons standing above an empty-state message.
+    this.renderHeadingLevelBar();
     this.treeRootEl.empty();
     // Cleared up front and re-set (at most once) inside renderNode below —
     // if nothing ends up selected/visible this refresh, no stale reference

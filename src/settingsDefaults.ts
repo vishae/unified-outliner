@@ -74,6 +74,24 @@ export interface UnifiedOutlinerSettings {
    */
   syncOutlineTreeFoldingToEditor: boolean;
   /**
+   * 26048-FEAT-001: a row of per-heading-level buttons (H1, H2, H3 ...) at
+   * the top of the Outline Tree View, each collapsing every heading at its
+   * level in one click, or expanding them all if none is expanded.
+   *
+   * OFF by default, unlike most of this plugin's display settings. The bar
+   * is extra permanent chrome above the tree — worth having when a note's
+   * structure is what you are working with, unwanted when the pane is just
+   * a table of contents — so it is opted into rather than out of. With it
+   * off the pane header is byte-for-byte what it was before this setting
+   * existed: the bar element is not created at all, not merely hidden.
+   *
+   * Only levels the current note actually uses get a button. A level whose
+   * headings all have empty bodies gets a DISABLED button rather than no
+   * button, so the row doesn't reshuffle under the cursor while typing —
+   * see tree/outlineHeadingLevels.ts.
+   */
+  showHeadingLevelFoldButtons: boolean;
+  /**
    * Extra vertical distance, in pixels, kept between the top of the body
    * editor's viewport and a line jumped to from the Outline Tree
    * (OutlineTreeView.scrollLineToTop). 0 — the default, and the behavior
@@ -302,6 +320,7 @@ export const DEFAULT_SETTINGS: UnifiedOutlinerSettings = {
   showListItemsInOutline: false,
   followKeyboardSelectionIntoBody: true,
   syncOutlineTreeFoldingToEditor: true,
+  showHeadingLevelFoldButtons: false,
   jumpScrollOffset: 0,
   treeKindHighlight: { ...DEFAULT_TREE_KIND_HIGHLIGHT },
   compositeBlocks: { ...DEFAULT_COMPOSITE_BLOCK_SETTINGS },
