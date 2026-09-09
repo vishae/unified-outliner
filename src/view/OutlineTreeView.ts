@@ -457,6 +457,12 @@ export class OutlineTreeView extends ItemView {
    * wrong window silently does nothing.
    */
   private jumpScrollSettleWin: Window | null = null;
+  /**
+   * Removes the settle loop's user-gesture listeners from the editor's
+   * scroller. Held as a closure so cancelJumpScrollSettle can tear them
+   * down without knowing which editor they were attached to.
+   */
+  private jumpScrollSettleCleanup: (() => void) | null = null;
   // Keyed by the CURRENT parse's node.id, exactly as every prior phase —
   // every existing consumer (renderNode, flattenVisibleOutlineTree, the
   // structure/list context menus' contextual-mode check) keeps working
@@ -3116,37 +3122,62 @@ export class OutlineTreeView extends ItemView {
    * into the editor makes it reappear, since Live Preview re-renders on
    * that transition and the heights go stale again.
    *
-   * So rather than trusting one dispatch, re-assert the intended scroll
-   * position for a few frames while the layout settles. Cheap (a geometry
-   * read and at most one scrollTop write per frame, for well under a
-   * second) and self-limiting.
+   * So rather than trusting one dispatch, re-assert the intended position
+   * every frame until the layout stops moving. Two things about the shape
+   * of that loop were learned the hard way:
    *
-   * It deliberately yields to anything that isn't this jump:
-   *  - a document change (the user typed, or a widget edited the doc) —
-   *    `pos` may not mean the same place any more, so stop;
-   *  - a scroll this method did not perform (the user reached for the
-   *    wheel, or another plugin scrolled) — detected by comparing against
-   *    the last value written here, so a correction is never a fight;
-   *  - the pane closing (onClose cancels the pending frame).
+   *  - **It runs on a time budget, not a frame count.** A first version
+   *    gave it 8 frames (~130ms), which is nowhere near enough: a
+   *    `dataviewjs` block runs a query and renders a table, and the
+   *    re-measure that follows can land hundreds of milliseconds after the
+   *    jump. Upward jumps kept drifting because the loop had already given
+   *    up by the time the content arrived.
+   *  - **It does not treat a scroll it did not perform as the user.** The
+   *    first version compared scrollTop against its own last write and
+   *    stopped if they differed — but CM6 re-applies its own pending
+   *    scroll target across measure cycles, which looks identical to that
+   *    test and made the loop abort exactly when it was needed. Real user
+   *    intent is detected instead from actual input events on the
+   *    scroller, which nothing else can imitate.
+   *
+   * It still yields to everything that is not this jump: a document change
+   * (`pos` may no longer mean the same place), a wheel/touch/pointer/key
+   * gesture from the user, and the pane closing (onClose cancels it).
    */
   private settleJumpScroll(cm: EditorView, pos: number): void {
     this.cancelJumpScrollSettle();
     const startDoc = cm.state.doc;
-    // ~8 frames is a shade over 100ms at 60fps — long enough for a
-    // Dataview block to render and be measured, short enough that a user
-    // scrolling immediately after a jump is not fought for perceptibly
-    // long (and that path bails out on its own below anyway).
-    let framesLeft = 8;
-    let lastWritten: number | null = null;
     const win = cm.dom.win;
+    // Long enough to outlast a Dataview block's query, render and
+    // re-measure; short enough that nothing is being held in place by the
+    // time a user could reasonably have read the screen and reacted. Any
+    // real interaction ends it sooner, via the listeners below.
+    const deadline = win.performance.now() + 900;
+    let aborted = false;
+    const abort = (): void => {
+      aborted = true;
+    };
+    // Capture phase, so a gesture is seen even if something inside the
+    // editor stops it bubbling. Passive: these only observe.
+    const events = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+    const options = { capture: true, passive: true } as const;
+    for (const name of events) {
+      cm.scrollDOM.addEventListener(name, abort, options);
+    }
+    const cleanup = (): void => {
+      for (const name of events) {
+        cm.scrollDOM.removeEventListener(name, abort, options);
+      }
+    };
+    this.jumpScrollSettleCleanup = cleanup;
+
     const step = (): void => {
       this.jumpScrollSettleHandle = null;
-      if (framesLeft-- <= 0) return;
       // The document changed under us: pos is no longer trustworthy.
-      if (cm.state.doc !== startDoc) return;
-      // Someone else scrolled since our last write — theirs wins.
-      const current = cm.scrollDOM.scrollTop;
-      if (lastWritten !== null && Math.abs(current - lastWritten) > 1) return;
+      if (aborted || cm.state.doc !== startDoc || win.performance.now() > deadline) {
+        this.cancelJumpScrollSettle();
+        return;
+      }
       // Measured as a DELTA against where the line is on screen right now,
       // never as an absolute scrollTop computed from block.top. CM6's
       // block coordinates are relative to the top of the DOCUMENT, which
@@ -3162,10 +3193,7 @@ export class OutlineTreeView extends ItemView {
         lineViewportY - scrollerViewportY - this.plugin.settings.jumpScrollOffset;
       // Sub-pixel differences are the browser's own rounding, not drift.
       if (Math.abs(drift) > 1) {
-        cm.scrollDOM.scrollTop = Math.max(0, current + drift);
-        lastWritten = cm.scrollDOM.scrollTop;
-      } else {
-        lastWritten = current;
+        cm.scrollDOM.scrollTop = Math.max(0, cm.scrollDOM.scrollTop + drift);
       }
       this.jumpScrollSettleHandle = win.requestAnimationFrame(step);
     };
@@ -3175,6 +3203,12 @@ export class OutlineTreeView extends ItemView {
 
   /** Stops any in-flight settle loop — see settleJumpScroll. */
   private cancelJumpScrollSettle(): void {
+    // The gesture listeners are removed whether or not a frame is still
+    // pending — the loop's own exit path calls this after clearing the
+    // handle, and leaking listeners onto the editor would be worse than a
+    // stray frame.
+    this.jumpScrollSettleCleanup?.();
+    this.jumpScrollSettleCleanup = null;
     if (this.jumpScrollSettleHandle === null) return;
     this.jumpScrollSettleWin?.cancelAnimationFrame(this.jumpScrollSettleHandle);
     this.jumpScrollSettleHandle = null;

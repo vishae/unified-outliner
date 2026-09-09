@@ -41,7 +41,7 @@ describe("jump scroll settle (static source check, 26048-TECH-006)", () => {
   it("re-asserts the SAME target the offset defines, never a bare scrollIntoView repeat", () => {
     const body = settle();
     expect(body).toContain("this.plugin.settings.jumpScrollOffset");
-    expect(body).toContain("cm.scrollDOM.scrollTop = Math.max(0, current + drift);");
+    expect(body).toContain("cm.scrollDOM.scrollTop = Math.max(0, cm.scrollDOM.scrollTop + drift);");
   });
 
   it("corrects by a measured on-screen delta, not an absolute scrollTop from block.top", () => {
@@ -56,22 +56,44 @@ describe("jump scroll settle (static source check, 26048-TECH-006)", () => {
     expect(body).not.toContain("cm.lineBlockAt(pos).top - this.plugin.settings.jumpScrollOffset");
   });
 
-  it("is bounded — a fixed frame budget, not an open-ended loop", () => {
+  it("is bounded by TIME, not a frame count — a Dataview block can render hundreds of ms late", () => {
     const body = settle();
-    expect(body).toContain("let framesLeft = 8;");
-    expect(body).toContain("if (framesLeft-- <= 0) return;");
+    expect(body).toContain("const deadline = win.performance.now() + 900;");
+    expect(body).toContain("win.performance.now() > deadline");
+    expect(body).not.toContain("framesLeft");
   });
 
   it("stops when the document changes under it", () => {
     const body = settle();
     expect(body).toContain("const startDoc = cm.state.doc;");
-    expect(body).toContain("if (cm.state.doc !== startDoc) return;");
+    expect(body).toContain("cm.state.doc !== startDoc");
   });
 
-  it("yields to a scroll it did not perform, so it never fights the user", () => {
+  it("detects the user from real input events, not from scrollTop moving", () => {
+    // CM6 re-applies its own pending scroll target across measure cycles,
+    // which is indistinguishable from a user scroll if you only watch
+    // scrollTop — and that made the loop abort exactly when it was needed.
     const body = settle();
-    expect(body).toContain("let lastWritten: number | null = null;");
-    expect(body).toContain("if (lastWritten !== null && Math.abs(current - lastWritten) > 1) return;");
+    expect(body).toContain('const events = ["wheel", "touchstart", "pointerdown", "keydown"] as const;');
+    expect(body).toContain("cm.scrollDOM.addEventListener(name, abort, options);");
+    expect(body).toContain("if (aborted ||");
+    expect(body).not.toContain("lastWritten");
+  });
+
+  it("listens in the capture phase and passively, so a gesture can't be hidden from it", () => {
+    const body = settle();
+    expect(body).toContain("const options = { capture: true, passive: true } as const;");
+  });
+
+  it("removes its listeners when it stops, by every exit path", () => {
+    const body = settle();
+    expect(body).toContain("this.jumpScrollSettleCleanup = cleanup;");
+    expect(body).toContain("cm.scrollDOM.removeEventListener(name, abort, options);");
+    const cancel = slice("private cancelJumpScrollSettle(): void {", "\n  /**");
+    expect(cancel).toContain("this.jumpScrollSettleCleanup?.();");
+    expect(cancel).toContain("this.jumpScrollSettleCleanup = null;");
+    // The loop's own exit path must go through the same teardown.
+    expect(body).toContain("this.cancelJumpScrollSettle();\n        return;");
   });
 
   it("tolerates sub-pixel differences rather than writing every frame", () => {
