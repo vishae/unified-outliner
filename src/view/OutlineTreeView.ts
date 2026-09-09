@@ -1464,18 +1464,22 @@ export class OutlineTreeView extends ItemView {
         cls: "unified-outliner-heading-level-button-label",
         text: this.plugin.t("tree.headingLevelFoldButton", { level: group.level }),
       });
-      // Which way the next click goes, shown rather than guessed at: a
-      // right-pointing chevron for "this will collapse" and a downward one
-      // for "this will expand", the same direction language as the rows'
-      // own fold chevrons (renderNode's collapse-icon, which CSS rotates
-      // between the two states). A disabled level gets no chevron at all —
-      // it has no next click to describe, and an arbitrary direction there
-      // would be a lie.
+      // The chevron mirrors the ROW chevrons: it reports the level's
+      // current state, not the action the click performs — down while the
+      // level is (at least partly) expanded, right once it is fully
+      // collapsed. That is the opposite of what the button is about to do,
+      // and deliberately so: a row's chevron already means "this is open"
+      // / "this is closed" everywhere else in the pane, and one control
+      // reading its direction backwards from its neighbours is worse than
+      // the indirection. The aria-label below still names the ACTION, so
+      // the two together say state and consequence rather than either one
+      // twice. A disabled level gets no chevron — with nothing foldable,
+      // it has no meaningful state to report.
       if (hasSomethingToFold) {
         const chevronEl = buttonEl.createSpan({
           cls: "unified-outliner-heading-level-button-chevron",
         });
-        setIcon(chevronEl, group.anyExpanded ? "chevron-right" : "chevron-down");
+        setIcon(chevronEl, group.anyExpanded ? "chevron-down" : "chevron-right");
       }
       // A level whose headings all have empty bodies keeps its button —
       // disabled, not hidden — so the row stays stable as the note is

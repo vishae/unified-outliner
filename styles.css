@@ -1106,16 +1106,35 @@ settings:
 
 /* 26048-FEAT-001: the heading-level bulk fold bar. A sibling above
  * .unified-outliner-tree-root (never inside it — that element is
- * role="tree"). .unified-outliner-outline-view (contentEl) is itself the
- * scroller, so the bar is a scrolling child of it and would disappear off
- * the top of a long note; `position: sticky` pins it, and an opaque
- * background is then mandatory — without one the tree rows scroll
- * visibly underneath it. Buttons are real <button>s; the disabled state
- * is the platform's, only softened visually here. */
+ * role="tree").
+ *
+ * Pinning it: `position: sticky` was tried first and pinned it a row's
+ * height too low, because which element actually scrolls here depends on
+ * the theme, and sticky can only pin against whichever one that is. So
+ * the pane is made a flex column instead and the SCROLLING is moved onto
+ * the tree root: the bar is then a non-scrolling flex child that cannot
+ * move at all, whatever the theme does. `:has()` scopes both rules to a
+ * pane that actually has a bar, so a pane without one keeps exactly the
+ * scroll behaviour it had before this feature existed.
+ *
+ * The tree root keeps `min-height: 0` — a flex child's default
+ * `min-height: auto` refuses to shrink below its content, which would
+ * push the scrollbar back up to the pane and un-pin the bar again. */
+.unified-outliner-outline-view:has(.unified-outliner-heading-level-bar) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.unified-outliner-outline-view:has(.unified-outliner-heading-level-bar)
+  .unified-outliner-tree-root {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .unified-outliner-heading-level-bar {
-  position: sticky;
-  top: 0;
-  z-index: 1;
+  flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
   gap: 4px;

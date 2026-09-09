@@ -117,9 +117,9 @@ describe("heading level fold bar wiring (static source check, 26048-FEAT-001)", 
     expect(body).toContain('buttonEl.setAttribute(\n        "aria-label",');
   });
 
-  it("shows which way the next click goes — a chevron whose direction follows anyExpanded", () => {
+  it("the chevron reports the level's state the same way the row chevrons do — down while expanded", () => {
     const body = renderBar();
-    expect(body).toContain('setIcon(chevronEl, group.anyExpanded ? "chevron-right" : "chevron-down");');
+    expect(body).toContain('setIcon(chevronEl, group.anyExpanded ? "chevron-down" : "chevron-right");');
   });
 
   it("a disabled level gets no chevron — it has no next click to describe", () => {
