@@ -1103,3 +1103,38 @@ settings:
   color: var(--text-normal);
   font-weight: 600;
 }
+
+/* 26048-FEAT-001: the heading-level bulk fold bar. A sibling above
+ * .unified-outliner-tree-root (never inside it — that element is
+ * role="tree"). .unified-outliner-outline-view (contentEl) is itself the
+ * scroller, so the bar is a scrolling child of it and would disappear off
+ * the top of a long note; `position: sticky` pins it, and an opaque
+ * background is then mandatory — without one the tree rows scroll
+ * visibly underneath it. Buttons are real <button>s; the disabled state
+ * is the platform's, only softened visually here. */
+.unified-outliner-heading-level-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 6px;
+  margin-bottom: 2px;
+  background-color: var(--uo-bg-color, var(--background-secondary));
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.unified-outliner-heading-level-button {
+  padding: 1px 7px;
+  font-size: var(--font-smaller);
+  line-height: 1.4;
+  height: auto;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.unified-outliner-heading-level-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
