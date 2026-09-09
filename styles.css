@@ -1171,7 +1171,18 @@ settings:
   height: 13px;
 }
 
-.unified-outliner-heading-level-button-will-expand {
+/* The accent tint is a SECOND cue for "this click will expand", alongside
+ * the chevron — never the only one. Scoped through the bar so it outranks
+ * a theme's own `button { color: ... }`, which is specific enough to win
+ * against a bare class selector and did; and applied to the chevron too,
+ * since an icon inherits `color` only through `currentColor` on its
+ * stroke. It shows only when a level is FULLY collapsed — while any
+ * heading at that level is still expanded the next click collapses, so
+ * there is nothing to tint. */
+.unified-outliner-heading-level-bar .unified-outliner-heading-level-button-will-expand,
+.unified-outliner-heading-level-bar
+  .unified-outliner-heading-level-button-will-expand
+  .unified-outliner-heading-level-button-chevron {
   color: var(--text-accent);
 }
 
