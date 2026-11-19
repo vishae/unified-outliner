@@ -117,6 +117,17 @@ const en = {
   "settings.syncOutlineTreeFoldingToEditor.name": "Sync Outline Tree folding to editor",
   "settings.syncOutlineTreeFoldingToEditor.desc":
     "When enabled, folding or unfolding a node in the Outline Tree also folds or unfolds the matching content in the active Markdown editor.",
+  "settings.showHeadingLevelFoldButtons.name": "Show heading level fold buttons",
+  "settings.showHeadingLevelFoldButtons.desc":
+    "Add a row of buttons (H1, H2, H3 ...) above the Outline Tree, one per heading level the current note uses. Clicking a level collapses every heading at that level, or expands them all if none is currently expanded. A level with nothing to fold is shown as a disabled button. Off by default.",
+  "tree.headingLevelFoldButton": "H{level}",
+  "tree.headingLevelFoldButtonCollapseTooltip": "Collapse every level {level} heading",
+  "tree.headingLevelFoldButtonExpandTooltip": "Expand every level {level} heading",
+  "tree.headingLevelFoldButtonNothingTooltip": "No level {level} heading has anything to fold",
+  "tree.headingLevelFoldBarLabel": "Collapse or expand by heading level",
+  "settings.jumpScrollOffset.name": "Top offset when jumping from Outline Tree (pixels)",
+  "settings.jumpScrollOffset.desc":
+    "Extra space left above a line jumped to from the Outline Tree. 0 places the target line flush with the top of the editor; raise it when a sticky toolbar or theme header covers the top of the note. Maximum 1000.",
   // UXP-05 (2026-08-24): four category-divider headings replacing the old
   // single "Move & Outline Tree kind highlight" heading — see settings.ts's
   // renderGeneralTab doc comment for exactly which settings fall under each.
@@ -1570,6 +1581,17 @@ const ja: Record<TranslationKey, string> = {
   "settings.syncOutlineTreeFoldingToEditor.name": "アウトラインツリーの折りたたみをエディタに同期",
   "settings.syncOutlineTreeFoldingToEditor.desc":
     "有効にすると、アウトラインツリーでノードを折りたたむ・展開する操作が、アクティブな Markdown エディタ内の対応する内容にも反映される。",
+  "settings.showHeadingLevelFoldButtons.name": "見出しレベルごとの折りたたみボタンを表示",
+  "settings.showHeadingLevelFoldButtons.desc":
+    "アウトラインツリーの上部に、現在のノートで使われている見出しレベルごとのボタン（H1、H2、H3 ...）を表示する。ボタンを押すと、そのレベルの見出しをすべて折りたたむ（すべて折りたたみ済みの場合はすべて展開する）。折りたたむ対象がないレベルのボタンは無効状態で表示される。既定ではオフ。",
+  "tree.headingLevelFoldButton": "H{level}",
+  "tree.headingLevelFoldButtonCollapseTooltip": "レベル {level} の見出しをすべて折りたたむ",
+  "tree.headingLevelFoldButtonExpandTooltip": "レベル {level} の見出しをすべて展開する",
+  "tree.headingLevelFoldButtonNothingTooltip": "レベル {level} の見出しには折りたたむ対象がない",
+  "tree.headingLevelFoldBarLabel": "見出しレベルごとの折りたたみ／展開",
+  "settings.jumpScrollOffset.name": "Outline Tree からジャンプする際の上部オフセット（ピクセル）",
+  "settings.jumpScrollOffset.desc":
+    "アウトラインツリーからジャンプした行の上に確保する余白。0 の場合、対象行はエディタの最上部にぴったり配置される。固定表示のツールバーやテーマのヘッダーがノート上部を覆う場合に値を大きくする。最大 1000。",
   // UXP-05（2026-08-24）: 旧「移動・アウトラインツリーの種別強調」見出しを
   // 廃止し、4つのカテゴリ区切り見出しに分割。どの設定がどの見出しの下に
   // 入るかは settings.ts の renderGeneralTab のdocコメントを参照。

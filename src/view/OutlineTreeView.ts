@@ -489,7 +489,12 @@ export class OutlineTreeView extends ItemView {
    * stabilizer window) — see view/editorLineReveal.ts. One instance per
    * view, so its stabilizer window is this view's own.
    */
-  private readonly lineRevealer = new EditorLineRevealer();
+  // Fork: the Outline Tree's jumps honour the user's top offset setting
+  // (jumpScrollOffset); the Partial Edit Pane's revealer keeps the default 0,
+  // since the setting is scoped to jumps from the Outline Tree.
+  private readonly lineRevealer = new EditorLineRevealer(
+    () => this.plugin.settings.jumpScrollOffset
+  );
   private currentTree: OutlineTreeNode[] = [];
   // Cached alongside currentTree so Phase 2B commands can resolve a
   // clicked node's id against the SAME parse the tree was built from —

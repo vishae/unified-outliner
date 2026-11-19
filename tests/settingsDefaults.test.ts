@@ -3,6 +3,8 @@ import {
   DEFAULT_SETTINGS,
   DEFAULT_TREE_KIND_HIGHLIGHT,
   isValidListPrefixStyle,
+  MAX_JUMP_SCROLL_OFFSET,
+  normalizeJumpScrollOffset,
   isValidOutlineTreeSidebarPosition,
   mergeSettings,
 } from "../src/settingsDefaults";
@@ -329,5 +331,61 @@ describe("settingsDefaults: showParagraphsInOutline (Phase 5P-3)", () => {
 
   it("a completely empty raw object (fresh install) resolves showParagraphsInOutline to false via mergeSettings({})", () => {
     expect(mergeSettings({}).showParagraphsInOutline).toBe(false);
+  });
+});
+
+/**
+ * jumpScrollOffset: the offset kept above a line jumped to from the Outline
+ * Tree, so a sticky toolbar or theme header pinned over the top of the
+ * editor doesn't cover it. Unlike the enum-valued scalars above, an
+ * out-of-range value is clamped rather than discarded — a mistyped number
+ * still expresses "some offset" — while a non-numeric one falls back to the
+ * 0 default, which is exactly the pre-setting behavior.
+ */
+describe("settingsDefaults: jumpScrollOffset", () => {
+  it("defaults to 0, reproducing the flush-to-top scroll every earlier version had", () => {
+    expect(DEFAULT_SETTINGS.jumpScrollOffset).toBe(0);
+  });
+
+  it("mergeSettings resolves to 0 when raw omits the key (data.json written before this field existed)", () => {
+    expect(mergeSettings({ allowCrossSectionListMove: false }).jumpScrollOffset).toBe(0);
+  });
+
+  it("mergeSettings preserves an in-range value", () => {
+    expect(mergeSettings({ jumpScrollOffset: 48 }).jumpScrollOffset).toBe(48);
+  });
+
+  it("clamps a negative value to 0 rather than scrolling the target line off the top", () => {
+    expect(normalizeJumpScrollOffset(-20)).toBe(0);
+    expect(mergeSettings({ jumpScrollOffset: -20 }).jumpScrollOffset).toBe(0);
+  });
+
+  it("clamps an absurd value to the maximum", () => {
+    expect(normalizeJumpScrollOffset(99999)).toBe(MAX_JUMP_SCROLL_OFFSET);
+    expect(mergeSettings({ jumpScrollOffset: 99999 }).jumpScrollOffset).toBe(
+      MAX_JUMP_SCROLL_OFFSET
+    );
+  });
+
+  it("rounds a fractional value to whole pixels", () => {
+    expect(normalizeJumpScrollOffset(31.6)).toBe(32);
+  });
+
+  it("falls back to the default for non-numeric, NaN and Infinity values from a hand-edited data.json", () => {
+    expect(normalizeJumpScrollOffset("40" as unknown)).toBe(0);
+    expect(normalizeJumpScrollOffset(Number.NaN)).toBe(0);
+    expect(normalizeJumpScrollOffset(Number.POSITIVE_INFINITY)).toBe(0);
+    expect(mergeSettings({ jumpScrollOffset: "40" }).jumpScrollOffset).toBe(0);
+  });
+
+  it("never mutates the shared DEFAULT_SETTINGS object", () => {
+    const before = { ...DEFAULT_SETTINGS };
+    mergeSettings({ jumpScrollOffset: 64 });
+    expect(DEFAULT_SETTINGS).toEqual(before);
+    expect(DEFAULT_SETTINGS.jumpScrollOffset).toBe(0);
+  });
+
+  it("a fresh install resolves jumpScrollOffset to 0 via mergeSettings({})", () => {
+    expect(mergeSettings({}).jumpScrollOffset).toBe(0);
   });
 });

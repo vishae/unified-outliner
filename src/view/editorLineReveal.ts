@@ -39,6 +39,18 @@ export function getEditorCmView(editor: Editor): EditorView | undefined {
 
 export class EditorLineRevealer {
   /**
+   * @param getTopOffset Pixels to leave between the top of the editor's
+   *   viewport and the revealed line, read at reveal time so a settings
+   *   change applies to the next jump without rebuilding the revealer.
+   *   Passed to CM6's `scrollIntoView` as `yMargin`. Defaults to 0, which
+   *   is the flush-to-top behaviour every caller had before the option
+   *   existed. Only the CM6 path honours it: the `.cm`-absent fallback uses
+   *   Obsidian's public `Editor.scrollIntoView`, which has no margin
+   *   parameter.
+   */
+  constructor(private readonly getTopOffset: () => number = () => 0) {}
+
+  /**
    * Teardown for the short "keep the jumped-to line at the top" window
    * started by scrollLineToTop (see stabilizeScrollToLine). Null when no
    * window is active.
@@ -104,8 +116,9 @@ export class EditorLineRevealer {
     // measuring and drops the scrollIntoView effect below — scroll the
     // scroller directly first. See offscreenContentScroll.ts.
     this.scrollOffscreenContentIntoView(cm, pos);
-    cm.dispatch({ effects: EditorView.scrollIntoView(pos, { y: "start" }) });
-    this.stabilizeScrollToLine(cm, pos);
+    const yMargin = this.getTopOffset();
+    cm.dispatch({ effects: EditorView.scrollIntoView(pos, { y: "start", yMargin }) });
+    this.stabilizeScrollToLine(cm, pos, yMargin);
   }
 
   /**
@@ -148,7 +161,7 @@ export class EditorLineRevealer {
    * early, and never fights the user, on any wheel / touch / pointer / key
    * input in the editor, on the next jump, or when this view closes.
    */
-  private stabilizeScrollToLine(cm: EditorView, pos: number): void {
+  private stabilizeScrollToLine(cm: EditorView, pos: number, yMargin = 0): void {
     this.cancelScrollStabilize?.();
     const STABILIZE_MS = 2000;
     // Hard cap on corrective scrolls per jump, so a note whose layout never
@@ -176,14 +189,14 @@ export class EditorLineRevealer {
       if (pos > cm.state.doc.length) return cancel();
       const coords = cm.coordsAtPos(pos);
       const scrollerTop = cm.scrollDOM.getBoundingClientRect().top;
-      if (coords && Math.abs(coords.top - scrollerTop) <= TOLERANCE_PX) return;
+      if (coords && Math.abs(coords.top - scrollerTop - yMargin) <= TOLERANCE_PX) return;
       if (reapplyCount >= MAX_REAPPLY) return cancel();
       reapplyCount++;
       // Same off-screen-content fallback as scrollLineToTop: the content
       // may still (or again) be out of view, e.g. while the Properties
       // block above it is still growing.
       this.scrollOffscreenContentIntoView(cm, pos);
-      cm.dispatch({ effects: EditorView.scrollIntoView(pos, { y: "start" }) });
+      cm.dispatch({ effects: EditorView.scrollIntoView(pos, { y: "start", yMargin }) });
     };
     const scheduleReapply = (): void => {
       if (!active || rafId !== null) return;
