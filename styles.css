@@ -3040,5 +3040,91 @@ body .unified-outliner-partial-edit-view input.unified-outliner-partial-edit-blo
   background-color: var(--interactive-accent);
   color: var(--text-on-accent);
   font-weight: var(--font-semibold, 600);
+}
+
+/* 26048-FEAT-001: the heading-level bulk fold bar. A sibling above
+ * .unified-outliner-tree-root (never inside it — that element is
+ * role="tree").
+ *
+ * Pinning it: `position: sticky` was tried first and pinned it a row's
+ * height too low, because which element actually scrolls here depends on
+ * the theme, and sticky can only pin against whichever one that is. So
+ * the pane is made a flex column instead and the SCROLLING is moved onto
+ * the tree root: the bar is then a non-scrolling flex child that cannot
+ * move at all, whatever the theme does. `:has()` scopes both rules to a
+ * pane that actually has a bar, so a pane without one keeps exactly the
+ * scroll behaviour it had before this feature existed.
+ *
+ * The tree root keeps `min-height: 0` — a flex child's default
+ * `min-height: auto` refuses to shrink below its content, which would
+ * push the scrollbar back up to the pane and un-pin the bar again. */
+.unified-outliner-outline-view:has(.unified-outliner-heading-level-bar) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.unified-outliner-outline-view:has(.unified-outliner-heading-level-bar)
+  .unified-outliner-tree-root {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.unified-outliner-heading-level-bar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 6px;
+  margin-bottom: 2px;
+  background-color: var(--uo-bg-color, var(--background-secondary));
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.unified-outliner-heading-level-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 5px 1px 7px;
+  font-size: var(--font-smaller);
+  line-height: 1.4;
+  height: auto;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+/* Direction indicator: chevron-right = the next click collapses,
+ * chevron-down = it expands, matching the row chevrons' own language.
+ * Deliberately a shape rather than only a colour — the accent tint below
+ * is a second, redundant cue for the expand state, never the only one. */
+.unified-outliner-heading-level-button-chevron {
+  display: inline-flex;
+  align-items: center;
+  opacity: 0.75;
+}
+
+.unified-outliner-heading-level-button-chevron .svg-icon {
+  width: 13px;
+  height: 13px;
+}
+
+/* The accent tint is a SECOND cue for "this click will expand", alongside
+ * the chevron — never the only one. Scoped through the bar so it outranks
+ * a theme's own `button { color: ... }`, which is specific enough to win
+ * against a bare class selector and did; and applied to the chevron too,
+ * since an icon inherits `color` only through `currentColor` on its
+ * stroke. It shows only when a level is FULLY collapsed — while any
+ * heading at that level is still expanded the next click collapses, so
+ * there is nothing to tint. */
+.unified-outliner-heading-level-bar .unified-outliner-heading-level-button-will-expand,
+.unified-outliner-heading-level-bar
+  .unified-outliner-heading-level-button-will-expand
+  .unified-outliner-heading-level-button-chevron {
+  color: var(--text-accent);
+}
+
+.unified-outliner-heading-level-button:disabled {
+  opacity: 0.4;
   cursor: default;
 }
