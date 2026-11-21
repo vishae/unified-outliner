@@ -174,6 +174,7 @@ import {
 import {
   buildOutlineTree,
   BuildOutlineTreeOptions,
+  flattenOutlineTree,
   collectReadOnlyOutlineNodeIds,
   collectCompositeGroupInfo,
   CompositeGroupInfo,
@@ -193,6 +194,13 @@ import {
 } from "../tree/buildOutlineTree";
 import { canCollapseOutlineNode } from "../tree/hasFoldableContent";
 import { EditorLineRevealer, getEditorCmView } from "./editorLineReveal";
+import {
+  applyTreeFoldsToReadingView,
+  isReadingMode,
+  readFoldedLines,
+  ReadingFoldRequest,
+  scrollReadingViewToLine,
+} from "./readingModeFolds";
 import {
   collectOutlineHeadingLevels,
   OutlineHeadingLevelGroup,
@@ -1481,6 +1489,28 @@ export class OutlineTreeView extends ItemView {
   }
 
   /**
+   * 26048-BUG-001: syncFoldsToBodyEditor's Reading-mode branch. Same
+   * entries, same silent no-op on anything missing; the folds go to the
+   * rendered note through readingModeFolds.ts instead of to CodeMirror.
+   */
+  private syncFoldsToReadingView(
+    view: MarkdownView,
+    entries: Array<{ nodeId: string; collapsed: boolean }>
+  ): void {
+    const requests: ReadingFoldRequest[] = [];
+    for (const { nodeId, collapsed } of entries) {
+      const node = this.currentDoc?.nodes.get(nodeId);
+      if (!node) continue;
+      requests.push({
+        startLine: node.range.startLine,
+        endLine: node.range.endLine,
+        collapsed,
+      });
+    }
+    applyTreeFoldsToReadingView(view, requests);
+  }
+
+  /**
    * Phase 3D (stage 1, one-directional only): mirror this node's fold
    * state into the body editor's own CM6 fold state, so collapsing a
    * section/list in the Outline Tree also visually folds it in the body
@@ -1535,6 +1565,14 @@ export class OutlineTreeView extends ItemView {
     // made a bulk fold expensive.
     const view = this.activeMarkdownView.get();
     if (!view || view.file?.path !== this.currentFilePath) return;
+
+    // 26048-BUG-001: Reading mode folds through the rendered note, not
+    // CodeMirror. See readingModeFolds.ts for why this uses Obsidian's
+    // internal fold calls, and what happens if they disappear.
+    if (isReadingMode(view)) {
+      this.syncFoldsToReadingView(view, entries);
+      return;
+    }
 
     const cm = getEditorCmView(view.editor);
     if (!cm) return;
@@ -3499,7 +3537,11 @@ export class OutlineTreeView extends ItemView {
     // 2026-09-30: cursor + top-aligned scroll now via the shared
     // EditorLineRevealer (same steps as before, also used by the Partial
     // Edit Pane's navigation-driven editor sync).
-    this.lineRevealer.revealLine(editor, line);
+    // 26048-BUG-001: in Reading mode the editor is hidden, so scroll the
+    // rendered note instead.
+    if (!scrollReadingViewToLine(view, line)) {
+      this.lineRevealer.revealLine(editor, line);
+    }
     if (options.focusEditor) {
       editor.focus();
     } else {
@@ -8492,6 +8534,44 @@ function handleCm6FoldEffect(
  * "editor-change" never fires for a fold-only transaction (docChanged:
  * false).
  */
+/**
+ * 26048-BUG-001: the Reading-mode counterpart of handleCm6FoldEffect. Runs
+ * after the user folds or unfolds a heading in the rendered note (wired in
+ * main.ts through installReadingModeFoldListener). Reading mode reports no
+ * single fold effect, only the resulting set of folded heading lines, so
+ * this compares every section's tree state against that set and changes
+ * only those that differ.
+ */
+export function handleReadingModeFold(
+  plugin: UnifiedOutlinerPlugin,
+  view: MarkdownView
+): void {
+  const file = view.file;
+  if (!file) return;
+  const activeView = plugin.app.workspace.getActiveViewOfType(MarkdownView);
+  if (!activeView || activeView !== view) return;
+
+  const folded = readFoldedLines(view);
+  if (!folded) return;
+
+  const parsed = parseDocument(view.getViewData());
+  const tree = buildOutlineTree(parsed, { includeLists: true });
+  const identities = buildNodeIdentityMap(tree);
+  const persisted = plugin.foldStateManager.getCollapsedIdentities(file.path);
+
+  let changed = false;
+  for (const node of flattenOutlineTree(tree)) {
+    if (node.kind !== "section") continue;
+    const identity = identities.get(node.id);
+    if (!identity) continue;
+    const collapsed = folded.has(node.line);
+    if (persisted.has(identity) === collapsed) continue;
+    plugin.foldStateManager.setNodeCollapsed(file.path, identity, collapsed);
+    changed = true;
+  }
+  if (changed) plugin.refreshOutlineTreeViews();
+}
+
 export function createCm6FoldSyncExtension(plugin: UnifiedOutlinerPlugin): Extension {
   return EditorView.updateListener.of((update: ViewUpdate) => {
     for (const tr of update.transactions) {

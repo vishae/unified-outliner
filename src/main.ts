@@ -1,4 +1,12 @@
-import { Editor, getLanguage, Notice, Plugin, TFile, WorkspaceLeaf } from "obsidian";
+import {
+  Editor,
+  getLanguage,
+  MarkdownView,
+  Notice,
+  Plugin,
+  TFile,
+  WorkspaceLeaf,
+} from "obsidian";
 import { parseDocument } from "./parser/parseDocument";
 import { resolveCurrentBlock } from "./resolver/resolveCurrentBlock";
 import { resolveParagraphAtCursor } from "./resolver/resolveParagraphAtCursor";
@@ -33,10 +41,12 @@ import {
 } from "./edit/insertBlock";
 import {
   createCm6FoldSyncExtension,
+  handleReadingModeFold,
   OUTLINE_TREE_VIEW_TYPE,
   OutlineTreeView,
 } from "./view/OutlineTreeView";
 import { PARTIAL_EDIT_VIEW_TYPE, PartialEditView } from "./view/PartialEditView";
+import { installReadingModeFoldListener } from "./view/readingModeFolds";
 import {
   hasOutlineTreeLeafInLeftSidebar,
   partialEditLeafSharesTabGroupWithOutlineTree,
@@ -592,6 +602,15 @@ export default class UnifiedOutlinerPlugin extends Plugin {
     // all of its resolution logic is defined in view/OutlineTreeView.ts
     // (createCm6FoldSyncExtension) — see that function's doc comment.
     this.registerEditorExtension(createCm6FoldSyncExtension(this));
+
+    // 26048-BUG-001: the Reading-mode counterpart -- folds clicked in the
+    // rendered note reach the tree. Wraps an internal Obsidian method;
+    // register() restores it when the plugin unloads.
+    this.register(
+      installReadingModeFoldListener(MarkdownView.prototype, (view) =>
+        handleReadingModeFold(this, view)
+      )
+    );
   }
 
   onunload(): void {
