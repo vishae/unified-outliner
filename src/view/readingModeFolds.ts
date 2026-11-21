@@ -6,7 +6,7 @@
  * Reading mode has no CodeMirror view the user can see, so neither path
  * reaches it. This module covers the three Reading-mode cases:
  *
- *  - Jump: `MarkdownPreviewView.applyScroll(line)` -- public API.
+ *  - Jump: see readingModeScroll.ts.
  *  - Tree -> note folds: the preview's `getFoldInfo()` / `applyFoldInfo()`.
  *    NOT in the public typings. Obsidian (1.15.1) uses this same pair
  *    itself when switching modes: it saves the outgoing mode's folds to
@@ -58,15 +58,6 @@ function previewWithFolds(view: MarkdownView): PreviewModeWithFolds | null {
     return null;
   }
   return preview as PreviewModeWithFolds;
-}
-
-/** Scroll the rendered note so `line` (0-based) is at the top. Public API. */
-export function scrollReadingViewToLine(view: MarkdownView, line: number): boolean {
-  if (!isReadingMode(view)) return false;
-  const preview = view.previewMode;
-  if (!preview || typeof preview.applyScroll !== "function") return false;
-  preview.applyScroll(Math.max(0, line));
-  return true;
 }
 
 /**

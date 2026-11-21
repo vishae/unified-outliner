@@ -12,7 +12,6 @@ import {
   isReadingMode,
   mergeReadingFolds,
   readFoldedLines,
-  scrollReadingViewToLine,
 } from "../src/view/readingModeFolds";
 
 type Fold = { from: number; to: number };
@@ -76,16 +75,6 @@ describe("Reading-mode view helpers", () => {
     expect(isReadingMode(fakeView("preview").view)).toBe(true);
     expect(isReadingMode(fakeView("source").view)).toBe(false);
     expect(isReadingMode(null)).toBe(false);
-  });
-
-  it("scrolls the rendered note in Reading mode, and declines otherwise", () => {
-    const reading = fakeView("preview");
-    expect(scrollReadingViewToLine(reading.view, 7)).toBe(true);
-    expect(reading.preview.applyScroll).toHaveBeenCalledWith(7);
-
-    const source = fakeView("source");
-    expect(scrollReadingViewToLine(source.view, 7)).toBe(false);
-    expect(source.preview.applyScroll).not.toHaveBeenCalled();
   });
 
   it("applies tree folds through the preview's fold record", () => {

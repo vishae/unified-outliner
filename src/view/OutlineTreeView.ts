@@ -199,8 +199,8 @@ import {
   isReadingMode,
   readFoldedLines,
   ReadingFoldRequest,
-  scrollReadingViewToLine,
 } from "./readingModeFolds";
+import { ReadingLineRevealer } from "./readingModeScroll";
 import {
   collectOutlineHeadingLevels,
   OutlineHeadingLevelGroup,
@@ -514,6 +514,10 @@ export class OutlineTreeView extends ItemView {
   // Fork: the Outline Tree's jumps honour the user's top offset setting
   // (jumpScrollOffset); the Partial Edit Pane's revealer keeps the default 0,
   // since the setting is scoped to jumps from the Outline Tree.
+  /** 26048-BUG-001: the Reading-mode counterpart of lineRevealer. */
+  private readonly readingRevealer = new ReadingLineRevealer(
+    () => this.plugin.settings.jumpScrollOffset
+  );
   private readonly lineRevealer = new EditorLineRevealer(
     () => this.plugin.settings.jumpScrollOffset
   );
@@ -988,6 +992,7 @@ export class OutlineTreeView extends ItemView {
     // paragraph insert.
     if (this.renameState) this.cancelRename();
     this.lineRevealer.cancel();
+    this.readingRevealer.cancel();
     // UXP-02 (2026-08-12, docs/uxp-02-long-press-menu-duplicate.md): hide
     // any menu this view still has tracked as open before the view itself
     // tears down, so closing/switching away from this leaf while a
@@ -3539,7 +3544,7 @@ export class OutlineTreeView extends ItemView {
     // Edit Pane's navigation-driven editor sync).
     // 26048-BUG-001: in Reading mode the editor is hidden, so scroll the
     // rendered note instead.
-    if (!scrollReadingViewToLine(view, line)) {
+    if (!this.readingRevealer.reveal(view, line)) {
       this.lineRevealer.revealLine(editor, line);
     }
     if (options.focusEditor) {
