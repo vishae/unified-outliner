@@ -8538,9 +8538,9 @@ function handleCm6FoldEffect(
  * 26048-BUG-001: the Reading-mode counterpart of handleCm6FoldEffect. Runs
  * after the user folds or unfolds a heading in the rendered note (wired in
  * main.ts through installReadingModeFoldListener). Reading mode reports no
- * single fold effect, only the resulting set of folded heading lines, so
- * this compares every section's tree state against that set and changes
- * only those that differ.
+ * single fold effect, only the resulting set of folded lines, so this
+ * compares every heading's and list item's tree state against that set and
+ * changes only those that differ.
  */
 export function handleReadingModeFold(
   plugin: UnifiedOutlinerPlugin,
@@ -8561,7 +8561,9 @@ export function handleReadingModeFold(
 
   let changed = false;
   for (const node of flattenOutlineTree(tree)) {
-    if (node.kind !== "section") continue;
+    // Headings and list items: Reading mode records folds for both, keyed
+    // by the 0-based line each starts on.
+    if (node.kind !== "section" && node.kind !== "list") continue;
     const identity = identities.get(node.id);
     if (!identity) continue;
     const collapsed = folded.has(node.line);

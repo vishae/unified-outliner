@@ -149,3 +149,20 @@ describe("installReadingModeFoldListener", () => {
     uninstall();
   });
 });
+
+describe("handleReadingModeFold (static source check)", () => {
+  it("syncs both headings and list items from the rendered note to the tree", async () => {
+    const { readFileSync } = await import("fs");
+    const path = await import("path");
+    const src = readFileSync(
+      path.resolve(__dirname, "../src/view/OutlineTreeView.ts"),
+      "utf-8"
+    );
+    const start = src.indexOf("export function handleReadingModeFold(");
+    const end = src.indexOf("export function createCm6FoldSyncExtension(", start);
+    expect(start).toBeGreaterThan(-1);
+    const body = src.slice(start, end);
+    expect(body).toContain('if (node.kind !== "section" && node.kind !== "list") continue;');
+    expect(body).toContain("const collapsed = folded.has(node.line);");
+  });
+});
