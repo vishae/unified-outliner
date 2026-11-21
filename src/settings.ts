@@ -454,14 +454,15 @@ export class UnifiedOutlinerSettingTab extends PluginSettingTab {
       .addText((t) =>
         t
           .setPlaceholder(String(DEFAULT_SETTINGS.jumpScrollOffset))
-          .setValue(String(this.plugin.settings.jumpScrollOffset))
-          .onChange(async (v) => {
+          .setValue(String(this.plugin.getJumpScrollOffset()))
+          .onChange((v) => {
             const trimmed = v.trim();
             const parsed = trimmed === "" ? DEFAULT_SETTINGS.jumpScrollOffset : Number(trimmed);
             const normalized = normalizeJumpScrollOffset(parsed);
-            this.plugin.settings.jumpScrollOffset = normalized;
+            // 26048 fork: saved on this device only (see
+            // resolveJumpScrollOffset); data.json keeps the synced value.
+            this.plugin.setLocalJumpScrollOffset(normalized);
             if (String(normalized) !== trimmed) t.setValue(String(normalized));
-            await this.plugin.saveSettings();
           })
       );
 

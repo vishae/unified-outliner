@@ -389,3 +389,19 @@ describe("settingsDefaults: jumpScrollOffset", () => {
     expect(mergeSettings({}).jumpScrollOffset).toBe(0);
   });
 });
+
+describe("resolveJumpScrollOffset (26048 fork: per-device offset)", () => {
+  it("uses the synced value when this device has none", async () => {
+    const { resolveJumpScrollOffset } = await import("../src/settingsDefaults");
+    expect(resolveJumpScrollOffset(null, 55)).toBe(55);
+    expect(resolveJumpScrollOffset(undefined, 55)).toBe(55);
+    expect(resolveJumpScrollOffset("", 55)).toBe(55);
+  });
+  it("prefers this device's own value, normalised", async () => {
+    const { resolveJumpScrollOffset } = await import("../src/settingsDefaults");
+    expect(resolveJumpScrollOffset(80, 55)).toBe(80);
+    expect(resolveJumpScrollOffset(0, 55)).toBe(0);
+    expect(resolveJumpScrollOffset(-5, 55)).toBe(0);
+    expect(resolveJumpScrollOffset(5000, 55)).toBe(1000);
+  });
+});

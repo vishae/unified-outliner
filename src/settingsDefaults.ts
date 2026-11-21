@@ -505,3 +505,18 @@ export function mergeSettings(
   merged.jumpScrollOffset = normalizeJumpScrollOffset(raw.jumpScrollOffset);
   return merged;
 }
+
+/**
+ * 26048 fork (2026-11-22): the jump offset is kept per device. data.json
+ * syncs between devices, but the offset that clears a sticky toolbar
+ * differs between a Mac and an iPhone, so each device stores its own value
+ * in Obsidian's per-vault localStorage under this key. A device with no
+ * local value uses the synced `jumpScrollOffset` from data.json.
+ */
+export const LOCAL_JUMP_SCROLL_OFFSET_KEY = "jumpScrollOffset";
+
+/** Pure: the offset in effect -- the device's own value if set, else the synced one. */
+export function resolveJumpScrollOffset(local: unknown, synced: number): number {
+  if (local === null || local === undefined || local === "") return synced;
+  return normalizeJumpScrollOffset(local);
+}

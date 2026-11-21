@@ -516,10 +516,10 @@ export class OutlineTreeView extends ItemView {
   // since the setting is scoped to jumps from the Outline Tree.
   /** 26048-BUG-001: the Reading-mode counterpart of lineRevealer. */
   private readonly readingRevealer = new ReadingLineRevealer(
-    () => this.plugin.settings.jumpScrollOffset
+    () => this.plugin.getJumpScrollOffset()
   );
   private readonly lineRevealer = new EditorLineRevealer(
-    () => this.plugin.settings.jumpScrollOffset
+    () => this.plugin.getJumpScrollOffset()
   );
   private currentTree: OutlineTreeNode[] = [];
   // Cached alongside currentTree so Phase 2B commands can resolve a

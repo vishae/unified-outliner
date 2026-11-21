@@ -71,7 +71,13 @@ import {
   UnifiedOutlinerSettings,
   UnifiedOutlinerSettingTab,
 } from "./settings";
-import { getEnabledCompositeBlockRules, getEnabledTreeCompositeBlockRules, mergeSettings } from "./settingsDefaults";
+import {
+  getEnabledCompositeBlockRules,
+  getEnabledTreeCompositeBlockRules,
+  LOCAL_JUMP_SCROLL_OFFSET_KEY,
+  mergeSettings,
+  resolveJumpScrollOffset,
+} from "./settingsDefaults";
 import {
   createTranslator,
   SupportedLocale,
@@ -1980,6 +1986,19 @@ export default class UnifiedOutlinerPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.persistData();
+  }
+
+  /** The jump offset on this device (see resolveJumpScrollOffset). */
+  getJumpScrollOffset(): number {
+    return resolveJumpScrollOffset(
+      this.app.loadLocalStorage(LOCAL_JUMP_SCROLL_OFFSET_KEY),
+      this.settings.jumpScrollOffset
+    );
+  }
+
+  /** Store the jump offset for this device only; data.json is not touched. */
+  setLocalJumpScrollOffset(value: number): void {
+    this.app.saveLocalStorage(LOCAL_JUMP_SCROLL_OFFSET_KEY, value);
   }
 
   /**

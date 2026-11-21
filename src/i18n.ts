@@ -127,7 +127,7 @@ const en = {
   "tree.headingLevelFoldBarLabel": "Collapse or expand by heading level",
   "settings.jumpScrollOffset.name": "Top offset when jumping from Outline Tree (pixels)",
   "settings.jumpScrollOffset.desc":
-    "Extra space left above a line jumped to from the Outline Tree. 0 places the target line flush with the top of the editor; raise it when a sticky toolbar or theme header covers the top of the note. Maximum 1000.",
+    "Extra space left above a line jumped to from the Outline Tree. 0 places the target line flush with the top of the editor; raise it when a sticky toolbar or theme header covers the top of the note. Maximum 1000. Saved on this device only, so each device can have its own; a device with none set uses the shared value from the plugin's settings file.",
   // UXP-05 (2026-08-24): four category-divider headings replacing the old
   // single "Move & Outline Tree kind highlight" heading — see settings.ts's
   // renderGeneralTab doc comment for exactly which settings fall under each.
@@ -1591,7 +1591,7 @@ const ja: Record<TranslationKey, string> = {
   "tree.headingLevelFoldBarLabel": "見出しレベルごとの折りたたみ／展開",
   "settings.jumpScrollOffset.name": "Outline Tree からジャンプする際の上部オフセット（ピクセル）",
   "settings.jumpScrollOffset.desc":
-    "アウトラインツリーからジャンプした行の上に確保する余白。0 の場合、対象行はエディタの最上部にぴったり配置される。固定表示のツールバーやテーマのヘッダーがノート上部を覆う場合に値を大きくする。最大 1000。",
+    "アウトラインツリーからジャンプした行の上に確保する余白。0 の場合、対象行はエディタの最上部にぴったり配置される。固定表示のツールバーやテーマのヘッダーがノート上部を覆う場合に値を大きくする。最大 1000。この端末にのみ保存されるため、端末ごとに設定できる。未設定の端末ではプラグイン設定ファイルの共通値を使う。",
   // UXP-05（2026-08-24）: 旧「移動・アウトラインツリーの種別強調」見出しを
   // 廃止し、4つのカテゴリ区切り見出しに分割。どの設定がどの見出しの下に
   // 入るかは settings.ts の renderGeneralTab のdocコメントを参照。

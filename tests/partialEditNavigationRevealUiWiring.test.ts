@@ -185,7 +185,7 @@ describe("Shared line revealer: the Outline Tree jump uses the same implementati
     // The stabilizer settles on the offset position, not flush with the top.
     expect(revealTs).toContain("Math.abs(coords.top - scrollerTop - yMargin) <= TOLERANCE_PX");
     // Only the Outline Tree passes the setting; the Partial Edit Pane keeps 0.
-    expect(treeTs).toContain("() => this.plugin.settings.jumpScrollOffset");
+    expect(treeTs).toContain("() => this.plugin.getJumpScrollOffset()");
     expect(revealTs).toContain("computeOffscreenContentScrollTop({");
     expect(treeTs).not.toContain("function getEditorCmView(");
     expect(treeTs).toContain('import { EditorLineRevealer, getEditorCmView } from "./editorLineReveal";');
