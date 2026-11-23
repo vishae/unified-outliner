@@ -159,7 +159,7 @@ import {
   setTooltip,
 } from "obsidian";
 import { EditorView, ViewUpdate } from "@codemirror/view";
-import { foldEffect, unfoldEffect } from "@codemirror/language";
+import { foldEffect, foldedRanges, unfoldEffect } from "@codemirror/language";
 import { Annotation, Extension, StateEffect } from "@codemirror/state";
 import type UnifiedOutlinerPlugin from "../main";
 import { parseDocument } from "../parser/parseDocument";
@@ -202,6 +202,7 @@ import {
 } from "./readingModeFolds";
 import { ReadingLineRevealer } from "./readingModeScroll";
 import { filterOutlineTree, normalizeOutlineSearchQuery } from "../tree/filterOutlineTree";
+import { findDroppedFolds, type FoldableRow } from "../tree/droppedFolds";
 import {
   collectOutlineHeadingLevels,
   OutlineHeadingLevelGroup,
@@ -8692,5 +8693,57 @@ export function createCm6FoldSyncExtension(plugin: UnifiedOutlinerPlugin): Exten
         }
       }
     }
+    // 26048-BUG-002: a text change can drop folds without any unfoldEffect.
+    // Checked only when the editor ends up with fewer folds than it started
+    // with, so ordinary typing never parses the note.
+    if (
+      update.docChanged &&
+      foldedRanges(update.state).size < foldedRanges(update.startState).size
+    ) {
+      clearDroppedFolds(plugin, update);
+    }
   });
+}
+
+/**
+ * 26048-BUG-002: after a text change dropped editor folds, clear the same
+ * folds from the tree's saved state, so the tree shows what the editor
+ * shows. Same active-leaf guard as handleCm6FoldEffect.
+ *
+ * Skipped when "Sync Outline Tree folding to editor" is off: the tree's
+ * folds then never reach the editor at all, so a fold missing from the
+ * editor says nothing about whether the tree's fold is stale.
+ */
+function clearDroppedFolds(plugin: UnifiedOutlinerPlugin, update: ViewUpdate): void {
+  if (!plugin.settings.syncOutlineTreeFoldingToEditor) return;
+  const owning = resolveOwningLeaf(plugin, update.view);
+  if (!owning) return;
+  const activeView = plugin.app.workspace.getActiveViewOfType(MarkdownView);
+  if (!activeView || activeView.leaf !== owning.leaf) return;
+
+  const doc = update.state.doc;
+  const foldedLines = new Set<number>();
+  foldedRanges(update.state).between(0, doc.length, (from) => {
+    // A fold starts at the end of its heading's or list item's own line.
+    foldedLines.add(doc.lineAt(from).number - 1);
+  });
+
+  const tree = buildOutlineTree(parseDocument(doc.toString()), { includeLists: true });
+  const identities = buildNodeIdentityMap(tree);
+  const rows: FoldableRow[] = [];
+  for (const node of flattenOutlineTree(tree)) {
+    if (node.kind !== "section" && node.kind !== "list") continue;
+    const identity = identities.get(node.id);
+    if (identity) rows.push({ line: node.line, identity });
+  }
+  const dropped = findDroppedFolds(
+    rows,
+    plugin.foldStateManager.getCollapsedIdentities(owning.file.path),
+    foldedLines
+  );
+  if (dropped.length === 0) return;
+  for (const identity of dropped) {
+    plugin.foldStateManager.setNodeCollapsed(owning.file.path, identity, false);
+  }
+  plugin.refreshOutlineTreeViews();
 }
