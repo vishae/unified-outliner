@@ -450,7 +450,18 @@ export class UnifiedOutlinerSettingTab extends PluginSettingTab {
     // normalized value so what is displayed is what is stored.
     new Setting(containerEl)
       .setName(this.plugin.t("settings.jumpScrollOffset.name"))
-      .setDesc(this.plugin.t("settings.jumpScrollOffset.desc"))
+      .setDesc(
+        // 26048 fork: the per-device note is shown as a warning, the way
+        // Templater marks its own device-only settings.
+        createFragment((frag) => {
+          frag.appendText(this.plugin.t("settings.jumpScrollOffset.desc"));
+          frag.createEl("br");
+          frag.createSpan({
+            cls: "mod-warning",
+            text: this.plugin.t("settings.jumpScrollOffset.deviceOnly"),
+          });
+        })
+      )
       .addText((t) =>
         t
           .setPlaceholder(String(DEFAULT_SETTINGS.jumpScrollOffset))
