@@ -51,24 +51,28 @@ describe("heading level fold bar wiring (static source check, 26048-FEAT-001)", 
   it("the bar is a sibling of treeRootEl inside contentEl, never a child of the role=tree element", () => {
     const body = renderBar();
     expect(body).toContain("this.contentEl.createDiv({");
-    expect(body).toContain("this.contentEl.insertBefore(this.headingLevelBarEl, this.treeRootEl);");
+    expect(body).toContain("this.contentEl.insertBefore(this.headingLevelBarEl, this.searchEl ?? this.treeRootEl);");
     expect(body).not.toContain("this.treeRootEl.createDiv");
     expect(body).not.toContain("this.treeRootEl.createEl");
   });
 
-  it("the setting gates the bar by removing the element entirely, not by hiding it", () => {
+  it("the setting gates the level buttons; the bar is removed entirely, not hidden, when it has nothing to show", () => {
     const body = renderBar();
-    expect(body).toContain("if (!this.plugin.settings.showHeadingLevelFoldButtons) {");
+    // 26048-FEAT-002: the bar also holds the search toggle, so the setting
+    // now gates only the level buttons.
+    expect(body).toContain("const groups = this.plugin.settings.showHeadingLevelFoldButtons");
     expect(body).toContain("this.headingLevelBarEl?.remove();");
     expect(body).toContain("this.headingLevelBarEl = null;");
     expect(body).not.toContain("display: none");
     expect(body).not.toContain(".hide()");
   });
 
-  it("a note with no heading levels gets no bar, not an empty strip", () => {
+  it("a note with no tree gets no bar, not an empty strip", () => {
     const body = renderBar();
-    expect(body).toContain("if (groups.length === 0) {");
-    expect(body.split("this.headingLevelBarEl?.remove();").length - 1).toBe(2);
+    expect(body).toContain(
+      "if (groups.length === 0 && this.currentTree.length === 0 && !this.searchOpen) {"
+    );
+    expect(body.split("this.headingLevelBarEl?.remove();").length - 1).toBe(1);
   });
 
   it("the empty-state path repaints the bar too — refresh() calls it without going through renderTree()", () => {

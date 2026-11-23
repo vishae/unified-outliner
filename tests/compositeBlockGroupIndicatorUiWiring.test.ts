@@ -120,7 +120,7 @@ describe("OutlineTreeView.ts CompositeBlock group indicator wiring (static sourc
     const body = getRenderNodeBody();
     // The read-only contract (Phase 5D-0.3 approval §1) is untouched: still
     // gates rename/drag-drop/context-menu exactly as before.
-    expect(body).toContain("const readOnly = this.readOnlyNodeIds.has(node.id);");
+    expect(body).toContain("const readOnly = searching || this.readOnlyNodeIds.has(node.id);" /* 26048-FEAT-002: search makes every row read-only */);
     // Two 2026-09-24 mobile follow-up fixes widened this condition further
     // (to also admit an eligible standalone callout/blockquote/table row,
     // then a paragraph row) — see

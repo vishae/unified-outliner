@@ -201,6 +201,7 @@ import {
   ReadingFoldRequest,
 } from "./readingModeFolds";
 import { ReadingLineRevealer } from "./readingModeScroll";
+import { filterOutlineTree, normalizeOutlineSearchQuery } from "../tree/filterOutlineTree";
 import {
   collectOutlineHeadingLevels,
   OutlineHeadingLevelGroup,
@@ -498,6 +499,22 @@ export class OutlineTreeView extends ItemView {
    * existing hidden.
    */
   private headingLevelBarEl: HTMLElement | null = null;
+
+  /**
+   * 26048-FEAT-002: heading search. `searchOpen` is whether the search box
+   * is shown (toggled by the magnifier at the end of the heading-level
+   * bar); `searchQuery` is its text. While the query is non-empty the tree
+   * shows filterOutlineTree's result instead of currentTree: headings only,
+   * matches with their parents, everything expanded, and no fold, rename,
+   * drag or menu actions -- rows only jump. collapsedIds is never touched,
+   * so closing the search restores the tree exactly as it was. The query
+   * is kept when the active note changes, as Obsidian's own Outline search
+   * does.
+   */
+  private searchOpen = false;
+  private searchQuery = "";
+  private searchEl: HTMLElement | null = null;
+  private searchInputEl: HTMLInputElement | null = null;
   // Keyed by the CURRENT parse's node.id, exactly as every prior phase —
   // every existing consumer (renderNode, flattenVisibleOutlineTree, the
   // structure/list context menus' contextual-mode check) keeps working
@@ -870,6 +887,12 @@ export class OutlineTreeView extends ItemView {
     // the invariant "field non-null <=> element is in contentEl" true by
     // construction rather than by luck.
     this.headingLevelBarEl = null;
+    // 26048-FEAT-002: same invariant for the search box, which empty()
+    // has detached too; a reopened view starts with search closed.
+    this.searchEl = null;
+    this.searchInputEl = null;
+    this.searchOpen = false;
+    this.searchQuery = "";
     this.contentEl.addClass("unified-outliner-outline-view");
     this.copyBannerEl = this.contentEl.createDiv({ cls: "unified-outliner-copy-banner" });
     this.treeRootEl = this.contentEl.createDiv({
@@ -1315,7 +1338,7 @@ export class OutlineTreeView extends ItemView {
     this.pendingMoveFlash = null;
     if (pending === null) return;
 
-    const visible = flattenVisibleOutlineTree(this.currentTree, this.collapsedIds);
+    const visible = this.visibleRows();
     const match = visible.find((n) => n.line === pending);
     if (!match) return;
 
@@ -1677,21 +1700,13 @@ export class OutlineTreeView extends ItemView {
    * is edited (and as the active file switches).
    */
   private renderHeadingLevelBar(): void {
-    if (!this.plugin.settings.showHeadingLevelFoldButtons) {
-      this.headingLevelBarEl?.remove();
-      this.headingLevelBarEl = null;
-      return;
-    }
-    const groups = collectOutlineHeadingLevels(
-      this.currentTree,
-      this.currentDoc,
-      this.collapsedIds
-    );
-    // A note with no headings at all (or no note at all) gets no bar
-    // rather than an empty bordered strip above the empty-state message.
-    // Same removal branch as the setting being off, so there is only one
-    // way the bar ceases to exist.
-    if (groups.length === 0) {
+    // 26048-FEAT-002: the bar also carries the search toggle, so it stays
+    // whenever the note has a tree (or a search is open), even with the
+    // level buttons turned off; the level buttons alone follow the setting.
+    const groups = this.plugin.settings.showHeadingLevelFoldButtons
+      ? collectOutlineHeadingLevels(this.currentTree, this.currentDoc, this.collapsedIds)
+      : [];
+    if (groups.length === 0 && this.currentTree.length === 0 && !this.searchOpen) {
       this.headingLevelBarEl?.remove();
       this.headingLevelBarEl = null;
       return;
@@ -1705,8 +1720,8 @@ export class OutlineTreeView extends ItemView {
         "aria-label",
         this.plugin.t("tree.headingLevelFoldBarLabel")
       );
-      // createDiv appends; the bar belongs above the tree.
-      this.contentEl.insertBefore(this.headingLevelBarEl, this.treeRootEl);
+      // createDiv appends; the bar belongs above the search box and tree.
+      this.contentEl.insertBefore(this.headingLevelBarEl, this.searchEl ?? this.treeRootEl);
     }
     this.headingLevelBarEl.empty();
 
@@ -1774,6 +1789,21 @@ export class OutlineTreeView extends ItemView {
         });
       }
     }
+
+    // 26048-FEAT-002: the search toggle, at the right end of the bar.
+    const searchButtonEl = this.headingLevelBarEl.createEl("button", {
+      cls:
+        "unified-outliner-search-toggle" +
+        (this.searchOpen ? " is-active" : ""),
+    });
+    setIcon(searchButtonEl, "search");
+    searchButtonEl.setAttribute("aria-label", this.plugin.t("tree.searchToggle"));
+    searchButtonEl.setAttribute("title", this.plugin.t("tree.searchToggle"));
+    searchButtonEl.setAttribute("aria-pressed", this.searchOpen ? "true" : "false");
+    searchButtonEl.addEventListener("click", (evt) => {
+      evt.preventDefault();
+      this.setSearchOpen(!this.searchOpen);
+    });
   }
 
   /**
@@ -1799,6 +1829,68 @@ export class OutlineTreeView extends ItemView {
     this.renderTree();
   }
 
+  /** 26048-FEAT-002: true while a non-empty search query is filtering the tree. */
+  private isSearching(): boolean {
+    return this.searchOpen && normalizeOutlineSearchQuery(this.searchQuery) !== "";
+  }
+
+  /** The tree as drawn: the search result while searching, else currentTree. */
+  private displayedTree(): OutlineTreeNode[] {
+    return this.isSearching()
+      ? filterOutlineTree(this.currentTree, this.searchQuery).tree
+      : this.currentTree;
+  }
+
+  /** Rows on screen, in order -- what keyboard navigation moves through. */
+  private visibleRows(): OutlineTreeNode[] {
+    return this.isSearching()
+      ? flattenVisibleOutlineTree(this.displayedTree(), new Set())
+      : flattenVisibleOutlineTree(this.currentTree, this.collapsedIds);
+  }
+
+  /** 26048-FEAT-002: show or hide the search box. Hiding clears the query. */
+  private setSearchOpen(open: boolean): void {
+    if (open === this.searchOpen) {
+      if (open) this.searchInputEl?.focus();
+      return;
+    }
+    this.searchOpen = open;
+    if (open) {
+      this.searchEl = this.contentEl.createDiv({ cls: "unified-outliner-search" });
+      this.contentEl.insertBefore(this.searchEl, this.treeRootEl);
+      const input = this.searchEl.createEl("input", {
+        type: "search",
+        cls: "unified-outliner-search-input",
+      });
+      input.placeholder = this.plugin.t("tree.searchPlaceholder");
+      input.setAttribute("aria-label", this.plugin.t("tree.searchPlaceholder"));
+      input.value = this.searchQuery;
+      input.addEventListener("input", () => {
+        this.searchQuery = input.value;
+        this.renderTree();
+      });
+      input.addEventListener("keydown", (evt) => {
+        if (evt.key === "Escape") {
+          evt.preventDefault();
+          this.setSearchOpen(false);
+          this.treeRootEl.focus();
+        } else if (evt.key === "ArrowDown") {
+          // Into the results, keeping the query.
+          evt.preventDefault();
+          this.treeRootEl.focus();
+        }
+      });
+      this.searchInputEl = input;
+      input.focus();
+    } else {
+      this.searchEl?.remove();
+      this.searchEl = null;
+      this.searchInputEl = null;
+      this.searchQuery = "";
+    }
+    this.renderTree();
+  }
+
   private renderTree(): void {
     // Before treeRootEl.empty() below and before its early return for an
     // empty tree: the bar reflects the note's own heading levels, so a note
@@ -1817,7 +1909,12 @@ export class OutlineTreeView extends ItemView {
       this.renderEmptyState(message);
       return;
     }
-    for (const node of this.currentTree) {
+    const displayed = this.displayedTree();
+    if (this.isSearching() && displayed.length === 0) {
+      this.renderEmptyState(this.plugin.t("tree.searchNoMatches"));
+      return;
+    }
+    for (const node of displayed) {
       this.renderNode(node, this.treeRootEl);
     }
   }
@@ -1840,8 +1937,11 @@ export class OutlineTreeView extends ItemView {
     // state, `hasChildren` still gates whether there is a child list to
     // render at all (a childless collapsed row simply has nothing below it
     // in the tree, while its body is folded in the editor).
-    const canCollapse = canCollapseOutlineNode(node, this.currentDoc);
-    const isCollapsed = this.collapsedIds.has(node.id);
+    // 26048-FEAT-002: while searching, every row is drawn expanded and
+    // offers no fold toggle (see the searchOpen field's doc comment).
+    const searching = this.isSearching();
+    const canCollapse = !searching && canCollapseOutlineNode(node, this.currentDoc);
+    const isCollapsed = !searching && this.collapsedIds.has(node.id);
     const isHighlighted = node.id === this.highlightedId;
     // Selection highlight only while this view's own root actually has DOM
     // focus (see the hasFocus field's doc comment) — selectedId itself
@@ -1866,7 +1966,7 @@ export class OutlineTreeView extends ItemView {
     // that's now precomputed ONCE per refresh() over the whole tree (see
     // this.readOnlyNodeIds's own doc comment — tree/buildOutlineTree.ts's
     // collectReadOnlyOutlineNodeIds), so this is now a plain lookup.
-    const readOnly = this.readOnlyNodeIds.has(node.id);
+    const readOnly = searching || this.readOnlyNodeIds.has(node.id);
     // UI-only follow-up (2026-09-08, "Outline Tree の CompositeBlock 視認性
     // 改善"): display-only — never gates rename/drag-drop/context-menu/
     // Move/Delete/Partial Edit (those all stay keyed off `readOnly`/
@@ -3217,7 +3317,7 @@ export class OutlineTreeView extends ItemView {
    * ticket added.
    */
   private ensureSelection(): void {
-    const visible = flattenVisibleOutlineTree(this.currentTree, this.collapsedIds);
+    const visible = this.visibleRows();
     if (visible.length === 0) {
       this.selectedId = null;
       return;
@@ -3277,7 +3377,7 @@ export class OutlineTreeView extends ItemView {
    * no wraparound, matching standard tree/listbox widget behavior.
    */
   private moveSelection(delta: 1 | -1): void {
-    const visible = flattenVisibleOutlineTree(this.currentTree, this.collapsedIds);
+    const visible = this.visibleRows();
     if (visible.length === 0) return;
     this.ensureSelection();
     const previousId = this.selectedId;

@@ -232,7 +232,7 @@ describe("OutlineTreeView.ts paragraph dblclick/F2 launch wiring (Phase 5T-7A, p
     // Sanity: paragraph rows are always read-only (existing 5T-1/5T-2/5T-4A
     // contract, unaffected by this fix — dragHandleEl's widening does not
     // relax readOnly itself, only whether a handle element exists).
-    const readOnlyDeclIdx = viewTs.indexOf("const readOnly = this.readOnlyNodeIds.has(node.id);");
+    const readOnlyDeclIdx = viewTs.indexOf("const readOnly = searching || this.readOnlyNodeIds.has(node.id);" /* 26048-FEAT-002: search makes every row read-only */);
     expect(readOnlyDeclIdx).toBeGreaterThan(-1);
   });
 

@@ -3128,3 +3128,35 @@ body .unified-outliner-partial-edit-view input.unified-outliner-partial-edit-blo
   opacity: 0.4;
   cursor: default;
 }
+
+/* 26048-FEAT-002: heading search -- the toggle at the right end of the
+   heading-level bar, and the search box below the bar. */
+.unified-outliner-search-toggle {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  padding: 2px 6px;
+  box-shadow: none;
+  background: transparent;
+  color: var(--icon-color);
+}
+
+.unified-outliner-search-toggle:hover,
+.unified-outliner-search-toggle.is-active {
+  color: var(--icon-color-focused);
+  background-color: var(--background-modifier-hover);
+}
+
+.unified-outliner-search-toggle svg {
+  width: var(--icon-s, 16px);
+  height: var(--icon-s, 16px);
+}
+
+.unified-outliner-search {
+  flex: 0 0 auto;
+  padding: 4px 6px;
+}
+
+.unified-outliner-search-input {
+  width: 100%;
+}
