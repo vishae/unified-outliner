@@ -504,7 +504,8 @@ export class OutlineTreeView extends ItemView {
    * 26048-FEAT-002: heading search. `searchOpen` is whether the search box
    * is shown (toggled by the magnifier at the end of the heading-level
    * bar); `searchQuery` is its text. While the query is non-empty the tree
-   * shows filterOutlineTree's result instead of currentTree: headings only,
+   * shows filterOutlineTree's result instead of currentTree: headings (and
+   * list items, when shown),
    * matches with their parents, everything expanded, and no fold, rename,
    * drag or menu actions -- rows only jump. collapsedIds is never touched,
    * so closing the search restores the tree exactly as it was. The query
