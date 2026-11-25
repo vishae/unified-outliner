@@ -47,6 +47,7 @@ import {
 } from "./view/OutlineTreeView";
 import { PARTIAL_EDIT_VIEW_TYPE, PartialEditView } from "./view/PartialEditView";
 import { installReadingModeFoldListener } from "./view/readingModeFolds";
+import { headingFlashExtension } from "./view/headingFlash";
 import {
   hasOutlineTreeLeafInLeftSidebar,
   partialEditLeafSharesTabGroupWithOutlineTree,
@@ -608,6 +609,8 @@ export default class UnifiedOutlinerPlugin extends Plugin {
     // all of its resolution logic is defined in view/OutlineTreeView.ts
     // (createCm6FoldSyncExtension) — see that function's doc comment.
     this.registerEditorExtension(createCm6FoldSyncExtension(this));
+    // 26048-FEAT-004: the editor half of the jump highlight.
+    this.registerEditorExtension(headingFlashExtension());
 
     // 26048-BUG-001: the Reading-mode counterpart -- folds clicked in the
     // rendered note reach the tree. Wraps an internal Obsidian method;

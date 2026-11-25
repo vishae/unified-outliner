@@ -3160,3 +3160,24 @@ body .unified-outliner-partial-edit-view input.unified-outliner-partial-edit-blo
 .unified-outliner-search-input {
   width: 100%;
 }
+
+/* 26048-FEAT-004: brief highlight on the line jumped to from the tree.
+ * Two classes with two animation names, alternated per jump, so a repeat
+ * jump to the same line replays the fade. Applied to a CM6 line
+ * (.cm-line) in Source / Live Preview and to the rendered heading or
+ * list item in Reading mode. Duration matches FLASH_MS in
+ * src/view/headingFlash.ts. */
+@keyframes unified-outliner-flash-a {
+  from { background-color: var(--text-highlight-bg); }
+  to { background-color: transparent; }
+}
+@keyframes unified-outliner-flash-b {
+  from { background-color: var(--text-highlight-bg); }
+  to { background-color: transparent; }
+}
+.unified-outliner-flash-a {
+  animation: unified-outliner-flash-a 1.5s ease-in 0s 1 both;
+}
+.unified-outliner-flash-b {
+  animation: unified-outliner-flash-b 1.5s ease-in 0s 1 both;
+}

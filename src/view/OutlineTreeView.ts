@@ -194,6 +194,7 @@ import {
 } from "../tree/buildOutlineTree";
 import { canCollapseOutlineNode } from "../tree/hasFoldableContent";
 import { EditorLineRevealer, getEditorCmView } from "./editorLineReveal";
+import { HeadingFlasher } from "./headingFlash";
 import {
   applyTreeFoldsToReadingView,
   isReadingMode,
@@ -534,6 +535,8 @@ export class OutlineTreeView extends ItemView {
   // (jumpScrollOffset); the Partial Edit Pane's revealer keeps the default 0,
   // since the setting is scoped to jumps from the Outline Tree.
   /** 26048-BUG-001: the Reading-mode counterpart of lineRevealer. */
+  /** 26048-FEAT-004: briefly highlights the line a tree jump lands on. */
+  private readonly headingFlasher = new HeadingFlasher();
   private readonly readingRevealer = new ReadingLineRevealer(
     () => this.plugin.getJumpScrollOffset()
   );
@@ -1018,6 +1021,7 @@ export class OutlineTreeView extends ItemView {
     if (this.renameState) this.cancelRename();
     this.lineRevealer.cancel();
     this.readingRevealer.cancel();
+    this.headingFlasher.cancel();
     // UXP-02 (2026-08-12, docs/uxp-02-long-press-menu-duplicate.md): hide
     // any menu this view still has tracked as open before the view itself
     // tears down, so closing/switching away from this leaf while a
@@ -3649,6 +3653,8 @@ export class OutlineTreeView extends ItemView {
     if (!this.readingRevealer.reveal(view, line)) {
       this.lineRevealer.revealLine(editor, line);
     }
+    // 26048-FEAT-004: briefly highlight the line jumped to.
+    this.headingFlasher.flash(view, line);
     if (options.focusEditor) {
       editor.focus();
     } else {

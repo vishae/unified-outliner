@@ -33,7 +33,7 @@ export interface PreviewSectionLike {
   shown?: boolean;
 }
 
-interface PreviewRendererLike {
+export interface PreviewRendererLike {
   sections: PreviewSectionLike[];
   previewEl: HTMLElement;
   applyScroll(line: number, opts?: object): boolean;
@@ -67,7 +67,7 @@ export function computeReadingScrollCorrection(
   return Math.abs(delta) <= tolerance ? 0 : delta;
 }
 
-function rendererOf(view: MarkdownView): PreviewRendererLike | null {
+export function rendererOf(view: MarkdownView): PreviewRendererLike | null {
   const renderer = (view.previewMode as unknown as { renderer?: Partial<PreviewRendererLike> })
     ?.renderer;
   if (
@@ -82,7 +82,7 @@ function rendererOf(view: MarkdownView): PreviewRendererLike | null {
 }
 
 /** The rendered element for `line`, or null while its section is not drawn. */
-function targetElement(renderer: PreviewRendererLike, line: number): HTMLElement | null {
+export function targetElement(renderer: PreviewRendererLike, line: number): HTMLElement | null {
   const section = findSectionForLine(renderer.sections, line);
   if (!section || section.shown === false || !section.el?.isConnected) return null;
   const start = section.start?.line ?? line;
