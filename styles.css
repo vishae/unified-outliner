@@ -138,7 +138,7 @@ settings:
         format: hex
         opacity: true
         default-light: '#00000017'
-        default-dark: '#ffffff1f'
+        default-dark: '#ffffff2e'
     -
         id: uo-partial-edit-editors-heading
         title: Partial Edit Pane – Editor Backgrounds
@@ -201,7 +201,7 @@ settings:
   --uo-section-highlight-color: #a29bfe14;
   --uo-list-hover-color: #a29bfe24;
   --uo-move-flash-color: #a29bfe59;
-  --uo-flash-color: #ffffff1f;
+  --uo-flash-color: #ffffff2e;
 }
 
 /* 2026-09-27 (Tree / Partial Edit のフォントサイズ分離): the Tree now has
