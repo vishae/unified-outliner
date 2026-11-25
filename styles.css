@@ -131,6 +131,15 @@ settings:
         default-light: '#5b57d159'
         default-dark: '#a29bfe59'
     -
+        id: uo-flash-color
+        title: Jump Highlight Color
+        description: Color of the brief highlight on the line jumped to in the note after clicking a row in the Outline Tree.
+        type: variable-themed-color
+        format: hex
+        opacity: true
+        default-light: '#00000017'
+        default-dark: '#ffffff1f'
+    -
         id: uo-partial-edit-editors-heading
         title: Partial Edit Pane – Editor Backgrounds
         type: heading
@@ -179,6 +188,7 @@ settings:
   --uo-section-highlight-color: #5b57d10f;
   --uo-list-hover-color: #5b57d11a;
   --uo-move-flash-color: #5b57d159;
+  --uo-flash-color: #00000017;
 }
 
 .theme-dark {
@@ -191,6 +201,7 @@ settings:
   --uo-section-highlight-color: #a29bfe14;
   --uo-list-hover-color: #a29bfe24;
   --uo-move-flash-color: #a29bfe59;
+  --uo-flash-color: #ffffff1f;
 }
 
 /* 2026-09-27 (Tree / Partial Edit のフォントサイズ分離): the Tree now has
@@ -3167,12 +3178,10 @@ body .unified-outliner-partial-edit-view input.unified-outliner-partial-edit-blo
  * (.cm-line) in Source / Live Preview and to the rendered heading or
  * list item in Reading mode. Duration matches FLASH_MS in
  * src/view/headingFlash.ts. */
-/* Obsidian's --text-highlight-bg is not defined in every theme (empty in
- * Serena's, 2026-11-26), and an undefined var() made the flash transparent.
- * Fall back to Obsidian's default highlight yellow. */
-body {
-  --uo-flash-color: var(--text-highlight-bg, rgba(255, 208, 0, 0.4));
-}
+/* Colour: --uo-flash-color, a neutral grey (Serena, 2026-11-26), set in
+ * the .theme-light / .theme-dark defaults and in Style Settings as "Jump
+ * Highlight Color". Not Obsidian's --text-highlight-bg, which some themes
+ * leave undefined (it was empty in Serena's, making the flash invisible). */
 @keyframes unified-outliner-flash-a {
   from { background-color: var(--uo-flash-color); }
   to { background-color: transparent; }
