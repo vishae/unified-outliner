@@ -3167,12 +3167,18 @@ body .unified-outliner-partial-edit-view input.unified-outliner-partial-edit-blo
  * (.cm-line) in Source / Live Preview and to the rendered heading or
  * list item in Reading mode. Duration matches FLASH_MS in
  * src/view/headingFlash.ts. */
+/* Obsidian's --text-highlight-bg is not defined in every theme (empty in
+ * Serena's, 2026-11-26), and an undefined var() made the flash transparent.
+ * Fall back to Obsidian's default highlight yellow. */
+body {
+  --uo-flash-color: var(--text-highlight-bg, rgba(255, 208, 0, 0.4));
+}
 @keyframes unified-outliner-flash-a {
-  from { background-color: var(--text-highlight-bg); }
+  from { background-color: var(--uo-flash-color); }
   to { background-color: transparent; }
 }
 @keyframes unified-outliner-flash-b {
-  from { background-color: var(--text-highlight-bg); }
+  from { background-color: var(--uo-flash-color); }
   to { background-color: transparent; }
 }
 .unified-outliner-flash-a {
